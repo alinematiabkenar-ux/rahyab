@@ -253,7 +253,12 @@ data class AppStrings(
     val welcomePermissionsCardTitle: String,
     val welcomePermissionsGranted: String,
     val welcomeGrantPermissionsButton: String,
-    val welcomeOpenMapsButton: String
+    val welcomeOpenMapsButton: String,
+    // Crash Recovery Dialog
+    val crashDialogTitle: String,
+    val crashDialogBody: String,
+    val copyErrorDetails: String,
+    val errorDetailsCopied: String
 )
 
 val EnglishStrings = AppStrings(
@@ -473,7 +478,11 @@ val EnglishStrings = AppStrings(
     welcomePermissionsCardTitle = "GPS & Notification Access",
     welcomePermissionsGranted = "Location permission granted",
     welcomeGrantPermissionsButton = "Allow Location & Notifications",
-    welcomeOpenMapsButton = "Continue to Download Maps"
+    welcomeOpenMapsButton = "Continue to Download Maps",
+    crashDialogTitle = "The app closed unexpectedly",
+    crashDialogBody = "An unexpected error occurred during your previous session. Copy the error details below so you can share them for troubleshooting.",
+    copyErrorDetails = "Copy error details",
+    errorDetailsCopied = "Error details copied"
 )
 
 val PersianStrings = AppStrings(
@@ -693,7 +702,11 @@ val PersianStrings = AppStrings(
     welcomePermissionsCardTitle = "دسترسی GPS و اعلان‌ها",
     welcomePermissionsGranted = "دسترسی موقعیت مکانی فعال شد",
     welcomeGrantPermissionsButton = "اجازه دسترسی موقعیت و اعلان",
-    welcomeOpenMapsButton = "ادامه به صفحه دانلود نقشه‌ها"
+    welcomeOpenMapsButton = "ادامه به صفحه دانلود نقشه‌ها",
+    crashDialogTitle = "برنامه به طور غیرمنتظره بسته شد",
+    crashDialogBody = "در اجرای قبلی خطای غیرمنتظره‌ای رخ داد. می‌توانید جزئیات خطا را کپی کنید و ارسال نمایید.",
+    copyErrorDetails = "کپی جزئیات خطا",
+    errorDetailsCopied = "جزئیات خطا کپی شد"
 )
 
 val LocalAppStrings = compositionLocalOf { EnglishStrings }

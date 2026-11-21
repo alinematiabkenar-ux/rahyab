@@ -5,11 +5,14 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
+import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -24,13 +27,17 @@ import com.example.data.local.ReportType
 import com.example.data.local.UserReportEntity
 import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.PlaceSearchResult
+import com.example.i18n.AppLanguage
 import com.example.map.MapStyleBuilder
+import com.example.map.RouteGeoJsonCache
 import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
 import com.example.navigation.LatLon
 import com.example.navigation.OfflineRoute
 import com.example.ui.CameraTargetCommand
 import com.example.ui.RahYabViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -41,7 +48,6 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
-import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
 import java.io.File
@@ -50,21 +56,25 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
+private const val COMPASS_MAP_MIN_INTERVAL_MS = 100L // At most 10 updates per second
+private const val COMPASS_MAP_MIN_DELTA_DEG = 2.0f   // Only update when heading changes > 2 degrees
+
 /**
  * Lifecycle-safe Jetpack Compose host for MapLibre Native Android `MapView`.
  *
  * Features:
- * - Local per-state & regional PMTiles vector maps (`pmtiles://file://...`)
- * - Up to 3 candidate routes in distinct colors, tappable directly on the map
+ * - Local per-state & regional PMTiles vector maps (`pmtiles://file://...`) with offline PBF glyphs
+ * - Split independent LaunchedEffects for routes, destination pin, user reports, and GPS/compass
+ * - Off-main-thread GeoJSON route conversion & caching (up to 4 distinct candidate routes)
+ * - Throttled compass updates (<= 10 Hz, > 2° delta) so map rendering stays silky smooth
  * - Long-press anywhere on the map to drop a pin and request Directions
  * - Snapped road location rendering during active navigation
- * - User map pan detection to pause auto-follow until user taps Recenter
- * - Color-coded Waze-style user report markers
  */
 @Composable
 fun MapLibreMapContainer(
     installedPmtiles: List<Pair<String, File>>,
     isNightMode: Boolean,
+    language: AppLanguage,
     useDevOnlineBasemap: Boolean,
     packsChangedTick: Long,
     gpsFix: GpsFix?,
@@ -94,6 +104,8 @@ fun MapLibreMapContainer(
     val currentOnUserMovedMap by rememberUpdatedState(onUserMovedMap)
     val currentOnMapBearingChanged by rememberUpdatedState(onMapBearingChanged)
 
+    val routeGeoJsonCache = remember { RouteGeoJsonCache(maxEntries = 24) }
+
     val mapView = remember {
         MapView(context).apply {
             onCreate(null)
@@ -103,6 +115,24 @@ fun MapLibreMapContainer(
     var mapLibreMap by remember { mutableStateOf<MapLibreMap?>(null) }
     var loadedStyle by remember { mutableStateOf<Style?>(null) }
     var lastAppliedHeadingBearing by remember { mutableFloatStateOf(Float.NaN) }
+
+    // Throttled heading state for the map (at most 10 Hz and only when heading changes > 2 deg)
+    var throttledHeadingDegrees by remember { mutableFloatStateOf(CompassTracker.normalizeAngle(userHeadingDegrees)) }
+    var lastHeadingUpdateMs by remember { mutableLongStateOf(0L) }
+    var hasAppliedInitialHeading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(userHeadingDegrees) {
+        val normalized = CompassTracker.normalizeAngle(userHeadingDegrees)
+        val nowMs = SystemClock.elapsedRealtime()
+        val delta = abs(CompassTracker.shortestAngleDelta(throttledHeadingDegrees, normalized))
+        if (!hasAppliedInitialHeading ||
+            (nowMs - lastHeadingUpdateMs >= COMPASS_MAP_MIN_INTERVAL_MS && delta > COMPASS_MAP_MIN_DELTA_DEG)
+        ) {
+            hasAppliedInitialHeading = true
+            lastHeadingUpdateMs = nowMs
+            throttledHeadingDegrees = normalized
+        }
+    }
 
     DisposableEffect(lifecycleOwner, mapView) {
         val observer = LifecycleEventObserver { _, event ->
@@ -124,100 +154,108 @@ fun MapLibreMapContainer(
         }
     }
 
-    val styleJson = remember(installedPmtiles, isNightMode, useDevOnlineBasemap, packsChangedTick) {
+    val styleJson = remember(installedPmtiles, isNightMode, useDevOnlineBasemap, packsChangedTick, language) {
         MapStyleBuilder.buildOfflineStyleJson(
             installedPmtiles = installedPmtiles,
             isNightMode = isNightMode,
-            useDevOnlineBasemap = useDevOnlineBasemap
+            useDevOnlineBasemap = useDevOnlineBasemap,
+            language = language
         )
     }
 
     LaunchedEffect(mapLibreMap, styleJson) {
         val map = mapLibreMap ?: return@LaunchedEffect
+        loadedStyle = null
         map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
             runCatching {
                 style.addImage(MapStyleBuilder.IMAGE_USER_ARROW, createUserArrowBitmap())
+                style.addImage(MapStyleBuilder.IMAGE_HIGHWAY_SHIELD, createHighwayShieldBitmap(isNightMode))
             }
             loadedStyle = style
         }
     }
 
-    LaunchedEffect(
-        loadedStyle,
-        candidateRoutes,
-        selectedRouteIndex,
-        activeNavRoute,
-        selectedPlace,
-        gpsFix,
-        snappedNavLocation,
-        userHeadingDegrees,
-        userReports
-    ) {
+    // 1. ROUTE LINES EFFECT — runs ONLY when route candidates, selected index, or active nav route changes.
+    // Converts route shapes off the main thread and caches GeoJSON per route so switching alternatives is instant.
+    LaunchedEffect(loadedStyle, candidateRoutes, selectedRouteIndex, activeNavRoute) {
         val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
 
-        val routeColors = listOf(
-            MapStyleBuilder.ROUTE_COLOR_0,
-            MapStyleBuilder.ROUTE_COLOR_1,
-            MapStyleBuilder.ROUTE_COLOR_2
-        )
-        val routeSources = listOf(
-            MapStyleBuilder.SOURCE_ROUTE_0,
-            MapStyleBuilder.SOURCE_ROUTE_1,
-            MapStyleBuilder.SOURCE_ROUTE_2
-        )
-
-        val emptyFc = FeatureCollection.fromFeatures(emptyArray())
+        val emptyFc = RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION
+        val routeSources = MapStyleBuilder.ALL_ROUTE_SOURCES
+        val routeColors = MapStyleBuilder.ALL_ROUTE_COLORS
 
         if (activeNavRoute != null && activeNavRoute.shape.size >= 2) {
-            // Active navigation: show only active route prominently
-            routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
-            val line = LineString.fromLngLats(activeNavRoute.shape.map { Point.fromLngLat(it.lon, it.lat) })
-            val feat = Feature.fromGeometry(line).apply {
-                addStringProperty("color", MapStyleBuilder.ROUTE_COLOR_0)
+            val primaryFc = routeGeoJsonCache.getOrBuildFeatureCollection(
+                route = activeNavRoute,
+                colorHex = MapStyleBuilder.ROUTE_COLOR_0
+            )
+            if (!style.isFullyLoaded) return@LaunchedEffect
+            runCatching {
+                routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(primaryFc)
             }
-            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)
-                ?.setGeoJson(FeatureCollection.fromFeature(feat))
         } else if (candidateRoutes.isNotEmpty()) {
-            // Route preview: draw up to 3 routes in 3 distinct colors, selected route thicker on top
-            routeSources.forEachIndexed { idx, srcId ->
-                val route = candidateRoutes.getOrNull(idx)
-                if (route != null && idx != selectedRouteIndex && route.shape.size >= 2) {
-                    val line = LineString.fromLngLats(route.shape.map { Point.fromLngLat(it.lon, it.lat) })
-                    style.getSourceAs<GeoJsonSource>(srcId)
-                        ?.setGeoJson(FeatureCollection.fromFeature(Feature.fromGeometry(line)))
-                } else {
-                    style.getSourceAs<GeoJsonSource>(srcId)?.setGeoJson(emptyFc)
-                }
-            }
-            val selected = candidateRoutes.getOrNull(selectedRouteIndex)
-            if (selected != null && selected.shape.size >= 2) {
-                val line = LineString.fromLngLats(selected.shape.map { Point.fromLngLat(it.lon, it.lat) })
-                val feat = Feature.fromGeometry(line).apply {
-                    addStringProperty("color", routeColors.getOrElse(selectedRouteIndex) { MapStyleBuilder.ROUTE_COLOR_0 })
-                }
-                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)
-                    ?.setGeoJson(FeatureCollection.fromFeature(feat))
-            } else {
-                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(emptyFc)
-            }
-        } else {
-            routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
-            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(emptyFc)
-        }
+            val safeSelectedIdx = selectedRouteIndex.coerceIn(0, candidateRoutes.lastIndex)
 
-        // Destination pin
-        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DESTINATION)?.setGeoJson(
-            if (selectedPlace != null) {
-                FeatureCollection.fromFeature(
-                    Feature.fromGeometry(Point.fromLngLat(selectedPlace.lon, selectedPlace.lat))
-                )
+            // Pre-compute / fetch cached GeoJSON off the main thread for all up to 4 routes
+            val unselectedFcs = ArrayList<FeatureCollection>(routeSources.size)
+            for (idx in routeSources.indices) {
+                val route = candidateRoutes.getOrNull(idx)
+                val fc = if (route != null && idx != safeSelectedIdx && route.shape.size >= 2) {
+                    routeGeoJsonCache.getOrBuildFeatureCollection(route = route, colorHex = null)
+                } else {
+                    emptyFc
+                }
+                unselectedFcs.add(fc)
+            }
+
+            val selectedRoute = candidateRoutes.getOrNull(safeSelectedIdx)
+            val primaryFc = if (selectedRoute != null && selectedRoute.shape.size >= 2) {
+                val selectedColor = routeColors.getOrElse(safeSelectedIdx) { MapStyleBuilder.ROUTE_COLOR_0 }
+                routeGeoJsonCache.getOrBuildFeatureCollection(route = selectedRoute, colorHex = selectedColor)
             } else {
                 emptyFc
             }
-        )
 
-        // Color-coded Waze-style user report markers
-        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_USER_REPORTS)?.setGeoJson(
+            if (!style.isFullyLoaded) return@LaunchedEffect
+            runCatching {
+                routeSources.forEachIndexed { idx, srcId ->
+                    style.getSourceAs<GeoJsonSource>(srcId)?.setGeoJson(unselectedFcs[idx])
+                }
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(primaryFc)
+            }
+        } else {
+            runCatching {
+                routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(emptyFc)
+            }
+        }
+    }
+
+    // 2. DESTINATION PIN EFFECT — runs ONLY when selectedPlace changes
+    LaunchedEffect(loadedStyle, selectedPlace) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val destFc = if (selectedPlace != null) {
+            FeatureCollection.fromFeature(
+                Feature.fromGeometry(Point.fromLngLat(selectedPlace.lon, selectedPlace.lat))
+            )
+        } else {
+            RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION
+        }
+        runCatching {
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DESTINATION)?.setGeoJson(destFc)
+        }
+    }
+
+    // 3. USER REPORTS EFFECT — runs ONLY when userReports changes
+    LaunchedEffect(loadedStyle, userReports) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val reportsFc = withContext(Dispatchers.Default) {
             FeatureCollection.fromFeatures(
                 userReports.map { r ->
                     val rType = runCatching { ReportType.valueOf(r.type) }.getOrNull()
@@ -233,33 +271,51 @@ fun MapLibreMapContainer(
                     }
                 }
             )
-        )
+        }
+        if (!style.isFullyLoaded) return@LaunchedEffect
+        runCatching {
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_USER_REPORTS)?.setGeoJson(reportsFc)
+        }
+    }
 
-        // Snapped navigation marker (when actively navigating within 30 m) or live GPS puck
-        val displayLoc = snappedNavLocation ?: gpsFix?.let { LatLon(it.lat, it.lon) }
-        val accuracyMeters = gpsFix?.accuracyMeters?.toDouble() ?: 0.0
-        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_ACCURACY)?.setGeoJson(
-            if (displayLoc != null && accuracyMeters > 0.0) {
-                val circle = buildAccuracyCirclePolygon(
-                    centerLat = displayLoc.lat,
-                    centerLon = displayLoc.lon,
-                    radiusMeters = accuracyMeters.coerceIn(5.0, 1000.0)
-                )
-                FeatureCollection.fromFeature(Feature.fromGeometry(circle))
-            } else {
-                emptyFc
+    // 4. POSITION ARROW & ACCURACY CIRCLE EFFECT — runs ONLY when position or throttled heading changes
+    val displayLoc = snappedNavLocation ?: gpsFix?.let { LatLon(it.lat, it.lon) }
+    val accuracyMeters = gpsFix?.accuracyMeters?.toDouble() ?: 0.0
+
+    LaunchedEffect(loadedStyle, displayLoc, accuracyMeters) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val accuracyFc = if (displayLoc != null && accuracyMeters > 0.0) {
+            val circle = buildAccuracyCirclePolygon(
+                centerLat = displayLoc.lat,
+                centerLon = displayLoc.lon,
+                radiusMeters = accuracyMeters.coerceIn(5.0, 1000.0)
+            )
+            FeatureCollection.fromFeature(Feature.fromGeometry(circle))
+        } else {
+            RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION
+        }
+        runCatching {
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_ACCURACY)?.setGeoJson(accuracyFc)
+        }
+    }
+
+    LaunchedEffect(loadedStyle, displayLoc, throttledHeadingDegrees) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val puckFc = if (displayLoc != null) {
+            val feat = Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat)).apply {
+                addNumberProperty("bearing", throttledHeadingDegrees)
             }
-        )
-        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(
-            if (displayLoc != null) {
-                val feat = Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat)).apply {
-                    addNumberProperty("bearing", CompassTracker.normalizeAngle(userHeadingDegrees))
-                }
-                FeatureCollection.fromFeature(feat)
-            } else {
-                emptyFc
-            }
-        )
+            FeatureCollection.fromFeature(feat)
+        } else {
+            RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION
+        }
+        runCatching {
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(puckFc)
+        }
     }
 
     LaunchedEffect(mapLibreMap, cameraCommand) {
@@ -272,22 +328,25 @@ fun MapLibreMapContainer(
             .tilt(cmd.tilt)
             .bearing(cmd.bearing)
             .build()
-        map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 500)
+        runCatching {
+            map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 500)
+        }
     }
 
-    // Smoothly rotate map camera bearing in heading-up mode when browsing or stationary
-    LaunchedEffect(mapLibreMap, userHeadingDegrees, isHeadingUpMode, isCameraFollowing, activeNavRoute, selectedPlace) {
+    // Smoothly rotate map camera bearing in heading-up mode when browsing or stationary (throttled)
+    LaunchedEffect(mapLibreMap, throttledHeadingDegrees, isHeadingUpMode, isCameraFollowing, activeNavRoute, selectedPlace) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isHeadingUpMode || !isCameraFollowing || activeNavRoute != null || selectedPlace != null) return@LaunchedEffect
-        val normalizedHeading = CompassTracker.normalizeAngle(userHeadingDegrees)
         val currentBearing = map.cameraPosition.bearing.toFloat()
-        val diff = abs(CompassTracker.shortestAngleDelta(currentBearing, normalizedHeading))
-        if (lastAppliedHeadingBearing.isNaN() || diff >= 3.0f) {
-            lastAppliedHeadingBearing = normalizedHeading
+        val diff = abs(CompassTracker.shortestAngleDelta(currentBearing, throttledHeadingDegrees))
+        if (lastAppliedHeadingBearing.isNaN() || diff > 2.5f) {
+            lastAppliedHeadingBearing = throttledHeadingDegrees
             val updatedPos = CameraPosition.Builder(map.cameraPosition)
-                .bearing(normalizedHeading.toDouble())
+                .bearing(throttledHeadingDegrees.toDouble())
                 .build()
-            map.animateCamera(CameraUpdateFactory.newCameraPosition(updatedPos), 250)
+            runCatching {
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(updatedPos), 250)
+            }
         }
     }
 
@@ -323,7 +382,8 @@ fun MapLibreMapContainer(
                         if (currentActiveRoute == null && routes.size > 1) {
                             var bestRouteIdx = -1
                             var bestDistMeters = 900.0
-                            routes.forEachIndexed { idx, route ->
+                            routes.take(MapStyleBuilder.ALL_ROUTE_SOURCES.size).forEachIndexed { idx, route ->
+                                if (route.shape.isEmpty()) return@forEachIndexed
                                 val step = (route.shape.size / 120).coerceAtLeast(1)
                                 for (i in route.shape.indices step step) {
                                     val pt = route.shape[i]
@@ -336,7 +396,7 @@ fun MapLibreMapContainer(
                                     }
                                 }
                             }
-                            if (bestRouteIdx >= 0) {
+                            if (bestRouteIdx in routes.indices) {
                                 currentOnRouteTapped(bestRouteIdx)
                                 return@addOnMapClickListener true
                             }
@@ -412,5 +472,27 @@ private fun createUserArrowBitmap(): Bitmap {
 
     canvas.drawPath(path, fillPaint)
     canvas.drawPath(path, strokePaint)
+    return bmp
+}
+
+private fun createHighwayShieldBitmap(isNightMode: Boolean): Bitmap {
+    val width = 64
+    val height = 36
+    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val rect = RectF(2f, 2f, width - 2f, height - 2f)
+
+    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = if (isNightMode) AndroidColor.parseColor("#1D4ED8") else AndroidColor.parseColor("#1E40AF")
+    }
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = AndroidColor.WHITE
+    }
+
+    canvas.drawRoundRect(rect, 9f, 9f, fillPaint)
+    canvas.drawRoundRect(rect, 9f, 9f, borderPaint)
     return bmp
 }

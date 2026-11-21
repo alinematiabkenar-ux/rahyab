@@ -2,6 +2,8 @@ package com.example
 
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -16,12 +18,19 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Navigation
@@ -29,6 +38,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
@@ -36,6 +46,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,8 +61,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -72,6 +85,7 @@ import com.example.ui.screens.DriveScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.WelcomeOnboardingScreen
 import com.example.ui.theme.RahYabTheme
+import com.example.util.CrashLogManager
 
 object RahYabRoutes {
     const val ROUTE_DRIVE = "drive"
@@ -228,6 +242,9 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val currentRoute = backStackEntry?.destination?.route ?: RahYabRoutes.ROUTE_DRIVE
 
     var startOnMapsAfterOnboarding by remember { mutableStateOf(false) }
+    var pendingCrashLog by remember {
+        mutableStateOf(CrashLogManager.readPendingCrashLog(context))
+    }
 
     CompositionLocalProvider(
         LocalLayoutDirection provides layoutDirection,
@@ -372,6 +389,70 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                             Text(strings.close)
                         }
                     }
+                )
+            }
+
+            // Crash Recovery Dialog if the previous session ended with an uncaught exception
+            pendingCrashLog?.let { crashText ->
+                AlertDialog(
+                    onDismissRequest = {
+                        CrashLogManager.clearPendingCrashLog(context)
+                        pendingCrashLog = null
+                    },
+                    title = { Text(strings.crashDialogTitle) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = strings.crashDialogBody,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 220.dp)
+                            ) {
+                                Text(
+                                    text = crashText,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    modifier = Modifier
+                                        .padding(10.dp)
+                                        .verticalScroll(rememberScrollState())
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                runCatching {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                    clipboard?.setPrimaryClip(ClipData.newPlainText("RahYab Crash Log", crashText))
+                                }
+                                CrashLogManager.clearPendingCrashLog(context)
+                                pendingCrashLog = null
+                                viewModel.showSnackbar(strings.errorDetailsCopied)
+                            },
+                            modifier = Modifier.testTag("copy_crash_details_button")
+                        ) {
+                            Text(strings.copyErrorDetails)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                CrashLogManager.clearPendingCrashLog(context)
+                                pendingCrashLog = null
+                            },
+                            modifier = Modifier.testTag("dismiss_crash_dialog_button")
+                        ) {
+                            Text(strings.close)
+                        }
+                    },
+                    modifier = Modifier.testTag("crash_log_dialog")
                 )
             }
         }

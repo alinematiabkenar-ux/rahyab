@@ -109,9 +109,11 @@ object ValhallaResponseParser {
     }
 
     /**
-     * Combines fastest-costing routes with an optional shortest-costing route so that:
+     * Combines fastest-costing routes (primary + up to 2 alternates) with an optional
+     * shortest-costing route so that:
      *  - When the shortest route differs meaningfully from the fastest route, it is ALWAYS
-     *    included in the preview options (up to 3 total routes) and tagged `isShortestRoute = true`.
+     *    included in the preview options (up to 4 total routes: fastest, two alternatives,
+     *    and shortest) and tagged `isShortestRoute = true`.
      *  - Index 0 reflects the user's RoutePreference (`preferShortest = true` puts Shortest first;
      *    default `FASTEST` puts Fastest first).
      */
@@ -126,8 +128,10 @@ object ValhallaResponseParser {
         }
 
         val sortedFastest = fastestRoutes.sortedBy { it.durationSeconds }
-        val primaryFastest = sortedFastest.first().copy(isFastestRoute = true)
-        val otherAlternates = sortedFastest.drop(1)
+        val primaryFastest = sortedFastest.first().copy(id = "route_fastest", isFastestRoute = true)
+        val otherAlternates = sortedFastest.drop(1).mapIndexed { idx, alt ->
+            alt.copy(id = "route_alt_${idx + 1}", isFastestRoute = false, isShortestRoute = false)
+        }
 
         val candidateShortest = shortestRoute?.takeIf { s ->
             // Shortest route is genuinely shorter or distinct from the primary fastest route
@@ -145,21 +149,21 @@ object ValhallaResponseParser {
                 isShortestRoute = true,
                 isFastestRoute = false
             )
-            // Keep at most 1 non-duplicate alternate alongside fastest + shortest (3 cards max)
-            val extraAlt = otherAlternates.firstOrNull { alt ->
+            // Keep up to 2 non-duplicate alternates alongside fastest + shortest (up to 4 routes total)
+            val extraAlts = otherAlternates.filter { alt ->
                 isDistinctRoute(alt, taggedShortest) && isDistinctRoute(alt, primaryFastest)
-            }
+            }.take(2)
             if (preferShortest) {
                 merged.add(taggedShortest)
                 merged.add(primaryFastest)
-                if (extraAlt != null) merged.add(extraAlt)
+                merged.addAll(extraAlts)
             } else {
                 merged.add(primaryFastest)
                 merged.add(taggedShortest)
-                if (extraAlt != null) merged.add(extraAlt)
+                merged.addAll(extraAlts)
             }
         }
-        return merged.take(3)
+        return merged.take(4)
     }
 
     private fun isDistinctRoute(a: OfflineRoute, b: OfflineRoute): Boolean {

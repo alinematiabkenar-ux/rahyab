@@ -10,6 +10,7 @@ import com.example.navigation.CompassTracker
 import com.example.navigation.LocationTracker
 import com.example.navigation.ValhallaRoutingEngine
 import com.example.navigation.VoiceGuidanceManager
+import com.example.util.CrashLogManager
 import org.maplibre.android.MapLibre
 
 class RahYabApplication : Application() {
@@ -35,6 +36,7 @@ class RahYabApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLogManager.install(this)
         // Initialize MapLibre Native once at application startup
         runCatching { MapLibre.getInstance(this) }
 

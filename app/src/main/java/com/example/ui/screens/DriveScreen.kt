@@ -126,8 +126,9 @@ import com.example.ui.theme.JetBrainsMonoFamily
 
 private val RoutePreviewColors = listOf(
     Color(0xFF00A8E8), // Route 1 (Fastest — Cyan)
-    Color(0xFF10B981), // Route 2 (Alternate 1 — Emerald)
-    Color(0xFFA855F7)  // Route 3 (Alternate 2 — Purple)
+    Color(0xFF10B981), // Route 2 (Shortest / Alt 1 — Emerald)
+    Color(0xFFA855F7), // Route 3 (Alternate 2 — Purple)
+    Color(0xFFF59E0B)  // Route 4 (Alternate 3 — Amber)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -209,6 +210,7 @@ fun DriveScreen(
         MapLibreMapContainer(
             installedPmtiles = installedPmtiles,
             isNightMode = isNightMode,
+            language = language,
             useDevOnlineBasemap = settings.devOnlineOregonMode,
             packsChangedTick = packsTick,
             gpsFix = gpsFix,
@@ -1437,80 +1439,98 @@ private fun PlaceAndRoutePreviewCard(
                 }
             }
 
-            // Up to 3 color-coded route cards with duration, distance, and arrival time
+            // Up to 4 color-coded route cards with route type, duration, distance, and arrival time
             if (routes.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    routes.take(3).forEachIndexed { idx, route ->
-                        val isSelected = idx == selectedRouteIndex
-                        val routeAccent = RoutePreviewColors.getOrElse(idx) { CyanBeacon }
-                        val routeBadgeLabel = when {
-                            route.isFastestRoute && route.isShortestRoute -> "${strings.routePrimary} • ${strings.routeShortest}"
-                            route.isShortestRoute -> strings.routeShortest
-                            route.isFastestRoute -> strings.routePrimary
-                            else -> strings.routeAlternate
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) routeAccent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(
-                                width = if (isSelected) 2.dp else 1.dp,
-                                color = if (isSelected) routeAccent else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable { onSelectRoute(idx) }
-                                .testTag("route_card_$idx")
-                        ) {
-                            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                val visibleRoutes = routes.take(4)
+                val safeSelectedIdx = selectedRouteIndex.coerceIn(0, visibleRoutes.lastIndex)
+
+                @Composable
+                fun RouteOptionCard(idx: Int, route: OfflineRoute, cardModifier: Modifier) {
+                    val isSelected = idx == safeSelectedIdx
+                    val routeAccent = RoutePreviewColors.getOrElse(idx) { CyanBeacon }
+                    val routeBadgeLabel = when {
+                        route.isFastestRoute && route.isShortestRoute -> "${strings.routePrimary} • ${strings.routeShortest}"
+                        route.isShortestRoute -> strings.routeShortest
+                        route.isFastestRoute -> strings.routePrimary
+                        else -> strings.routeAlternate
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isSelected) routeAccent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(
+                            width = if (isSelected) 2.dp else 1.dp,
+                            color = if (isSelected) routeAccent else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                        ),
+                        modifier = cardModifier
+                            .clickable { onSelectRoute(idx) }
+                            .testTag("route_card_$idx")
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                            Text(
+                                text = routeBadgeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = routeAccent,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(routeAccent)
+                                )
                                 Text(
-                                    text = routeBadgeLabel,
-                                    style = MaterialTheme.typography.labelSmall,
+                                    text = BilingualFormatter.formatDuration(route.durationSeconds, language),
+                                    style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = routeAccent,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(routeAccent)
-                                    )
-                                    Text(
-                                        text = BilingualFormatter.formatDuration(route.durationSeconds, language),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                Text(
-                                    text = BilingualFormatter.formatDistance(route.distanceMeters, unit, language),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
-                                )
-                                Text(
-                                    text = "${strings.arrivalLabel} ${BilingualFormatter.formatArrivalTime(route.durationSeconds, language)}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = routeAccent,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
+                            Text(
+                                text = BilingualFormatter.formatDistance(route.distanceMeters, unit, language),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "${strings.arrivalLabel} ${BilingualFormatter.formatArrivalTime(route.durationSeconds, language)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = routeAccent,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                if (visibleRoutes.size <= 3) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        visibleRoutes.forEachIndexed { idx, route ->
+                            RouteOptionCard(idx = idx, route = route, cardModifier = Modifier.weight(1f))
+                        }
+                    }
+                } else {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(visibleRoutes.size, key = { visibleRoutes[it].id }) { idx ->
+                            RouteOptionCard(idx = idx, route = visibleRoutes[idx], cardModifier = Modifier.width(122.dp))
                         }
                     }
                 }
 
                 // Expandable Turn-by-Turn Steps list before starting navigation
-                val selectedRoute = routes.getOrNull(selectedRouteIndex)
+                val selectedRoute = visibleRoutes.getOrNull(safeSelectedIdx)
                 if (selectedRoute != null && selectedRoute.maneuvers.isNotEmpty()) {
                     AnimatedVisibility(visible = showTurnsList) {
                         LazyColumn(

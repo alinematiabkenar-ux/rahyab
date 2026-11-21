@@ -213,6 +213,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _userHeadingDegrees = MutableStateFlow(0f)
     val userHeadingDegrees: StateFlow<Float> = _userHeadingDegrees.asStateFlow()
     private var hasHeadingSample = false
+    private var lastHeadingEmitElapsedMs = 0L
 
     // Transient UI feedback message
     private val _snackbarMessage = MutableStateFlow<String?>(null)
@@ -292,15 +293,24 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }.collect { targetHeading ->
                 if (targetHeading != null) {
                     val normalized = CompassTracker.normalizeAngle(targetHeading)
+                    val nowMs = android.os.SystemClock.elapsedRealtime()
                     if (!hasHeadingSample) {
                         hasHeadingSample = true
+                        lastHeadingEmitElapsedMs = nowMs
                         _userHeadingDegrees.value = normalized
-                    } else {
-                        _userHeadingDegrees.value = CompassTracker.lerpAngle(
+                    } else if (nowMs - lastHeadingEmitElapsedMs >= 100L) {
+                        val blended = CompassTracker.lerpAngle(
                             _userHeadingDegrees.value,
                             normalized,
-                            0.35f
+                            0.45f
                         )
+                        val delta = kotlin.math.abs(
+                            CompassTracker.shortestAngleDelta(_userHeadingDegrees.value, blended)
+                        )
+                        if (delta > 2.0f) {
+                            lastHeadingEmitElapsedMs = nowMs
+                            _userHeadingDegrees.value = blended
+                        }
                     }
                 }
             }
@@ -563,14 +573,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectCandidateRoute(index: Int) {
-        if (index in _candidateRoutes.value.indices) {
-            _selectedRouteIndex.value = index
+        val routes = _candidateRoutes.value
+        if (routes.isEmpty()) return
+        val safeIndex = index.coerceIn(0, routes.lastIndex)
+        if (_selectedRouteIndex.value != safeIndex) {
+            _selectedRouteIndex.value = safeIndex
         }
     }
 
     fun startNavigation() {
         val routes = _candidateRoutes.value
-        val route = routes.getOrNull(_selectedRouteIndex.value) ?: return
+        if (routes.isEmpty()) return
+        val safeIdx = _selectedRouteIndex.value.coerceIn(0, routes.lastIndex)
+        val route = routes[safeIdx]
         val dest = _selectedPlace.value ?: return
         val s = settings.value
 
@@ -1292,6 +1307,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun testVoiceGuidance() {
         voiceManager.checkPersianAvailability()
         voiceManager.speakTestSample(settings.value.language)
+    }
+
+    fun showSnackbar(message: String) {
+        _snackbarMessage.value = message
     }
 
     fun consumeSnackbar() {
