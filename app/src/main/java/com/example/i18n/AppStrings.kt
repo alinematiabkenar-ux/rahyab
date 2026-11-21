@@ -178,6 +178,7 @@ data class AppStrings(
     val importSuccess: String,
     val importFailed: String,
     val checksumMismatch: String,
+    val osmOnlyPlacesNote: String,
     // Settings & GitHub Releases Pack Source
     val settingsTitle: String,
     val sectionLanguageUnits: String,
@@ -392,6 +393,7 @@ val EnglishStrings = AppStrings(
     importSuccess = "Imported successfully",
     importFailed = "File validation failed or file is corrupted",
     checksumMismatch = "Checksum verification failed. Pack marked corrupted.",
+    osmOnlyPlacesNote = "Places built from OpenStreetMap only (Overture unavailable during build)",
     settingsTitle = "Settings",
     sectionLanguageUnits = "Language & Units",
     languageLabel = "App & Voice Language",
@@ -602,6 +604,7 @@ val PersianStrings = AppStrings(
     importSuccess = "با موفقیت وارد شد",
     importFailed = "بررسی فایل ناموفق بود یا فایل خراب است",
     checksumMismatch = "عدم تطابق امضای SHA-256. بسته خراب علامت‌گذاری شد.",
+    osmOnlyPlacesNote = "مکان‌ها فقط از OpenStreetMap ساخته شده‌اند (داده Overture هنگام ساخت در دسترس نبود)",
     settingsTitle = "تنظیمات",
     sectionLanguageUnits = "زبان و واحدها",
     languageLabel = "زبان برنامه و راهنمای صوتی",

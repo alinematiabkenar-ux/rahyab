@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
@@ -98,6 +100,7 @@ data class InstalledPackEntity(
     val hasPmtiles: Boolean = false,
     val hasValhalla: Boolean = false,
     val hasPlacesDb: Boolean = false,
+    val placesSource: String = "overture+osm",
     val errorMessage: String? = null,
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -180,7 +183,7 @@ interface InstalledPackDao {
         UserReportEntity::class,
         InstalledPackEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class RahYabDatabase : RoomDatabase() {
@@ -192,15 +195,27 @@ abstract class RahYabDatabase : RoomDatabase() {
         @Volatile
         private var instance: RahYabDatabase? = null
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE installed_packs ADD COLUMN placesSource TEXT NOT NULL DEFAULT 'overture+osm'"
+                )
+            }
+        }
+
         fun getInstance(context: Context): RahYabDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     RahYabDatabase::class.java,
                     "rahyab_local.db"
-                ).fallbackToDestructiveMigration(dropAllTables = true).build().also {
-                    instance = it
-                }
+                )
+                    .addMigrations(MIGRATION_2_3)
+                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .build()
+                    .also {
+                        instance = it
+                    }
             }
         }
     }

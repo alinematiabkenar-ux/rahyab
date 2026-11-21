@@ -93,10 +93,14 @@ fun SettingsScreen(
     var githubRepoDraft by remember { mutableStateOf(settings.githubRepo) }
     var baseUrlDraft by remember { mutableStateOf(settings.packBaseUrl) }
 
-    LaunchedEffect(settings.githubOwner, settings.githubRepo, settings.packBaseUrl) {
-        if (githubOwnerDraft.isEmpty() && settings.githubOwner.isNotEmpty()) githubOwnerDraft = settings.githubOwner
-        if (githubRepoDraft.isEmpty() && settings.githubRepo.isNotEmpty()) githubRepoDraft = settings.githubRepo
-        if (baseUrlDraft.isEmpty() && settings.packBaseUrl.isNotEmpty()) baseUrlDraft = settings.packBaseUrl
+    LaunchedEffect(settings.githubOwner) {
+        githubOwnerDraft = settings.githubOwner
+    }
+    LaunchedEffect(settings.githubRepo) {
+        githubRepoDraft = settings.githubRepo
+    }
+    LaunchedEffect(settings.packBaseUrl) {
+        baseUrlDraft = settings.packBaseUrl
     }
 
     // SAF launchers for Exporting & Importing User Reports (Phase 4)

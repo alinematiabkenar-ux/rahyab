@@ -147,6 +147,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 hasManifestEntry = remote != null,
                 isCurrentLocationState = (state.code == locStateCode),
                 isQueued = (status == PackInstallStatus.QUEUED),
+                placesSource = inst?.placesSource?.takeIf { it.isNotBlank() } ?: remote?.placesSource ?: "overture+osm",
                 errorMessage = inst?.errorMessage
             )
         }
@@ -1114,11 +1115,17 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     fun saveGitHubRepository(owner: String, repo: String) {
         viewModelScope.launch {
-            prefs.setGitHubRepository(owner, repo)
             val cleanedOwner = owner.trim()
             val cleanedRepo = repo.trim()
+            prefs.setGitHubRepository(cleanedOwner, cleanedRepo)
             if (cleanedOwner.isNotEmpty() && cleanedRepo.isNotEmpty()) {
-                packManager.fetchManifest("https://github.com/$cleanedOwner/$cleanedRepo/releases/latest/download")
+                val url = "https://github.com/$cleanedOwner/$cleanedRepo/releases/latest/download"
+                _snackbarMessage.value = if (settings.value.language == AppLanguage.PERSIAN) {
+                    "مخزن گیت‌هاب ذخیره شد: $cleanedOwner/$cleanedRepo"
+                } else {
+                    "Saved GitHub repo: $cleanedOwner/$cleanedRepo"
+                }
+                packManager.fetchManifest(url)
             }
         }
     }

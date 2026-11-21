@@ -31,6 +31,7 @@ data class StateManifestEntry(
     val version: String,
     val buildVersion: String = "",
     val parentStateCode: String? = null,
+    val placesSource: String = "overture+osm",
     val totalSizeBytes: Long,
     val pmtiles: PackFileEntry,
     val valhalla: PackFileEntry,
@@ -68,8 +69,12 @@ data class StatePackUiItem(
     val hasManifestEntry: Boolean,
     val isCurrentLocationState: Boolean = false,
     val isQueued: Boolean = false,
+    val placesSource: String = "overture+osm",
     val errorMessage: String? = null
 ) {
     val progress: Float
         get() = if (totalSizeBytes > 0L) (downloadedBytes.toFloat() / totalSizeBytes.toFloat()).coerceIn(0f, 1f) else 0f
+
+    val isOsmOnlyPlaces: Boolean
+        get() = placesSource.equals("osm-only", ignoreCase = true)
 }

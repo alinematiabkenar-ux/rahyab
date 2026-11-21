@@ -604,6 +604,28 @@ private fun StatePackCard(
                 FilePillBadge("Places FTS5", pack.hasPlacesDb)
             }
 
+            if (pack.isOsmOnlyPlaces) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("osm_only_note_${pack.stateCode}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Warning,
+                        contentDescription = null,
+                        tint = AlertAmber,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = strings.osmOnlyPlacesNote,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             if (pack.status == PackInstallStatus.DOWNLOADING ||
                 pack.status == PackInstallStatus.PAUSED ||
                 pack.status == PackInstallStatus.VERIFYING ||

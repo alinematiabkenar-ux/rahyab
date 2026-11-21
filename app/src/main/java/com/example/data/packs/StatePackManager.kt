@@ -260,6 +260,7 @@ class StatePackManager(
                         hasPmtiles = pmValid,
                         hasValhalla = vhValid,
                         hasPlacesDb = dbValid,
+                        placesSource = record?.placesSource ?: "overture+osm",
                         errorMessage = if (computedStatus == PackInstallStatus.CORRUPTED) {
                             buildMissingFilesNote(pmValid, vhValid, dbValid)
                         } else null,
@@ -345,6 +346,7 @@ class StatePackManager(
                     parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
                     totalBytes = totalSize,
                     downloadedBytes = computePartialBytes(code),
+                    placesSource = entry.placesSource,
                     errorMessage = null
                 )
             )
@@ -402,6 +404,7 @@ class StatePackManager(
                         parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
                         totalBytes = totalSize,
                         downloadedBytes = computePartialBytes(code),
+                        placesSource = entry.placesSource,
                         errorMessage = null
                     )
                 )
@@ -478,6 +481,7 @@ class StatePackManager(
                         hasPmtiles = true,
                         hasValhalla = true,
                         hasPlacesDb = true,
+                        placesSource = entry.placesSource,
                         errorMessage = null,
                         updatedAt = System.currentTimeMillis()
                     )

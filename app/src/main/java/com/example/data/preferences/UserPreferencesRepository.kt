@@ -63,8 +63,8 @@ data class UserSettings(
         }
 
     companion object {
-        const val DEFAULT_GITHUB_OWNER = "rahyab-nav"
-        const val DEFAULT_GITHUB_REPO = "rahyab-maps"
+        const val DEFAULT_GITHUB_OWNER = "alinematiabkenar-ux"
+        const val DEFAULT_GITHUB_REPO = "rahyab"
     }
 }
 
@@ -115,8 +115,8 @@ class UserPreferencesRepository(private val context: Context) {
             avoidTolls = prefs[Keys.AVOID_TOLLS] ?: false,
             avoidHighways = prefs[Keys.AVOID_HIGHWAYS] ?: false,
             avoidFerries = prefs[Keys.AVOID_FERRIES] ?: false,
-            githubOwner = prefs[Keys.GITHUB_OWNER] ?: UserSettings.DEFAULT_GITHUB_OWNER,
-            githubRepo = prefs[Keys.GITHUB_REPO] ?: UserSettings.DEFAULT_GITHUB_REPO,
+            githubOwner = prefs[Keys.GITHUB_OWNER]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_OWNER,
+            githubRepo = prefs[Keys.GITHUB_REPO]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_REPO,
             packBaseUrl = prefs[Keys.PACK_BASE_URL] ?: "",
             onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
             devOnlineOregonMode = prefs[Keys.DEV_ONLINE_OREGON] ?: false,

@@ -300,6 +300,164 @@ def build_valhalla_tiles(pack_code: str, pbf_path: Path, work_dir: Path, out_tar
     shutil.rmtree(tile_dir, ignore_errors=True)
 
 
+def _duckdb_struct_has_field(col_type: str, field_name: str) -> bool:
+    """Best-effort check for whether a DuckDB STRUCT type string declares `field_name`."""
+    t = col_type.lower()
+    f = field_name.lower()
+    return (
+        f'"{f}" ' in t
+        or f" {f} " in t
+        or f"({f} " in t
+        or f",{f} " in t
+        or f", {f} " in t
+    )
+
+
+def _build_category_keywords(*parts: str | None) -> str:
+    """Combine primary, basic, hierarchy, and alternate category labels into searchable tokens."""
+    seen: list[str] = []
+    seen_set: set[str] = set()
+    for part in parts:
+        if not part:
+            continue
+        for raw in str(part).replace(",", " ").replace(";", " ").split():
+            tok = raw.strip().lower()
+            if not tok:
+                continue
+            if tok not in seen_set:
+                seen_set.add(tok)
+                seen.append(tok)
+            if "_" in tok:
+                for sub in tok.split("_"):
+                    sub = sub.strip()
+                    if sub and sub not in seen_set:
+                        seen_set.add(sub)
+                        seen.append(sub)
+    return " ".join(seen)
+
+
+def build_overture_places_sql(
+    columns: dict[str, str],
+    overture_s3: str,
+    bbox: tuple[float, float, float, float],
+    base_state_abbr: str,
+) -> str:
+    """
+    Build a schema-resilient DuckDB SQL query from DESCRIBE output so Overture 2026+
+    (`taxonomy`, `basic_category`, `operating_status`), older releases (`categories`),
+    and future schema changes work without BinderException failures.
+    """
+    min_lon, min_lat, max_lon, max_lat = bbox
+    cols = {k.lower(): (v or "") for k, v in columns.items()}
+
+    if "names" not in cols or not _duckdb_struct_has_field(cols["names"], "primary"):
+        raise ValueError("Overture schema is missing required 'names.primary' column")
+    if "geometry" not in cols:
+        raise ValueError("Overture schema is missing required 'geometry' column")
+
+    # Brand name (e.g., "Best Buy")
+    if "brand" in cols and _duckdb_struct_has_field(cols["brand"], "names"):
+        brand_expr = "COALESCE(brand.names.primary, '')"
+    else:
+        brand_expr = "''"
+
+    # Main category: taxonomy.primary -> basic_category -> legacy categories.primary -> ''
+    has_taxonomy = "taxonomy" in cols
+    has_tax_primary = has_taxonomy and _duckdb_struct_has_field(cols["taxonomy"], "primary")
+    has_tax_hierarchy = has_taxonomy and _duckdb_struct_has_field(cols["taxonomy"], "hierarchy")
+    has_tax_alternates = has_taxonomy and _duckdb_struct_has_field(cols["taxonomy"], "alternates")
+    has_basic_cat = "basic_category" in cols
+    has_legacy_cats = "categories" in cols
+    has_legacy_primary = has_legacy_cats and _duckdb_struct_has_field(cols["categories"], "primary")
+    has_legacy_alt = has_legacy_cats and _duckdb_struct_has_field(cols["categories"], "alternate")
+
+    cat_candidates: list[str] = []
+    if has_tax_primary:
+        cat_candidates.append("NULLIF(taxonomy.primary, '')")
+    if has_basic_cat:
+        cat_candidates.append("NULLIF(basic_category, '')")
+    if has_legacy_primary:
+        cat_candidates.append("NULLIF(categories.primary, '')")
+    category_expr = f"COALESCE({', '.join(cat_candidates)}, '')" if cat_candidates else "''"
+
+    # Extra searchable category words from taxonomy.primary, basic_category, hierarchy, alternates
+    extra_cat_parts: list[str] = []
+    if has_tax_primary:
+        extra_cat_parts.append("NULLIF(taxonomy.primary, '')")
+    if has_basic_cat:
+        extra_cat_parts.append("NULLIF(basic_category, '')")
+    if has_tax_hierarchy:
+        extra_cat_parts.append("NULLIF(array_to_string(taxonomy.hierarchy, ' '), '')")
+    if has_tax_alternates:
+        extra_cat_parts.append("NULLIF(array_to_string(taxonomy.alternates, ' '), '')")
+    if has_legacy_primary:
+        extra_cat_parts.append("NULLIF(categories.primary, '')")
+    if has_legacy_alt:
+        extra_cat_parts.append("NULLIF(array_to_string(categories.alternate, ' '), '')")
+    extra_cat_expr = f"concat_ws(' ', {', '.join(extra_cat_parts)})" if extra_cat_parts else "''"
+
+    # Addresses (freeform, locality, region, postcode, country)
+    addr_type = cols.get("addresses", "")
+    has_addresses = "addresses" in cols
+    addr_expr = "COALESCE(addresses[1].freeform, '')" if (has_addresses and _duckdb_struct_has_field(addr_type, "freeform")) else "''"
+    city_expr = "COALESCE(addresses[1].locality, '')" if (has_addresses and _duckdb_struct_has_field(addr_type, "locality")) else "''"
+    state_expr = (
+        f"COALESCE(addresses[1].region, '{base_state_abbr}')"
+        if (has_addresses and _duckdb_struct_has_field(addr_type, "region"))
+        else f"'{base_state_abbr}'"
+    )
+    postcode_expr = "COALESCE(addresses[1].postcode, '')" if (has_addresses and _duckdb_struct_has_field(addr_type, "postcode")) else "''"
+
+    # Confidence -> popularity score
+    popularity_expr = "COALESCE(confidence, 0.8) * 5.0" if "confidence" in cols else "4.0"
+
+    where_clauses: list[str] = []
+    if "bbox" in cols:
+        where_clauses.append(
+            f"bbox.xmin >= {min_lon} AND bbox.xmax <= {max_lon} "
+            f"AND bbox.ymin >= {min_lat} AND bbox.ymax <= {max_lat}"
+        )
+    else:
+        where_clauses.append(
+            f"ST_X(geometry) BETWEEN {min_lon} AND {max_lon} "
+            f"AND ST_Y(geometry) BETWEEN {min_lat} AND {max_lat}"
+        )
+
+    where_clauses.append("names.primary IS NOT NULL")
+
+    if "operating_status" in cols:
+        where_clauses.append(
+            "(operating_status IS NULL OR "
+            "(LOWER(operating_status) NOT LIKE '%permanently_closed%' "
+            "AND LOWER(operating_status) NOT IN ('closed_permanently', 'closed')))"
+        )
+
+    if has_addresses and _duckdb_struct_has_field(addr_type, "country"):
+        where_clauses.append("(addresses IS NULL OR len(addresses) = 0 OR addresses[1].country IS NULL OR addresses[1].country = 'US')")
+    if has_addresses and _duckdb_struct_has_field(addr_type, "region"):
+        where_clauses.append(
+            f"(addresses IS NULL OR len(addresses) = 0 OR addresses[1].region IS NULL OR addresses[1].region = '{base_state_abbr}')"
+        )
+
+    where_sql = "\n          AND ".join(where_clauses)
+    return f"""
+        SELECT
+            names.primary AS name,
+            {brand_expr} AS brand,
+            {category_expr} AS category,
+            {extra_cat_expr} AS category_keywords,
+            {addr_expr} AS address,
+            {city_expr} AS city,
+            {state_expr} AS state,
+            {postcode_expr} AS postcode,
+            ST_Y(geometry) AS lat,
+            ST_X(geometry) AS lon,
+            {popularity_expr} AS popularity
+        FROM read_parquet('{overture_s3}', filename=false, hive_partitioning=1)
+        WHERE {where_sql}
+    """
+
+
 def build_places_fts5_db(
     pack_code: str,
     state_abbr: str,
@@ -307,8 +465,7 @@ def build_places_fts5_db(
     pbf_path: Path,
     overture_release: str,
     out_db: Path,
-) -> None:
-    import duckdb
+) -> str:
     import osmium
 
     class OsmPlaceAndHazardHandler(osmium.SimpleHandler):
@@ -362,8 +519,14 @@ def build_places_fts5_db(
             is_address = bool(housenumber and street)
             if is_poi or is_address:
                 popularity = 3.0 if brand else (2.5 if tags.get("place") in ("city", "town") else 1.5 if is_poi else 1.0)
+                category_keywords = _build_category_keywords(
+                    category,
+                    tags.get("shop"),
+                    tags.get("amenity"),
+                    tags.get("cuisine"),
+                )
                 self.places.append((
-                    name, brand, category, address, city, self.state_abbr,
+                    name, brand, category, category_keywords, address, city, self.state_abbr,
                     postcode, lat, lon, "osm", popularity,
                 ))
 
@@ -399,6 +562,7 @@ def build_places_fts5_db(
             name TEXT NOT NULL,
             brand TEXT DEFAULT '',
             category TEXT DEFAULT '',
+            category_keywords TEXT DEFAULT '',
             address TEXT DEFAULT '',
             city TEXT DEFAULT '',
             state TEXT DEFAULT '',
@@ -422,44 +586,62 @@ def build_places_fts5_db(
         CREATE INDEX idx_hazards_lat_lon ON road_hazards(lat, lon);
     """)
 
-    # 1. Query Overture Maps Places GeoParquet from AWS S3 via DuckDB with bbox pushdown
-    min_lon, min_lat, max_lon, max_lat = bbox
+    # 1. Query Overture Maps Places GeoParquet from AWS S3 via DuckDB with schema inspection
     base_state_abbr = state_abbr.split("-")[0]
     overture_s3 = f"s3://overturemaps-us-west-2/release/{overture_release}/theme=places/type=place/*"
-    print(f"[overture] Querying Overture Places ({overture_release}) for {pack_code.upper()} via DuckDB...", flush=True)
+    places_source = "overture+osm"
+    duck = None
+    try:
+        import duckdb
 
-    duck = duckdb.connect()
-    duck.execute("INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;")
-    duck.execute("SET s3_region='us-west-2'; SET s3_access_key_id=''; SET s3_secret_access_key='';")
+        print(f"[overture] Inspecting & querying Overture Places ({overture_release}) for {pack_code.upper()} via DuckDB...", flush=True)
+        duck = duckdb.connect()
+        duck.execute("INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;")
+        duck.execute("SET s3_region='us-west-2'; SET s3_access_key_id=''; SET s3_secret_access_key='';")
 
-    overture_query = f"""
-        SELECT
-            names.primary AS name,
-            COALESCE(brand.names.primary, '') AS brand,
-            COALESCE(categories.primary, '') AS category,
-            COALESCE(addresses[1].freeform, '') AS address,
-            COALESCE(addresses[1].locality, '') AS city,
-            COALESCE(addresses[1].region, '{base_state_abbr}') AS state,
-            COALESCE(addresses[1].postcode, '') AS postcode,
-            ST_Y(geometry) AS lat,
-            ST_X(geometry) AS lon,
-            COALESCE(confidence, 0.8) * 5.0 AS popularity
-        FROM read_parquet('{overture_s3}', filename=false, hive_partitioning=1)
-        WHERE bbox.xmin >= {min_lon} AND bbox.xmax <= {max_lon}
-          AND bbox.ymin >= {min_lat} AND bbox.ymax <= {max_lat}
-          AND names.primary IS NOT NULL
-          AND (addresses IS NULL OR addresses[1].country = 'US')
-          AND (addresses IS NULL OR addresses[1].region IS NULL OR addresses[1].region = '{base_state_abbr}')
-    """
-    overture_rows = duck.execute(overture_query).fetchall()
-    print(f"[overture] Inserted {len(overture_rows):,} Overture businesses for {pack_code.upper()}", flush=True)
-    cur.executemany(
-        "INSERT INTO places (name, brand, category, address, city, state, postcode, lat, lon, source, popularity) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'overture', ?)",
-        overture_rows,
-    )
-    conn.commit()
-    duck.close()
+        describe_rows = duck.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{overture_s3}', filename=false, hive_partitioning=1)"
+        ).fetchall()
+        schema_cols = {str(r[0]): str(r[1]) for r in describe_rows}
+        print(f"[overture] Discovered {len(schema_cols)} parquet columns: {', '.join(sorted(schema_cols.keys()))}", flush=True)
+
+        overture_query = build_overture_places_sql(
+            columns=schema_cols,
+            overture_s3=overture_s3,
+            bbox=bbox,
+            base_state_abbr=base_state_abbr,
+        )
+        raw_overture_rows = duck.execute(overture_query).fetchall()
+        normalized_overture_rows = []
+        for row in raw_overture_rows:
+            name, brand, category, raw_cat_kw, address, city, state_val, postcode, lat, lon, popularity = row
+            cat_keywords = _build_category_keywords(category, raw_cat_kw)
+            normalized_overture_rows.append((
+                name, brand or "", category or "", cat_keywords, address or "",
+                city or "", state_val or base_state_abbr, postcode or "",
+                lat, lon, popularity,
+            ))
+
+        print(f"[overture] Inserted {len(normalized_overture_rows):,} Overture businesses for {pack_code.upper()}", flush=True)
+        cur.executemany(
+            "INSERT INTO places (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'overture', ?)",
+            normalized_overture_rows,
+        )
+        conn.commit()
+    except Exception as exc:
+        places_source = "osm-only"
+        print(
+            f"RAHYAB WARNING: Overture Places query failed for {pack_code.upper()} ({exc}); "
+            "building places database from OpenStreetMap only.",
+            flush=True,
+        )
+    finally:
+        if duck is not None:
+            try:
+                duck.close()
+            except Exception:
+                pass
 
     # 2. Merge OSM addresses, POIs, and road hazards
     print(f"[osm] Extracting addresses, POIs, and hazards from {pbf_path.name}...", flush=True)
@@ -470,8 +652,8 @@ def build_places_fts5_db(
     print(f"[osm] Extracted {len(osm_places):,} OSM places/addresses and {len(osm_hazards):,} road hazards", flush=True)
 
     cur.executemany(
-        "INSERT INTO places (name, brand, category, address, city, state, postcode, lat, lon, source, popularity) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO places (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         osm_places,
     )
     cur.executemany(
@@ -480,12 +662,27 @@ def build_places_fts5_db(
     )
     conn.commit()
 
-    # 3. Build SQLite FTS5 index
+    # 3. Build SQLite FTS5 index (6 columns matching Android OfflinePlaceSearchEngine bm25 weights;
+    #    category column indexes taxonomy.primary + basic_category + hierarchy + alternates via view)
     print("[sqlite] Building FTS5 full-text search index...", flush=True)
     cur.executescript("""
+        CREATE VIEW places_fts_src AS
+        SELECT
+            id,
+            name,
+            brand,
+            CASE
+                WHEN category_keywords IS NOT NULL AND category_keywords != '' THEN category_keywords
+                ELSE category
+            END AS category,
+            address,
+            city,
+            postcode
+        FROM places;
+
         CREATE VIRTUAL TABLE places_fts USING fts5(
             name, brand, category, address, city, postcode,
-            content='places', content_rowid='id',
+            content='places_fts_src', content_rowid='id',
             tokenize='unicode61 remove_diacritics 2',
             prefix='2 3 4'
         );
@@ -495,8 +692,40 @@ def build_places_fts5_db(
         VACUUM;
     """)
     conn.commit()
+
+    # 4. Post-build verification check: total place count + FTS5 search for "Best Buy"
+    total_places = cur.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+    overture_count = cur.execute("SELECT COUNT(*) FROM places WHERE source = 'overture'").fetchone()[0]
+    osm_count = cur.execute("SELECT COUNT(*) FROM places WHERE source = 'osm'").fetchone()[0]
+    best_buy_rows = cur.execute(
+        """
+        SELECT p.name, p.brand, p.category, p.address, p.city, p.state, p.postcode, p.source
+        FROM places_fts
+        JOIN places p ON p.id = places_fts.rowid
+        WHERE places_fts MATCH '"best" "buy"'
+        ORDER BY bm25(places_fts, 10.0, 12.0, 4.0, 5.0, 3.0, 2.0) ASC
+        LIMIT 5
+        """
+    ).fetchall()
+    print(
+        f"[check] {pack_code.upper()} places DB ready ({places_source}): "
+        f"{total_places:,} total places ({overture_count:,} Overture, {osm_count:,} OSM).",
+        flush=True,
+    )
+    if best_buy_rows:
+        for idx, (b_name, b_brand, b_cat, b_addr, b_city, b_state, b_zip, b_src) in enumerate(best_buy_rows, start=1):
+            formatted_addr = ", ".join(p for p in (b_addr, b_city, b_state, b_zip) if p)
+            print(
+                f"[check] Best Buy FTS5 match #{idx}: {b_name} "
+                f"(brand='{b_brand}', category='{b_cat}', source='{b_src}') — {formatted_addr or '(no street address)'}",
+                flush=True,
+            )
+    else:
+        print(f"[check] Best Buy FTS5 search returned 0 matches in {pack_code.upper()}.", flush=True)
+
     conn.close()
     print(f"[sqlite] Built {out_db} ({out_db.stat().st_size / (1024 * 1024):.1f} MB)", flush=True)
+    return places_source
 
 
 def split_file_if_needed(path: Path, base_url: str, max_chunk_bytes: int = GITHUB_ASSET_SPLIT_BYTES) -> dict:
@@ -565,6 +794,7 @@ def write_pack_manifest_entry(
     base_url: str,
     version: str,
     build_version: str,
+    places_source: str = "overture+osm",
 ) -> dict:
     meta = ALL_PACK_CATALOG[pack_code]
     pm = output_dir / f"{pack_code}.pmtiles"
@@ -581,6 +811,7 @@ def write_pack_manifest_entry(
         "version": version,
         "buildVersion": build_version,
         "parentStateCode": meta.get("parent"),
+        "placesSource": places_source,
         "totalSizeBytes": pm_e["sizeBytes"] + vh_e["sizeBytes"] + db_e["sizeBytes"],
         "pmtiles": pm_e,
         "valhalla": vh_e,
@@ -659,10 +890,13 @@ def build_pack(
         if buffered_pbf != primary_pbf:
             buffered_pbf.unlink(missing_ok=True)
 
+    places_source = "overture+osm"
     if not skip_places:
-        build_places_fts5_db(code, meta["abbr"], meta["bbox"], primary_pbf, overture_release, output_dir / f"{code}_places.db")
+        places_source = build_places_fts5_db(
+            code, meta["abbr"], meta["bbox"], primary_pbf, overture_release, output_dir / f"{code}_places.db"
+        )
 
-    return write_pack_manifest_entry(code, output_dir, base_url, version, build_version)
+    return write_pack_manifest_entry(code, output_dir, base_url, version, build_version, places_source=places_source)
 
 
 def main():
