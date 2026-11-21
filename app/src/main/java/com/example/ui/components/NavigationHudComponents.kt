@@ -23,14 +23,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MergeType
-import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CarCrash
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.LocalPolice
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.RoundaboutRight
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Toll
+import androidx.compose.material.icons.filled.Traffic
+import androidx.compose.material.icons.filled.Train
 import androidx.compose.material.icons.filled.TurnLeft
 import androidx.compose.material.icons.filled.TurnRight
 import androidx.compose.material.icons.filled.TurnSharpLeft
@@ -57,7 +64,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -79,9 +85,11 @@ import com.example.navigation.AheadAlert
 import com.example.navigation.HighwaySignpost
 import com.example.navigation.LaneDirection
 import com.example.navigation.LaneInfo
+import com.example.navigation.LatLon
 import com.example.navigation.ManeuverType
 import com.example.navigation.RoadAlertKind
 import com.example.navigation.RouteManeuver
+import com.example.navigation.ValhallaResponseParser
 import com.example.ui.theme.AlertAmber
 import com.example.ui.theme.AlertPoliceBlue
 import com.example.ui.theme.AlertRed
@@ -92,6 +100,8 @@ import com.example.ui.theme.HighwaySignBorder
 import com.example.ui.theme.HighwaySignGreen
 import com.example.ui.theme.HighwaySignGreenDark
 import com.example.ui.theme.JetBrainsMonoFamily
+import kotlin.math.cos
+import kotlin.math.sin
 
 fun maneuverIconFor(type: ManeuverType): ImageVector = when (type) {
     ManeuverType.LEFT -> Icons.Filled.TurnLeft
@@ -103,21 +113,26 @@ fun maneuverIconFor(type: ManeuverType): ImageVector = when (type) {
     ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT -> Icons.Filled.UTurnLeft
     ManeuverType.ROUNDABOUT -> Icons.Filled.RoundaboutRight
     ManeuverType.MERGE -> Icons.AutoMirrored.Filled.MergeType
-    ManeuverType.ARRIVE -> Icons.Filled.Flag
+    ManeuverType.ARRIVE, ManeuverType.ARRIVE_LEFT, ManeuverType.ARRIVE_RIGHT -> Icons.Filled.Flag
     else -> Icons.Filled.ArrowUpward
 }
 
 /**
- * Top turn-by-turn banner with authentic US highway green signpost pill and Sygic-style lane strip.
- * Lane strip is strictly omitted whenever `maneuver.lanes` is empty (never guessed or invented).
+ * Top turn-by-turn banner with authentic US highway green signpost pill, secondary "Then ..." strip,
+ * Sygic-style lane strip (strictly hidden when no real OSM/Valhalla lane data exists),
+ * and tap-to-close real-geometry enlarged junction preview.
  */
 @Composable
 fun TurnByTurnTopHud(
     maneuver: RouteManeuver,
+    thenManeuver: RouteManeuver?,
     distanceMeters: Double,
     unit: DistanceUnit,
     isRerouting: Boolean,
+    showLaneStrip: Boolean,
     showJunctionPreview: Boolean,
+    routeShape: List<LatLon>,
+    onDismissJunctionPreview: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -137,13 +152,12 @@ fun TurnByTurnTopHud(
             color = if (useHighwayGreen) HighwaySignGreen else CockpitMidnight,
             border = BorderStroke(
                 width = if (useHighwayGreen) 2.dp else 1.dp,
-                color = if (useHighwayGreen) HighwaySignBorder else CyanBeacon.copy(alpha = 0.4f)
+                color = if (useHighwayGreen) HighwaySignBorder else CyanBeacon.copy(alpha = 0.45f)
             ),
             shadowElevation = 10.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                // Highway signpost top row: Exit badge + Road shield numbers
                 if (signpost != null && signpost.hasContent) {
                     HighwaySignpostHeader(signpost = signpost)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -191,7 +205,7 @@ fun TurnByTurnTopHud(
                 }
 
                 // Strictly show lane guidance strip ONLY when real OSM/Valhalla turn:lanes exist
-                if (maneuver.lanes.isNotEmpty()) {
+                if (showLaneStrip && maneuver.lanes.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
                     LaneGuidanceStrip(
                         lanes = maneuver.lanes,
@@ -203,7 +217,47 @@ fun TurnByTurnTopHud(
             }
         }
 
-        // Enlarged Sygic-style Junction Preview for highway exits & complex splits
+        // Phase 2: Secondary "Then ..." maneuver strip when the next turn comes soon after
+        if (thenManeuver != null) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = CockpitSurfaceDark.copy(alpha = 0.95f),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("then_maneuver_strip")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = strings.thenPrefix,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = CyanBeacon,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Icon(
+                        imageVector = maneuverIconFor(thenManeuver.type),
+                        contentDescription = thenManeuver.instructionEn,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = thenManeuver.streetNames.firstOrNull()?.ifBlank { thenManeuver.instructionEn }
+                            ?: thenManeuver.instructionEn,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.9f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // Phase 3: Real-Geometry Enlarged Junction Preview (tap anywhere on card to close early)
         AnimatedVisibility(
             visible = showJunctionPreview,
             enter = fadeIn(),
@@ -212,6 +266,8 @@ fun TurnByTurnTopHud(
             EnlargedJunctionPreviewCard(
                 maneuver = maneuver,
                 distanceText = distText,
+                routeShape = routeShape,
+                onDismiss = onDismissJunctionPreview,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("junction_preview_card")
@@ -262,7 +318,7 @@ private fun HighwaySignpostHeader(signpost: HighwaySignpost) {
 /**
  * Sygic-style custom Canvas lane strip rendering arrows for EVERY physical lane
  * parsed from Valhalla / OSM `turn:lanes`. Recommended lanes glow crisp cyan-white;
- * non-recommended lanes stay subdued.
+ * non-recommended lanes stay subdued. Strictly hidden when `lanes` is empty.
  */
 @Composable
 fun LaneGuidanceStrip(
@@ -274,7 +330,7 @@ fun LaneGuidanceStrip(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(Color.Black.copy(alpha = 0.34f))
+            .background(Color.Black.copy(alpha = 0.36f))
             .padding(horizontal = 10.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -288,7 +344,7 @@ fun LaneGuidanceStrip(
                         .size(width = 42.dp, height = 46.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(
-                            if (lane.isRecommended) CyanBeacon.copy(alpha = 0.22f)
+                            if (lane.isRecommended) CyanBeacon.copy(alpha = 0.24f)
                             else Color.Transparent
                         )
                         .border(
@@ -299,10 +355,9 @@ fun LaneGuidanceStrip(
                     contentAlignment = Alignment.Center
                 ) {
                     Canvas(modifier = Modifier.size(34.dp)) {
-                        // Draw inactive directions first, then recommended active arrows on top
                         val inactive = lane.directions.filterNot { it in lane.activeDirections }
                         for (dir in inactive) {
-                            drawLaneArrow(dir, Color.White.copy(alpha = 0.32f), strokeWidth = 3.5f)
+                            drawLaneArrow(dir, Color.White.copy(alpha = 0.30f), strokeWidth = 3.5f)
                         }
                         val active = if (lane.isRecommended) {
                             lane.activeDirections.ifEmpty { lane.directions }
@@ -406,44 +461,38 @@ private fun DrawScope.drawArrowHead(tip: Offset, from: Offset, color: Color, str
     val rightAngle = angle - Math.toRadians(145.0)
     val headPath = Path().apply {
         moveTo(
-            tip.x + (headLen * kotlin.math.cos(leftAngle)).toFloat(),
-            tip.y + (headLen * kotlin.math.sin(leftAngle)).toFloat()
+            tip.x + (headLen * cos(leftAngle)).toFloat(),
+            tip.y + (headLen * sin(leftAngle)).toFloat()
         )
         lineTo(tip.x, tip.y)
         lineTo(
-            tip.x + (headLen * kotlin.math.cos(rightAngle)).toFloat(),
-            tip.y + (headLen * kotlin.math.sin(rightAngle)).toFloat()
+            tip.x + (headLen * cos(rightAngle)).toFloat(),
+            tip.y + (headLen * sin(rightAngle)).toFloat()
         )
     }
     drawPath(headPath, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
 }
 
 /**
- * Enlarged 3D-perspective highway exit / junction split visual diagram
- * showing the overhead signpost gantry and illuminated target lanes.
+ * Enlarged Junction Preview drawn from the actual Valhalla route geometry around the
+ * upcoming highway exit/split, rotated heading-up, with overhead green signpost and tap-to-close.
  */
 @Composable
 fun EnlargedJunctionPreviewCard(
     maneuver: RouteManeuver,
     distanceText: String,
+    routeShape: List<LatLon>,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
-    val isRightExit = maneuver.type in setOf(
-        ManeuverType.EXIT_RIGHT,
-        ManeuverType.RAMP_RIGHT,
-        ManeuverType.STAY_RIGHT,
-        ManeuverType.SLIGHT_RIGHT,
-        ManeuverType.RIGHT
-    )
-    val lanes = maneuver.lanes
     val signpost = maneuver.signpost
 
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = CockpitMidnight),
         border = BorderStroke(1.5.dp, CyanBeacon.copy(alpha = 0.65f)),
-        modifier = modifier
+        modifier = modifier.clickable(onClick = onDismiss)
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(
@@ -452,15 +501,26 @@ fun EnlargedJunctionPreviewCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = strings.junctionPreviewLabel,
+                    text = "${strings.junctionPreviewLabel} • ${strings.tapToClosePreview}",
                     style = MaterialTheme.typography.labelMedium,
                     color = CyanBeacon
                 )
-                Text(
-                    text = distanceText,
-                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMonoFamily),
-                    color = Color.White
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = distanceText,
+                        style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMonoFamily),
+                        color = Color.White
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = strings.close,
+                        tint = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
@@ -500,91 +560,101 @@ fun EnlargedJunctionPreviewCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // 3D perspective road & split ramp diagram
+            // Real route geometry zoomed around the junction vertex, rotated heading-up
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(92.dp)
+                    .height(104.dp)
                     .clip(RoundedCornerShape(12.dp))
             ) {
                 val w = size.width
                 val h = size.height
 
-                // Night horizon sky gradient
                 drawRect(
                     brush = Brush.verticalGradient(
                         colors = listOf(Color(0xFF0A1931), Color(0xFF162447))
                     )
                 )
 
-                // Main highway trapezoid
-                val roadPath = Path().apply {
-                    moveTo(w * 0.14f, h)
-                    lineTo(w * 0.34f, h * 0.12f)
-                    lineTo(w * 0.66f, h * 0.12f)
-                    lineTo(w * 0.86f, h)
-                    close()
-                }
-                drawPath(roadPath, Color(0xFF2B3448))
+                val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, (routeShape.lastIndex).coerceAtLeast(0))
+                if (routeShape.size >= 3) {
+                    val startIdx = (pivotIdx - 12).coerceAtLeast(0)
+                    val endIdx = (pivotIdx + 18).coerceAtMost(routeShape.lastIndex)
+                    val pivot = routeShape[pivotIdx]
+                    val approachPt = routeShape[(pivotIdx - 2).coerceAtLeast(0)]
+                    val approachBearingDeg = if (approachPt != pivot) {
+                        ValhallaResponseParser.bearingDegrees(approachPt, pivot)
+                    } else 0.0
+                    val rotRad = Math.toRadians(-approachBearingDeg)
+                    val cosR = cos(rotRad)
+                    val sinR = sin(rotRad)
+                    val cosLat = cos(Math.toRadians(pivot.lat)).coerceAtLeast(0.1)
 
-                // Exit ramp branch splitting left or right
-                val rampPath = Path().apply {
-                    if (isRightExit) {
-                        moveTo(w * 0.62f, h)
-                        lineTo(w * 0.60f, h * 0.38f)
-                        lineTo(w * 0.94f, h * 0.12f)
-                        lineTo(w, h * 0.25f)
-                        lineTo(w * 0.86f, h)
-                        close()
-                    } else {
-                        moveTo(w * 0.38f, h)
-                        lineTo(w * 0.40f, h * 0.38f)
-                        lineTo(w * 0.06f, h * 0.12f)
-                        lineTo(0f, h * 0.25f)
-                        lineTo(w * 0.14f, h)
-                        close()
+                    // Project real GPS points into heading-up local meters around the junction
+                    val localPts = (startIdx..endIdx).map { i ->
+                        val p = routeShape[i]
+                        val eastM = (p.lon - pivot.lon) * 111_320.0 * cosLat
+                        val northM = (p.lat - pivot.lat) * 111_320.0
+                        val rx = eastM * cosR - northM * sinR
+                        val ry = eastM * sinR + northM * cosR
+                        Offset(rx.toFloat(), ry.toFloat())
                     }
-                }
-                drawPath(rampPath, Color(0xFF334155))
 
-                // Dashed lane dividers matching actual lane count (only if lane data exists)
-                val laneCount = lanes.size.coerceAtLeast(2)
-                val dashEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f)
-                for (i in 1 until laneCount) {
-                    val frac = i.toFloat() / laneCount.toFloat()
-                    val bx = w * (0.14f + frac * 0.72f)
-                    val tx = w * (0.34f + frac * 0.32f)
+                    val maxExtent = localPts.maxOfOrNull { maxOf(kotlin.math.abs(it.x), kotlin.math.abs(it.y)) }
+                        ?.coerceAtLeast(80f) ?: 150f
+                    val scale = (minOf(w, h) * 0.42f) / maxExtent
+                    val cx = w * 0.5f
+                    val cy = h * 0.56f
+
+                    val screenPts = localPts.map { pt ->
+                        Offset(cx + pt.x * scale, cy - pt.y * scale)
+                    }
+
+                    // Draw main highway continuation straight ahead for visual split context
                     drawLine(
-                        color = Color.White.copy(alpha = 0.5f),
-                        start = Offset(bx, h),
-                        end = Offset(tx, h * 0.14f),
-                        strokeWidth = 3f,
-                        pathEffect = dashEffect
+                        color = Color(0xFF334155),
+                        start = Offset(cx, h),
+                        end = Offset(cx, 0f),
+                        strokeWidth = 28f,
+                        cap = StrokeCap.Round
+                    )
+
+                    // Draw road asphalt casing along actual exit/split geometry
+                    val roadPath = Path().apply {
+                        screenPts.forEachIndexed { idx, offset ->
+                            if (idx == 0) moveTo(offset.x, offset.y) else lineTo(offset.x, offset.y)
+                        }
+                    }
+                    drawPath(
+                        roadPath,
+                        color = Color(0xFF2B3448),
+                        style = Stroke(width = 30f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+
+                    // Glowing cyan guidance line along actual route geometry
+                    drawPath(
+                        roadPath,
+                        color = CyanBeacon.copy(alpha = 0.35f),
+                        style = Stroke(width = 18f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                    drawPath(
+                        roadPath,
+                        color = CyanBeacon,
+                        style = Stroke(width = 8f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+
+                    // Junction split pivot marker
+                    drawCircle(
+                        color = Color.White,
+                        radius = 6f,
+                        center = Offset(cx, cy)
+                    )
+                    drawCircle(
+                        color = CyanBeacon,
+                        radius = 3.5f,
+                        center = Offset(cx, cy)
                     )
                 }
-
-                // Glowing cyan guidance trajectory through the recommended lane(s)
-                val activeLaneIdx = lanes.indexOfFirst { it.isRecommended }.let {
-                    if (it >= 0) it else if (isRightExit) laneCount - 1 else 0
-                }
-                val laneCenterFrac = (activeLaneIdx + 0.5f) / laneCount.toFloat()
-                val startX = w * (0.14f + laneCenterFrac * 0.72f)
-                val targetX = if (isRightExit) w * 0.88f else w * 0.12f
-
-                val glowPath = Path().apply {
-                    moveTo(startX, h * 0.96f)
-                    quadraticTo(startX, h * 0.45f, targetX, h * 0.18f)
-                }
-                drawPath(
-                    glowPath,
-                    color = CyanBeacon.copy(alpha = 0.35f),
-                    style = Stroke(width = 22f, cap = StrokeCap.Round)
-                )
-                drawPath(
-                    glowPath,
-                    color = CyanBeacon,
-                    style = Stroke(width = 9f, cap = StrokeCap.Round)
-                )
             }
         }
     }
@@ -592,7 +662,7 @@ fun EnlargedJunctionPreviewCard(
 
 /**
  * Authentic US MUTCD Speed Limit sign paired with live GPS speedometer pill.
- * Turns warning red when exceeding speed limit.
+ * Speed limit sign is strictly hidden when `speedLimitMph == null` (never guessed!).
  */
 @Composable
 fun SpeedometerAndLimitCluster(
@@ -615,7 +685,6 @@ fun SpeedometerAndLimitCluster(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // US Speed Limit Sign (shown whenever speed limit data exists on road segment)
         if (speedLimitMph != null) {
             val displayLimit = BilingualFormatter.convertMphToUnit(speedLimitMph, unit)
             Surface(
@@ -623,7 +692,9 @@ fun SpeedometerAndLimitCluster(
                 color = Color.White,
                 border = BorderStroke(2.5.dp, Color(0xFF0F172A)),
                 shadowElevation = 6.dp,
-                modifier = Modifier.width(64.dp)
+                modifier = Modifier
+                    .width(64.dp)
+                    .testTag("speed_limit_sign")
             ) {
                 Column(
                     modifier = Modifier.padding(vertical = 5.dp, horizontal = 4.dp),
@@ -648,7 +719,6 @@ fun SpeedometerAndLimitCluster(
             }
         }
 
-        // Current GPS Speedometer circular badge
         Surface(
             shape = CircleShape,
             color = speedColor,
@@ -679,8 +749,8 @@ fun SpeedometerAndLimitCluster(
 }
 
 /**
- * Waze-style approaching hazard / alert banner (speed drops, sharp curves, tolls,
- * railroad crossings, school zones, stop signs, and local user reports).
+ * Waze-style approaching hazard / alert banner supporting all 6 road alerts + traffic signals
+ * and all 8 user report types, with Confirm / Cleared actions for user reports.
  */
 @Composable
 fun AheadAlertBanner(
@@ -697,6 +767,7 @@ fun AheadAlertBanner(
     val accentColor = when (alert.kind) {
         RoadAlertKind.USER_POLICE, RoadAlertKind.USER_SPEED_TRAP -> AlertPoliceBlue
         RoadAlertKind.USER_CRASH, RoadAlertKind.USER_ROAD_CLOSURE, RoadAlertKind.STOP_SIGN -> AlertRed
+        RoadAlertKind.USER_CONSTRUCTION -> Color(0xFFF97316)
         else -> AlertAmber
     }
 
@@ -705,6 +776,13 @@ fun AheadAlertBanner(
         RoadAlertKind.USER_CRASH -> Icons.Filled.CarCrash
         RoadAlertKind.USER_ROAD_CLOSURE -> Icons.Filled.Block
         RoadAlertKind.USER_SPEED_TRAP, RoadAlertKind.SPEED_LIMIT_DROP -> Icons.Filled.Speed
+        RoadAlertKind.USER_CONSTRUCTION -> Icons.Filled.Construction
+        RoadAlertKind.USER_STALLED_VEHICLE -> Icons.Filled.DirectionsCar
+        RoadAlertKind.USER_OBJECT_ON_ROAD -> Icons.Filled.ReportProblem
+        RoadAlertKind.RAILROAD_CROSSING -> Icons.Filled.Train
+        RoadAlertKind.SCHOOL_ZONE -> Icons.Filled.School
+        RoadAlertKind.TOLL_BOOTH -> Icons.Filled.Toll
+        RoadAlertKind.TRAFFIC_SIGNAL -> Icons.Filled.Traffic
         else -> Icons.Filled.Warning
     }
 
@@ -784,7 +862,8 @@ fun AheadAlertBanner(
 }
 
 /**
- * Large, thumb-friendly 5-tile driving report selector (Police, Hazard, Crash, Road Closure, Speed Trap).
+ * Large, thumb-friendly 8-tile Waze-style driving report selector:
+ * Police, Hazard, Crash, Road Closed, Speed Trap, Construction, Object on Road, Stalled Vehicle.
  */
 @Composable
 fun OneTapReportGrid(
@@ -798,14 +877,17 @@ fun OneTapReportGrid(
         Triple(ReportType.HAZARD, strings.reportHazard, Icons.Filled.Warning to AlertAmber),
         Triple(ReportType.CRASH, strings.reportCrash, Icons.Filled.CarCrash to AlertRed),
         Triple(ReportType.ROAD_CLOSURE, strings.reportClosure, Icons.Filled.Block to Color(0xFFDC2626)),
-        Triple(ReportType.SPEED_TRAP, strings.reportSpeedTrap, Icons.Filled.Speed to Color(0xFF0EA5E9))
+        Triple(ReportType.SPEED_TRAP, strings.reportSpeedTrap, Icons.Filled.Speed to Color(0xFF0EA5E9)),
+        Triple(ReportType.CONSTRUCTION, strings.reportConstruction, Icons.Filled.Construction to Color(0xFFF97316)),
+        Triple(ReportType.OBJECT_ON_ROAD, strings.reportObjectOnRoad, Icons.Filled.ReportProblem to Color(0xFFEAB308)),
+        Triple(ReportType.STALLED_VEHICLE, strings.reportStalledVehicle, Icons.Filled.DirectionsCar to Color(0xFF8B5CF6))
     )
 
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
             text = strings.reportSheetTitle,
@@ -813,39 +895,22 @@ fun OneTapReportGrid(
             color = MaterialTheme.colorScheme.onSurface
         )
 
-        // Row 1 (3 large buttons)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items.take(3).forEach { (type, label, iconColor) ->
-                ReportTileButton(
-                    label = label,
-                    icon = iconColor.first,
-                    accent = iconColor.second,
-                    onClick = { onSelectReport(type) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("report_tile_${type.name.lowercase()}")
-                )
-            }
-        }
-
-        // Row 2 (2 large buttons)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items.drop(3).forEach { (type, label, iconColor) ->
-                ReportTileButton(
-                    label = label,
-                    icon = iconColor.first,
-                    accent = iconColor.second,
-                    onClick = { onSelectReport(type) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("report_tile_${type.name.lowercase()}")
-                )
+        items.chunked(4).forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                rowItems.forEach { (type, label, iconColor) ->
+                    ReportTileButton(
+                        label = label,
+                        icon = iconColor.first,
+                        accent = iconColor.second,
+                        onClick = { onSelectReport(type) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("report_tile_${type.name.lowercase()}")
+                    )
+                }
             }
         }
 
@@ -853,7 +918,7 @@ fun OneTapReportGrid(
             onClick = onClose,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
+                .height(50.dp)
         ) {
             Text(strings.cancel)
         }
@@ -869,7 +934,7 @@ private fun ReportTileButton(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         color = accent.copy(alpha = 0.14f),
         border = BorderStroke(1.5.dp, accent.copy(alpha = 0.65f)),
         modifier = modifier
@@ -877,7 +942,7 @@ private fun ReportTileButton(
             .clickable(onClick = onClick)
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
+            modifier = Modifier.padding(6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -885,15 +950,17 @@ private fun ReportTileButton(
                 imageVector = icon,
                 contentDescription = label,
                 tint = accent,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(28.dp)
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
-                maxLines = 2
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }

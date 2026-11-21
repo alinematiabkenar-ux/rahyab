@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,13 +20,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.SettingsVoice
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -32,6 +41,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -49,14 +59,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
+import com.example.data.local.ReportType
 import com.example.i18n.AppLanguage
+import com.example.i18n.BilingualFormatter
 import com.example.i18n.DistanceUnit
+import com.example.i18n.LocalAppLanguage
 import com.example.i18n.LocalAppStrings
 import com.example.i18n.MapThemeMode
 import com.example.ui.RahYabViewModel
 import com.example.ui.theme.AlertAmber
+import com.example.ui.theme.AlertRed
 
 @Composable
 fun SettingsScreen(
@@ -64,17 +81,43 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
+    val language = LocalAppLanguage.current
     val context = LocalContext.current
 
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val isPersianTtsAvailable by viewModel.isPersianTtsAvailable.collectAsStateWithLifecycle()
+    val activeReports by viewModel.activeUserReports.collectAsStateWithLifecycle()
+    val statePacks by viewModel.statePacks.collectAsStateWithLifecycle()
 
+    var githubOwnerDraft by remember { mutableStateOf(settings.githubOwner) }
+    var githubRepoDraft by remember { mutableStateOf(settings.githubRepo) }
     var baseUrlDraft by remember { mutableStateOf(settings.packBaseUrl) }
-    LaunchedEffect(settings.packBaseUrl) {
-        if (baseUrlDraft.isEmpty() && settings.packBaseUrl.isNotEmpty()) {
-            baseUrlDraft = settings.packBaseUrl
-        }
+
+    LaunchedEffect(settings.githubOwner, settings.githubRepo, settings.packBaseUrl) {
+        if (githubOwnerDraft.isEmpty() && settings.githubOwner.isNotEmpty()) githubOwnerDraft = settings.githubOwner
+        if (githubRepoDraft.isEmpty() && settings.githubRepo.isNotEmpty()) githubRepoDraft = settings.githubRepo
+        if (baseUrlDraft.isEmpty() && settings.packBaseUrl.isNotEmpty()) baseUrlDraft = settings.packBaseUrl
     }
+
+    // SAF launchers for Exporting & Importing User Reports (Phase 4)
+    val exportReportsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) viewModel.exportReportsToUri(uri) }
+
+    val importReportsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) viewModel.importReportsFromUri(uri) }
+
+    // SAF launchers for Full Settings + Saved Places Backup & Phone Transfer (Final Step)
+    val exportFullBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) viewModel.exportFullBackupToUri(uri) }
+
+    val importFullBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) viewModel.importFullBackupFromUri(uri) }
+
+    val installedDataBuildVersion = remember(statePacks) { viewModel.getInstalledDataBuildVersion() }
 
     LazyColumn(
         modifier = modifier
@@ -119,7 +162,7 @@ fun SettingsScreen(
                     )
                 }
 
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(strings.unitsLabel, style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -143,7 +186,7 @@ fun SettingsScreen(
                     )
                 }
 
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(strings.themeModeLabel, style = MaterialTheme.typography.labelLarge)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -190,7 +233,6 @@ fun SettingsScreen(
                     testTag = "switch_speed_audio"
                 )
 
-                // Persian TTS Missing Notice & Direct Android TTS Settings Shortcut
                 if (settings.language == AppLanguage.PERSIAN && !isPersianTtsAvailable) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
@@ -249,23 +291,138 @@ fun SettingsScreen(
             }
         }
 
-        // 3. Static Map Pack Host Base URL (manifest.json)
+        // 3. Phase 3: Lane Guidance, Junction Previews, Speed Threshold & Individual Road Alerts
+        item {
+            SettingsSectionCard(
+                title = strings.sectionRoadAlerts,
+                icon = Icons.Filled.NotificationsActive
+            ) {
+                SettingsToggleRow(
+                    label = strings.junctionPreviewSetting,
+                    checked = settings.junctionPreviewEnabled,
+                    onCheckedChange = { viewModel.setJunctionPreviewEnabled(it) },
+                    testTag = "switch_junction_preview"
+                )
+
+                Text(strings.speedWarningThresholdLabel, style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val unitLabel = if (settings.distanceUnit == DistanceUnit.IMPERIAL) strings.speedUnitMph else strings.speedUnitKmh
+                    listOf(0, 5, 10).forEach { thresholdMph ->
+                        val shownVal = BilingualFormatter.convertMphToUnit(thresholdMph, settings.distanceUnit)
+                        val label = "+${BilingualFormatter.formatNumber(shownVal, language)} $unitLabel"
+                        FilterChip(
+                            selected = settings.speedWarningThresholdMph == thresholdMph,
+                            onClick = { viewModel.setSpeedWarningThresholdMph(thresholdMph) },
+                            label = { Text(label, fontSize = 12.sp) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("speed_threshold_$thresholdMph")
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+                SettingsToggleRow(
+                    label = strings.alertToggleSpeedDrop,
+                    checked = settings.alertSpeedDropEnabled,
+                    onCheckedChange = { viewModel.setAlertSpeedDropEnabled(it) },
+                    testTag = "switch_alert_speed_drop"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleSharpCurve,
+                    checked = settings.alertSharpCurveEnabled,
+                    onCheckedChange = { viewModel.setAlertSharpCurveEnabled(it) },
+                    testTag = "switch_alert_sharp_curve"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleTollBooth,
+                    checked = settings.alertTollBoothEnabled,
+                    onCheckedChange = { viewModel.setAlertTollBoothEnabled(it) },
+                    testTag = "switch_alert_toll_booth"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleRailroad,
+                    checked = settings.alertRailroadEnabled,
+                    onCheckedChange = { viewModel.setAlertRailroadEnabled(it) },
+                    testTag = "switch_alert_railroad"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleSchoolZone,
+                    checked = settings.alertSchoolZoneEnabled,
+                    onCheckedChange = { viewModel.setAlertSchoolZoneEnabled(it) },
+                    testTag = "switch_alert_school_zone"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleStopSign,
+                    checked = settings.alertStopSignEnabled,
+                    onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },
+                    testTag = "switch_alert_stop_sign"
+                )
+            }
+        }
+
+        // 4. Phase 5: GitHub Releases Map Pack Source + Optional Custom Base URL
         item {
             SettingsSectionCard(
                 title = strings.sectionPackServer,
                 icon = Icons.Filled.CloudDownload
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = githubOwnerDraft,
+                        onValueChange = { githubOwnerDraft = it },
+                        label = { Text(strings.githubOwnerLabel) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("github_owner_input")
+                    )
+                    OutlinedTextField(
+                        value = githubRepoDraft,
+                        onValueChange = { githubRepoDraft = it },
+                        label = { Text(strings.githubRepoLabel) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("github_repo_input")
+                    )
+                }
+                Button(
+                    onClick = { viewModel.saveGitHubRepository(githubOwnerDraft, githubRepoDraft) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("save_github_repo_button")
+                ) {
+                    Text(strings.saveGithubRepo)
+                }
+
+                if (settings.effectivePackBaseUrl.isNotBlank()) {
+                    Text(
+                        text = "${strings.activePackUrlLabel}:\n${settings.effectivePackBaseUrl}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                HorizontalDivider()
                 OutlinedTextField(
                     value = baseUrlDraft,
                     onValueChange = { baseUrlDraft = it },
-                    label = { Text(strings.baseUrlLabel) },
+                    label = { Text(strings.customBaseUrlLabel) },
                     placeholder = { Text(strings.baseUrlPlaceholder) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("pack_base_url_input")
                 )
-                Button(
+                OutlinedButton(
                     onClick = { viewModel.savePackBaseUrl(baseUrlDraft) },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -277,7 +434,7 @@ fun SettingsScreen(
             }
         }
 
-        // 4. Routing Defaults
+        // 5. Routing Defaults
         item {
             SettingsSectionCard(
                 title = strings.sectionRoutingDefaults,
@@ -304,7 +461,145 @@ fun SettingsScreen(
             }
         }
 
-        // 5. Temporary Phase 1 Developer Testing Option (Oregon Public Online Sources)
+        // 6. Phase 4: My Active Driving Reports (optional post-drive notes + confirm/delete + export/import JSON)
+        item {
+            SettingsSectionCard(
+                title = strings.sectionMyReports,
+                icon = Icons.Filled.ReportProblem
+            ) {
+                if (activeReports.isEmpty()) {
+                    Text(
+                        text = strings.noActiveReports,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    activeReports.take(10).forEach { report ->
+                        var noteDraft by remember(report.id, report.note) { mutableStateOf(report.note) }
+                        val typeLabel = when (runCatching { ReportType.valueOf(report.type) }.getOrNull()) {
+                            ReportType.POLICE -> strings.reportPolice
+                            ReportType.HAZARD -> strings.reportHazard
+                            ReportType.CRASH -> strings.reportCrash
+                            ReportType.ROAD_CLOSURE -> strings.reportClosure
+                            ReportType.SPEED_TRAP -> strings.reportSpeedTrap
+                            ReportType.CONSTRUCTION -> strings.reportConstruction
+                            ReportType.OBJECT_ON_ROAD -> strings.reportObjectOnRoad
+                            ReportType.STALLED_VEHICLE -> strings.reportStalledVehicle
+                            null -> report.type
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = typeLabel + if (report.roadName.isNotBlank()) " • ${report.roadName}" else "",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.dismissUserReport(report.id) },
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Delete, contentDescription = strings.actionDelete, tint = AlertRed)
+                                    }
+                                }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = noteDraft,
+                                        onValueChange = { noteDraft = it },
+                                        placeholder = { Text(strings.addNoteHint, fontSize = 12.sp) },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.updateReportNote(report.id, noteDraft) },
+                                        modifier = Modifier.size(44.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Check, contentDescription = strings.saveNote, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { exportReportsLauncher.launch("rahyab_reports.json") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("export_reports_button")
+                    ) {
+                        Icon(Icons.Filled.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(strings.exportReports, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { importReportsLauncher.launch(arrayOf("application/json", "*/*")) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("import_reports_button")
+                    ) {
+                        Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(strings.importReports, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        // 7. Final Step: Export & Import Settings + Saved Places for New Phone Transfer
+        item {
+            SettingsSectionCard(
+                title = strings.sectionBackupTransfer,
+                icon = Icons.Filled.Backup
+            ) {
+                Button(
+                    onClick = { exportFullBackupLauncher.launch("rahyab_settings_and_places.json") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("export_full_backup_button")
+                ) {
+                    Icon(Icons.Filled.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(strings.exportBackupButton)
+                }
+                OutlinedButton(
+                    onClick = { importFullBackupLauncher.launch(arrayOf("application/json", "*/*")) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("import_full_backup_button")
+                ) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(strings.importBackupButton)
+                }
+            }
+        }
+
+        // 8. Developer & Emulator Testing Options
         item {
             Card(
                 shape = RoundedCornerShape(18.dp),
@@ -314,7 +609,7 @@ fun SettingsScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -342,11 +637,31 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("switch_dev_online_oregon")
                         )
                     }
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(strings.simulateDriveTitle, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                text = strings.simulateDriveSubtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = settings.simulateDriveEnabled,
+                            onCheckedChange = { viewModel.setSimulateDriveEnabled(it) },
+                            modifier = Modifier.testTag("switch_simulate_drive")
+                        )
+                    }
                 }
             }
         }
 
-        // 6. Required Licenses & Attribution (About RahYab)
+        // 9. About RahYab, Versions & Open-Source Licenses
         item {
             SettingsSectionCard(
                 title = strings.sectionAboutLicenses,
@@ -356,6 +671,14 @@ fun SettingsScreen(
                     text = "${strings.appName} — ${strings.tagline}",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "${strings.appVersionLabel}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = "${strings.dataBuildVersionLabel}: $installedDataBuildVersion",
+                    style = MaterialTheme.typography.bodySmall
                 )
                 HorizontalDivider()
                 Text(strings.osmAttributionFull, style = MaterialTheme.typography.bodyMedium)

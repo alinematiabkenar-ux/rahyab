@@ -5,11 +5,13 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.RahYabApplication
+import com.example.data.local.BackupAndTransferManager
 import com.example.data.local.PackInstallStatus
 import com.example.data.local.ReportType
 import com.example.data.local.SavedPlaceEntity
 import com.example.data.local.SavedPlaceType
 import com.example.data.local.UserReportEntity
+import com.example.data.model.UsStateInfo
 import com.example.data.model.UsStatesCatalog
 import com.example.data.packs.StatePackUiItem
 import com.example.data.preferences.UserSettings
@@ -23,11 +25,13 @@ import com.example.i18n.stringsFor
 import com.example.navigation.ActiveNavigationState
 import com.example.navigation.GpsFix
 import com.example.navigation.LatLon
+import com.example.navigation.MissingStatesException
 import com.example.navigation.NavigationSessionController
 import com.example.navigation.OfflineRoute
 import com.example.navigation.RouteOptions
 import com.example.navigation.SolarNightCalculator
 import com.example.service.NavigationForegroundService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,8 +39,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class CameraTargetCommand(
     val lat: Double,
@@ -74,6 +80,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val manifestError: StateFlow<String?> = packManager.manifestError
     val packsChangedTick: StateFlow<Long> = packManager.packsChangedTick
 
+    val currentLocationStateCode: StateFlow<String?> = currentGpsFix.map { fix ->
+        val lat = fix?.lat ?: EUGENE_OR_LAT
+        val lon = fix?.lon ?: EUGENE_OR_LON
+        UsStatesCatalog.findBestStateForLocation(lat, lon)?.code
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = "or"
+    )
+
     val savedPlaces: StateFlow<List<SavedPlaceEntity>> = savedPlaceDao.observeAll().stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -95,12 +111,13 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     val statePacks: StateFlow<List<StatePackUiItem>> = combine(
         installedPackDao.observeAll(),
-        packManager.manifest
-    ) { installedList, manifest ->
+        packManager.manifest,
+        currentLocationStateCode
+    ) { installedList, manifest, locStateCode ->
         val installedByCode = installedList.associateBy { it.stateCode.lowercase() }
         val manifestByCode = manifest?.states?.associateBy { it.stateCode.lowercase() }.orEmpty()
 
-        UsStatesCatalog.allStates.map { state ->
+        UsStatesCatalog.allPackEntries.map { state ->
             val inst = installedByCode[state.code]
             val remote = manifestByCode[state.code]
             val status = inst?.status?.let {
@@ -116,8 +133,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 abbr = state.abbr,
                 nameEn = state.nameEn,
                 nameFa = state.nameFa,
+                parentStateCode = state.parentStateCode ?: remote?.parentStateCode,
                 status = status,
                 installedVersion = inst?.installedVersion.orEmpty(),
+                installedBuildVersion = inst?.buildVersion.orEmpty(),
                 availableVersion = remote?.version ?: inst?.availableVersion.orEmpty(),
                 totalSizeBytes = totalBytes,
                 downloadedBytes = inst?.downloadedBytes ?: 0L,
@@ -126,6 +145,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 hasValhalla = inst?.hasValhalla ?: false,
                 hasPlacesDb = inst?.hasPlacesDb ?: false,
                 hasManifestEntry = remote != null,
+                isCurrentLocationState = (state.code == locStateCode),
+                isQueued = (status == PackInstallStatus.QUEUED),
                 errorMessage = inst?.errorMessage
             )
         }
@@ -134,6 +155,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
+
+    private val _mismatchedBuildVersions = MutableStateFlow<List<String>>(emptyList())
+    val mismatchedBuildVersions: StateFlow<List<String>> = _mismatchedBuildVersions.asStateFlow()
 
     // Search UI state
     private val _searchQuery = MutableStateFlow("")
@@ -148,7 +172,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedPlace = MutableStateFlow<PlaceSearchResult?>(null)
     val selectedPlace: StateFlow<PlaceSearchResult?> = _selectedPlace.asStateFlow()
 
-    // Route preview state (up to 3 alternatives)
+    // Route preview state (up to 3 color-coded alternatives)
     private val _candidateRoutes = MutableStateFlow<List<OfflineRoute>>(emptyList())
     val candidateRoutes: StateFlow<List<OfflineRoute>> = _candidateRoutes.asStateFlow()
 
@@ -161,13 +185,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _routeError = MutableStateFlow<String?>(null)
     val routeError: StateFlow<String?> = _routeError.asStateFlow()
 
+    private val _missingStatesForRoute = MutableStateFlow<List<UsStateInfo>>(emptyList())
+    val missingStatesForRoute: StateFlow<List<UsStateInfo>> = _missingStatesForRoute.asStateFlow()
+
     // Active turn-by-turn navigation state
     private val _navigationState = MutableStateFlow(ActiveNavigationState())
     val navigationState: StateFlow<ActiveNavigationState> = _navigationState.asStateFlow()
 
-    // Camera command stream for MapLibreMapContainer
+    // Camera command & auto-follow state
     private val _cameraCommand = MutableStateFlow<CameraTargetCommand?>(null)
     val cameraCommand: StateFlow<CameraTargetCommand?> = _cameraCommand.asStateFlow()
+
+    private val _isCameraFollowing = MutableStateFlow(true)
+    val isCameraFollowing: StateFlow<Boolean> = _isCameraFollowing.asStateFlow()
 
     // Transient UI feedback message
     private val _snackbarMessage = MutableStateFlow<String?>(null)
@@ -177,7 +207,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _lowStoragePromptStateCode = MutableStateFlow<String?>(null)
     val lowStoragePromptStateCode: StateFlow<String?> = _lowStoragePromptStateCode.asStateFlow()
 
+    // One-time Persian TTS notice dialog trigger
+    private val _showPersianTtsDialog = MutableStateFlow(false)
+    val showPersianTtsDialog: StateFlow<Boolean> = _showPersianTtsDialog.asStateFlow()
+
     private var searchJob: Job? = null
+    private var gpsWatchdogJob: Job? = null
+    private var simulationJob: Job? = null
+    private var arrivalEndJob: Job? = null
+    private var lastGpsReceivedMs: Long = 0L
+    private var simulatedWrongTurnTicksRemaining: Int = 0
     private var cachedDbHazards: List<RoadHazardPoint> = emptyList()
 
     init {
@@ -185,11 +224,24 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             packManager.auditInstalledPacks()
         }
 
-        // Sync voice language & enabled state with settings
+        // Track build version alignment across installed packs
+        viewModelScope.launch {
+            packsChangedTick.collect {
+                _mismatchedBuildVersions.value = packManager.getMismatchedBuildVersions()
+            }
+        }
+
+        // Sync voice language & enabled state with settings + trigger one-time Persian TTS notice
         viewModelScope.launch {
             settings.collect { s ->
                 voiceManager.setLanguage(s.language)
                 voiceManager.setVoiceEnabled(s.voiceGuidanceEnabled)
+                if (s.language == AppLanguage.PERSIAN && !s.persianTtsNoticeShown) {
+                    val available = voiceManager.checkPersianAvailability()
+                    if (!available) {
+                        _showPersianTtsDialog.value = true
+                    }
+                }
             }
         }
 
@@ -203,10 +255,11 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Process live GPS updates during active navigation
+        // Process live GPS updates during active navigation (ignored when Simulate Drive is driving)
         viewModelScope.launch {
             currentGpsFix.collect { fix ->
-                if (fix != null && _navigationState.value.isNavigating) {
+                if (fix != null && _navigationState.value.isNavigating && !_navigationState.value.isSimulatingDrive) {
+                    lastGpsReceivedMs = System.currentTimeMillis()
                     handleNavigationGpsFix(fix)
                 }
             }
@@ -224,6 +277,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun getStorageStats(): Pair<Long, Long> =
         packManager.getTotalMapStorageUsedBytes() to packManager.getAvailableStorageBytes()
 
+    fun getInstalledDataBuildVersion(): String {
+        val versions = statePacks.value
+            .filter { it.status == PackInstallStatus.INSTALLED || it.status == PackInstallStatus.UPDATE_AVAILABLE }
+            .map { it.installedBuildVersion.ifBlank { it.installedVersion } }
+            .filter { it.isNotBlank() }
+            .distinct()
+        return when {
+            versions.isEmpty() -> "—"
+            versions.size == 1 -> versions.first()
+            else -> versions.joinToString(" / ")
+        }
+    }
+
     fun resolveEffectiveNightMode(s: UserSettings, fix: GpsFix?): Boolean {
         return when (s.themeMode) {
             MapThemeMode.DAY -> false
@@ -236,17 +302,13 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * Reference location used for search ranking and route origin when GPS fix isn't acquired yet
-     * (defaults to Eugene, Oregon when Oregon is installed or Dev Oregon Online Mode is active).
-     */
     fun getEffectiveReferenceLocation(): LatLon {
         val fix = currentGpsFix.value
         if (fix != null) return LatLon(fix.lat, fix.lon)
         return LatLon(EUGENE_OR_LAT, EUGENE_OR_LON)
     }
 
-    // --- SEARCH ---
+    // --- SEARCH & MAP PIN ---
     fun onSearchQueryChanged(query: String) {
         _searchQuery.value = query
         searchJob?.cancel()
@@ -287,16 +349,42 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun dropPinOnMap(lat: Double, lon: Double) {
+        val str = stringsFor(settings.value.language)
+        val stateCode = UsStatesCatalog.findBestStateForLocation(lat, lon)?.code.orEmpty()
+        val coordsText = String.format(java.util.Locale.US, "%.5f, %.5f", lat, lon)
+        val pin = PlaceSearchResult(
+            id = "pin_${System.currentTimeMillis()}",
+            name = str.droppedPin,
+            brand = "",
+            category = "pin",
+            address = coordsText,
+            city = "",
+            stateCode = stateCode,
+            postcode = "",
+            lat = lat,
+            lon = lon,
+            distanceMeters = 0.0,
+            relevanceScore = 100.0,
+            source = "pin"
+        )
+        _selectedPlace.value = pin
+        _candidateRoutes.value = emptyList()
+        _routeError.value = null
+        _missingStatesForRoute.value = emptyList()
+        _cameraCommand.value = CameraTargetCommand(lat = lat, lon = lon, zoom = 15.0)
+    }
+
     fun selectPlace(place: PlaceSearchResult) {
         _selectedPlace.value = place
         _candidateRoutes.value = emptyList()
         _routeError.value = null
+        _missingStatesForRoute.value = emptyList()
         _cameraCommand.value = CameraTargetCommand(
             lat = place.lat,
             lon = place.lon,
             zoom = 15.0
         )
-        // Save into Recent places
         viewModelScope.launch {
             savedPlaceDao.insert(
                 SavedPlaceEntity(
@@ -317,6 +405,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _selectedPlace.value = null
         _candidateRoutes.value = emptyList()
         _routeError.value = null
+        _missingStatesForRoute.value = emptyList()
     }
 
     fun savePlaceAs(place: PlaceSearchResult, type: SavedPlaceType) {
@@ -352,20 +441,32 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun buildCurrentRouteOptions(s: UserSettings): RouteOptions {
+        val now = System.currentTimeMillis()
+        // Phase 4: automatically avoid active user-reported Road Closures in Valhalla routing!
+        val closedLocations = activeUserReports.value
+            .filter { it.type == ReportType.ROAD_CLOSURE.name && it.expiresAt > now }
+            .map { LatLon(it.lat, it.lon) }
+
+        return RouteOptions(
+            avoidTolls = s.avoidTolls,
+            avoidHighways = s.avoidHighways,
+            avoidFerries = s.avoidFerries,
+            avoidLocations = closedLocations
+        )
+    }
+
     // --- ROUTING & TURN-BY-TURN NAVIGATION ---
     fun calculateRoutesToSelectedPlace() {
         val dest = _selectedPlace.value ?: return
         val origin = getEffectiveReferenceLocation()
         val s = settings.value
-        val options = RouteOptions(
-            avoidTolls = s.avoidTolls,
-            avoidHighways = s.avoidHighways,
-            avoidFerries = s.avoidFerries
-        )
+        val options = buildCurrentRouteOptions(s)
 
         viewModelScope.launch {
             _isCalculatingRoute.value = true
             _routeError.value = null
+            _missingStatesForRoute.value = emptyList()
             val result = routingEngine.calculateRoutes(
                 origin = origin,
                 destination = LatLon(dest.lat, dest.lon),
@@ -384,7 +485,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
             }.onFailure { err ->
-                _routeError.value = err.message ?: stringsFor(s.language).missingRoutingTiles
+                if (err is MissingStatesException) {
+                    _missingStatesForRoute.value = err.missingStates
+                    _routeError.value = err.message
+                } else {
+                    _routeError.value = err.message ?: stringsFor(s.language).missingRoutingTiles
+                }
             }
         }
     }
@@ -401,10 +507,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         val dest = _selectedPlace.value ?: return
         val s = settings.value
 
+        stopInternalNavJobs()
         navController.reset()
         voiceManager.resetDeduplication()
+        locationTracker.setNavigationMode(true)
+        _isCameraFollowing.value = true
+        lastGpsReceivedMs = System.currentTimeMillis()
+        simulatedWrongTurnTicksRemaining = 0
 
         val initialManeuver = route.maneuvers.firstOrNull()
+        val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
         _navigationState.value = ActiveNavigationState(
             isNavigating = true,
             route = route,
@@ -415,10 +527,13 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             timeToNextManeuverSeconds = initialManeuver?.timeSeconds ?: route.durationSeconds,
             remainingDistanceMeters = route.distanceMeters,
             remainingTimeSeconds = route.durationSeconds,
-            currentSpeedLimitMph = initialManeuver?.speedLimitMph
+            snappedLocation = startLoc,
+            currentSpeedLimitMph = initialManeuver?.speedLimitMph,
+            isSimulatingDrive = s.simulateDriveEnabled,
+            showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true
         )
 
-        // Pre-fetch road hazards (railroad crossings, school zones, stop signs) along route bounding box
+        // Pre-fetch road hazards (railroad crossings, school zones, stop signs, traffic signals) along route
         viewModelScope.launch {
             if (route.shape.isNotEmpty()) {
                 val minLat = route.shape.minOf { it.lat } - 0.05
@@ -429,7 +544,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Start foreground service notification for background turn-by-turn navigation
+        // Start foreground service notification (foregroundServiceType="location", no ACCESS_BACKGROUND_LOCATION)
         val firstInstruction = initialManeuver?.instructionEn ?: dest.name
         val etaText = BilingualFormatter.formatDuration(route.durationSeconds, s.language)
         NavigationForegroundService.startOrUpdate(
@@ -440,30 +555,116 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
         // Announce first instruction
         initialManeuver?.let {
-            voiceManager.speakManeuver(it, it.lengthMeters, s.distanceUnit, s.language, "start")
+            val spoken = voiceManager.speakManeuver(it, it.lengthMeters, s.distanceUnit, s.language, "start")
+            _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
         }
 
-        // Switch camera to 3D heading-up driving perspective
-        val ref = getEffectiveReferenceLocation()
+        // Switch camera to driving view
         _cameraCommand.value = CameraTargetCommand(
-            lat = ref.lat,
-            lon = ref.lon,
+            lat = startLoc.lat,
+            lon = startLoc.lon,
             zoom = 16.8,
             tilt = if (s.is3DView) 55.0 else 0.0,
             bearing = currentGpsFix.value?.bearing?.toDouble() ?: 0.0
         )
+
+        if (s.simulateDriveEnabled) {
+            startSimulatedDriveLoop()
+        } else {
+            startGpsLossWatchdog()
+        }
+    }
+
+    private fun startGpsLossWatchdog() {
+        gpsWatchdogJob?.cancel()
+        gpsWatchdogJob = viewModelScope.launch {
+            while (_navigationState.value.isNavigating && !_navigationState.value.hasArrived) {
+                delay(1500L)
+                val elapsed = System.currentTimeMillis() - lastGpsReceivedMs
+                if (elapsed >= 4500L && !_navigationState.value.isSimulatingDrive) {
+                    val deadReckoned = navController.advanceDeadReckoning(_navigationState.value, 1.5)
+                    _navigationState.value = deadReckoned
+                    if (_isCameraFollowing.value) {
+                        deadReckoned.snappedLocation?.let { loc ->
+                            val s = settings.value
+                            _cameraCommand.value = CameraTargetCommand(
+                                lat = loc.lat,
+                                lon = loc.lon,
+                                zoom = 16.5,
+                                tilt = if (s.is3DView) 55.0 else 0.0,
+                                bearing = if (s.is3DView) deadReckoned.snappedBearing.toDouble() else 0.0
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startSimulatedDriveLoop() {
+        simulationJob?.cancel()
+        simulationJob = viewModelScope.launch {
+            while (_navigationState.value.isNavigating && !_navigationState.value.hasArrived) {
+                delay(1000L)
+                val wrongTurnOffset = if (simulatedWrongTurnTicksRemaining > 0) {
+                    simulatedWrongTurnTicksRemaining--
+                    120.0
+                } else {
+                    0.0
+                }
+                val simFix = navController.computeSimulatedFix(
+                    currentState = _navigationState.value,
+                    elapsedSeconds = 2.0,
+                    wrongTurnOffsetMeters = wrongTurnOffset
+                )
+                if (simFix != null) {
+                    handleNavigationGpsFix(simFix)
+                }
+            }
+        }
+    }
+
+    fun triggerSimulatedWrongTurn() {
+        if (_navigationState.value.isNavigating && _navigationState.value.isSimulatingDrive) {
+            simulatedWrongTurnTicksRemaining = 4
+        }
+    }
+
+    fun dismissJunctionPreview() {
+        val currentIdx = _navigationState.value.currentManeuver?.index ?: return
+        _navigationState.value = _navigationState.value.copy(
+            showJunctionPreview = false,
+            dismissedJunctionManeuverIndex = currentIdx
+        )
+    }
+
+    fun repeatLastVoiceInstruction() {
+        voiceManager.repeatLastInstruction(settings.value.language)
     }
 
     fun stopNavigation() {
+        stopInternalNavJobs()
+        locationTracker.setNavigationMode(false)
         _navigationState.value = ActiveNavigationState()
         navController.reset()
         NavigationForegroundService.stop(app)
+        _isCameraFollowing.value = true
         val ref = getEffectiveReferenceLocation()
         _cameraCommand.value = CameraTargetCommand(lat = ref.lat, lon = ref.lon, zoom = 14.0, tilt = 0.0, bearing = 0.0)
     }
 
+    private fun stopInternalNavJobs() {
+        gpsWatchdogJob?.cancel()
+        gpsWatchdogJob = null
+        simulationJob?.cancel()
+        simulationJob = null
+        arrivalEndJob?.cancel()
+        arrivalEndJob = null
+    }
+
     private fun handleNavigationGpsFix(fix: GpsFix) {
         val s = settings.value
+        val wasArrived = _navigationState.value.hasArrived
         val result = navController.processGpsFix(
             currentState = _navigationState.value,
             fix = fix,
@@ -471,27 +672,45 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             userReports = activeUserReports.value,
             unit = s.distanceUnit,
             language = s.language,
-            speedAudioEnabled = s.speedWarningAudioEnabled
+            speedAudioEnabled = s.speedWarningAudioEnabled,
+            settings = s
         )
         _navigationState.value = result.state
 
         if (result.triggerOverspeedChime) {
             voiceManager.playOverspeedChime()
         }
-        result.maneuverToSpeak?.let { (maneuver, stage) ->
-            voiceManager.speakManeuver(
-                maneuver = maneuver,
-                distanceMeters = result.state.distanceToNextManeuverMeters,
-                unit = s.distanceUnit,
-                language = s.language,
-                announcementStage = stage
-            )
-        }
-        result.alertToSpeak?.let { alert ->
-            voiceManager.speakAlert(alert, s.language)
+
+        if (result.state.hasArrived && !wasArrived) {
+            val arrivalManeuverType = result.state.route?.maneuvers?.lastOrNull()?.type
+                ?: com.example.navigation.ManeuverType.ARRIVE
+            val spoken = voiceManager.speakArrival(arrivalManeuverType, result.state.destinationName, s.language)
+            _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
+            arrivalEndJob?.cancel()
+            arrivalEndJob = viewModelScope.launch {
+                delay(6000L)
+                if (_navigationState.value.hasArrived) {
+                    stopNavigation()
+                }
+            }
+        } else {
+            result.maneuverToSpeak?.let { (maneuver, stage) ->
+                val spoken = voiceManager.speakManeuver(
+                    maneuver = maneuver,
+                    distanceMeters = result.state.distanceToNextManeuverMeters,
+                    unit = s.distanceUnit,
+                    language = s.language,
+                    announcementStage = stage,
+                    includeLaneGuidance = maneuver.lanes.isNotEmpty()
+                )
+                _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
+            }
+            result.alertToSpeak?.let { alert ->
+                voiceManager.speakAlert(alert, s.language)
+            }
         }
 
-        // Update foreground service notification
+        // Update persistent foreground notification
         val currentManeuver = result.state.currentManeuver
         if (currentManeuver != null && result.state.isNavigating) {
             val distStr = BilingualFormatter.formatDistance(
@@ -508,14 +727,18 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
 
-        // Follow driving camera
-        _cameraCommand.value = CameraTargetCommand(
-            lat = fix.lat,
-            lon = fix.lon,
-            zoom = if (fix.speedMps > 22f) 15.8 else 16.8,
-            tilt = if (s.is3DView) 55.0 else 0.0,
-            bearing = if (s.is3DView) fix.bearing.toDouble() else 0.0
-        )
+        // Follow driving camera unless user manually panned away
+        if (_isCameraFollowing.value) {
+            val targetLoc = result.state.snappedLocation ?: LatLon(fix.lat, fix.lon)
+            val targetBearing = if (s.is3DView) result.state.snappedBearing.toDouble() else 0.0
+            _cameraCommand.value = CameraTargetCommand(
+                lat = targetLoc.lat,
+                lon = targetLoc.lon,
+                zoom = if (fix.speedMps > 22f) 15.8 else 16.8,
+                tilt = if (s.is3DView) 55.0 else 0.0,
+                bearing = targetBearing
+            )
+        }
 
         if (result.shouldReroute) {
             triggerAutomaticReroute(fix)
@@ -525,11 +748,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private fun triggerAutomaticReroute(fix: GpsFix) {
         val dest = _selectedPlace.value ?: return
         val s = settings.value
+        voiceManager.speakRerouting(s.language)
         viewModelScope.launch {
             val res = routingEngine.calculateRoutes(
                 origin = LatLon(fix.lat, fix.lon),
                 destination = LatLon(dest.lat, dest.lon),
-                options = RouteOptions(s.avoidTolls, s.avoidHighways, s.avoidFerries),
+                options = buildCurrentRouteOptions(s),
                 headingDegrees = fix.bearing,
                 allowDevOnlineFallback = s.devOnlineOregonMode
             )
@@ -537,23 +761,34 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 val newRoute = routes.firstOrNull() ?: return@onSuccess
                 navController.reset()
                 voiceManager.resetDeduplication()
+                val firstManeuver = newRoute.maneuvers.firstOrNull()
                 _navigationState.value = _navigationState.value.copy(
                     route = newRoute,
                     currentManeuverIndex = 0,
+                    snappedShapeIndex = 0,
                     isOffRoute = false,
                     isRerouting = false,
                     remainingDistanceMeters = newRoute.distanceMeters,
-                    remainingTimeSeconds = newRoute.durationSeconds
+                    remainingTimeSeconds = newRoute.durationSeconds,
+                    dismissedJunctionManeuverIndex = -1
                 )
+                firstManeuver?.let {
+                    voiceManager.speakManeuver(it, it.lengthMeters, s.distanceUnit, s.language, "reroute_start")
+                }
             }.onFailure {
                 _navigationState.value = _navigationState.value.copy(isRerouting = false)
             }
         }
     }
 
-    // --- WAZE-STYLE LOCAL DRIVING REPORTS ---
+    // --- WAZE-STYLE LOCAL DRIVING REPORTS (8 TYPES + NOTES + EXPORT/IMPORT) ---
     fun submitUserReport(type: ReportType) {
-        val loc = getEffectiveReferenceLocation()
+        val loc = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+        val bearing = if (_navigationState.value.isNavigating) {
+            _navigationState.value.snappedBearing
+        } else {
+            currentGpsFix.value?.bearing ?: -1f
+        }
         val roadName = _navigationState.value.currentManeuver?.streetNames?.firstOrNull().orEmpty()
         val now = System.currentTimeMillis()
         val expiresAt = now + type.defaultTtlMinutes * 60_000L
@@ -564,6 +799,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                     type = type.name,
                     lat = loc.lat,
                     lon = loc.lon,
+                    bearing = bearing,
                     roadName = roadName,
                     createdAt = now,
                     expiresAt = expiresAt
@@ -576,8 +812,15 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     fun confirmUserReport(reportId: Long) {
         viewModelScope.launch {
-            val newExpiry = System.currentTimeMillis() + 45 * 60_000L
+            val newExpiry = System.currentTimeMillis() + 60 * 60_000L
             userReportDao.confirmReport(reportId, newExpiry)
+        }
+    }
+
+    fun updateReportNote(reportId: Long, note: String) {
+        viewModelScope.launch {
+            userReportDao.updateNote(reportId, note.trim())
+            _nowTick.value = System.currentTimeMillis()
         }
     }
 
@@ -588,9 +831,117 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun exportReportsToUri(uri: Uri) {
+        viewModelScope.launch {
+            val str = stringsFor(settings.value.language)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val reports = userReportDao.getActiveOnce(System.currentTimeMillis())
+                    val json = BackupAndTransferManager.exportReportsJson(reports)
+                    app.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(json.toByteArray(Charsets.UTF_8))
+                    } ?: error("Cannot open output stream")
+                }
+            }
+            _snackbarMessage.value = if (result.isSuccess) str.backupExportSuccess else str.backupTransferFailed
+        }
+    }
+
+    fun importReportsFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val str = stringsFor(settings.value.language)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val json = app.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+                        ?: error("Cannot read file")
+                    val imported = BackupAndTransferManager.importReportsJson(json)
+                    for (r in imported) {
+                        if (userReportDao.getByUuid(r.uuid) == null) {
+                            userReportDao.insert(r)
+                        }
+                    }
+                    imported.size
+                }
+            }
+            _nowTick.value = System.currentTimeMillis()
+            _snackbarMessage.value = if (result.isSuccess) {
+                "${str.backupImportSuccess} (${result.getOrDefault(0)})"
+            } else {
+                str.backupTransferFailed
+            }
+        }
+    }
+
+    // --- FINAL STEP: FULL SETTINGS & SAVED PLACES EXPORT / IMPORT FOR NEW PHONE ---
+    fun exportFullBackupToUri(uri: Uri) {
+        viewModelScope.launch {
+            val str = stringsFor(settings.value.language)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val s = settings.value
+                    val places = savedPlaceDao.getAllOnce()
+                    val reports = userReportDao.getActiveOnce(System.currentTimeMillis())
+                    val json = BackupAndTransferManager.exportFullBackupJson(s, places, reports)
+                    app.contentResolver.openOutputStream(uri)?.use { out ->
+                        out.write(json.toByteArray(Charsets.UTF_8))
+                    } ?: error("Cannot open output stream")
+                }
+            }
+            _snackbarMessage.value = if (result.isSuccess) str.backupExportSuccess else str.backupTransferFailed
+        }
+    }
+
+    fun importFullBackupFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val str = stringsFor(settings.value.language)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val json = app.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+                        ?: error("Cannot read backup file")
+                    val parsed = BackupAndTransferManager.importFullBackupJson(json)
+                    parsed.settings?.let { s ->
+                        prefs.setLanguage(s.language)
+                        prefs.setDistanceUnit(s.distanceUnit)
+                        prefs.setThemeMode(s.themeMode)
+                        prefs.setVoiceGuidanceEnabled(s.voiceGuidanceEnabled)
+                        prefs.setSpeedWarningAudioEnabled(s.speedWarningAudioEnabled)
+                        prefs.setSpeedWarningThresholdMph(s.speedWarningThresholdMph)
+                        prefs.setJunctionPreviewEnabled(s.junctionPreviewEnabled)
+                        prefs.setAlertSpeedDropEnabled(s.alertSpeedDropEnabled)
+                        prefs.setAlertSharpCurveEnabled(s.alertSharpCurveEnabled)
+                        prefs.setAlertTollBoothEnabled(s.alertTollBoothEnabled)
+                        prefs.setAlertRailroadEnabled(s.alertRailroadEnabled)
+                        prefs.setAlertSchoolZoneEnabled(s.alertSchoolZoneEnabled)
+                        prefs.setAlertStopSignEnabled(s.alertStopSignEnabled)
+                        prefs.set3DView(s.is3DView)
+                        prefs.setAvoidTolls(s.avoidTolls)
+                        prefs.setAvoidHighways(s.avoidHighways)
+                        prefs.setAvoidFerries(s.avoidFerries)
+                        prefs.setGitHubRepository(s.githubOwner, s.githubRepo)
+                        prefs.setPackBaseUrl(s.packBaseUrl)
+                        prefs.setOnboardingCompleted(true)
+                    }
+                    for (place in parsed.savedPlaces) {
+                        if (place.type == SavedPlaceType.HOME.name || place.type == SavedPlaceType.WORK.name) {
+                            savedPlaceDao.deleteByType(place.type)
+                        }
+                        savedPlaceDao.insert(place)
+                    }
+                    for (report in parsed.reports) {
+                        if (userReportDao.getByUuid(report.uuid) == null) {
+                            userReportDao.insert(report)
+                        }
+                    }
+                }
+            }
+            _nowTick.value = System.currentTimeMillis()
+            _snackbarMessage.value = if (result.isSuccess) str.backupImportSuccess else str.backupTransferFailed
+        }
+    }
+
     // --- STATE MAP PACKS ---
     fun refreshManifest() {
-        val url = settings.value.packBaseUrl
+        val url = settings.value.effectivePackBaseUrl
         viewModelScope.launch {
             packManager.fetchManifest(url)
         }
@@ -598,21 +949,26 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     fun requestDownloadStatePack(stateCode: String) {
         val pack = statePacks.value.find { it.stateCode == stateCode } ?: return
+        val baseUrl = settings.value.effectivePackBaseUrl
         if (pack.totalSizeBytes > 0L && packManager.isLowStorageForPack(pack.totalSizeBytes)) {
             _lowStoragePromptStateCode.value = stateCode
         } else {
-            packManager.startOrResumeDownload(stateCode, settings.value.packBaseUrl)
+            packManager.startOrResumeDownload(stateCode, baseUrl)
         }
     }
 
     fun confirmLowStorageDownload() {
         val code = _lowStoragePromptStateCode.value ?: return
         _lowStoragePromptStateCode.value = null
-        packManager.startOrResumeDownload(code, settings.value.packBaseUrl)
+        packManager.startOrResumeDownload(code, settings.value.effectivePackBaseUrl)
     }
 
     fun dismissLowStoragePrompt() {
         _lowStoragePromptStateCode.value = null
+    }
+
+    fun updateAllOutdatedPacks() {
+        packManager.updateAllOutdatedPacks(settings.value.effectivePackBaseUrl)
     }
 
     fun pauseStatePackDownload(stateCode: String) {
@@ -636,12 +992,55 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // --- CAMERA ---
+    fun pauseCameraFollow() {
+        if (_navigationState.value.isNavigating) {
+            _isCameraFollowing.value = false
+        }
+    }
+
+    fun toggle3DView() {
+        val next = !settings.value.is3DView
+        viewModelScope.launch { prefs.set3DView(next) }
+        val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+        _cameraCommand.value = CameraTargetCommand(
+            lat = ref.lat,
+            lon = ref.lon,
+            zoom = if (_navigationState.value.isNavigating) 16.5 else 14.5,
+            tilt = if (next) 55.0 else 0.0,
+            bearing = if (next) (currentGpsFix.value?.bearing?.toDouble() ?: 0.0) else 0.0
+        )
+    }
+
+    fun recenterCamera() {
+        _isCameraFollowing.value = true
+        val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+        val s = settings.value
+        _cameraCommand.value = CameraTargetCommand(
+            lat = ref.lat,
+            lon = ref.lon,
+            zoom = if (_navigationState.value.isNavigating) 16.8 else 14.5,
+            tilt = if (s.is3DView && _navigationState.value.isNavigating) 55.0 else 0.0,
+            bearing = if (s.is3DView && _navigationState.value.isNavigating) {
+                _navigationState.value.snappedBearing.toDouble()
+            } else 0.0
+        )
+    }
+
     // --- SETTINGS ---
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             prefs.setLanguage(language)
-            voiceManager.checkPersianAvailability()
+            val available = voiceManager.checkPersianAvailability()
+            if (language == AppLanguage.PERSIAN && !available && !settings.value.persianTtsNoticeShown) {
+                _showPersianTtsDialog.value = true
+            }
         }
+    }
+
+    fun dismissPersianTtsNotice() {
+        _showPersianTtsDialog.value = false
+        viewModelScope.launch { prefs.markPersianTtsNoticeShown() }
     }
 
     fun setDistanceUnit(unit: DistanceUnit) {
@@ -660,29 +1059,36 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { prefs.setSpeedWarningAudioEnabled(enabled) }
     }
 
-    fun toggle3DView() {
-        val next = !settings.value.is3DView
-        viewModelScope.launch { prefs.set3DView(next) }
-        val ref = getEffectiveReferenceLocation()
-        _cameraCommand.value = CameraTargetCommand(
-            lat = ref.lat,
-            lon = ref.lon,
-            zoom = if (_navigationState.value.isNavigating) 16.5 else 14.5,
-            tilt = if (next) 55.0 else 0.0,
-            bearing = if (next) (currentGpsFix.value?.bearing?.toDouble() ?: 0.0) else 0.0
-        )
+    fun setSpeedWarningThresholdMph(thresholdMph: Int) {
+        viewModelScope.launch { prefs.setSpeedWarningThresholdMph(thresholdMph) }
     }
 
-    fun recenterCamera() {
-        val ref = getEffectiveReferenceLocation()
-        val s = settings.value
-        _cameraCommand.value = CameraTargetCommand(
-            lat = ref.lat,
-            lon = ref.lon,
-            zoom = if (_navigationState.value.isNavigating) 16.8 else 14.5,
-            tilt = if (s.is3DView && _navigationState.value.isNavigating) 55.0 else 0.0,
-            bearing = if (s.is3DView && _navigationState.value.isNavigating) (currentGpsFix.value?.bearing?.toDouble() ?: 0.0) else 0.0
-        )
+    fun setJunctionPreviewEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setJunctionPreviewEnabled(enabled) }
+    }
+
+    fun setAlertSpeedDropEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertSpeedDropEnabled(enabled) }
+    }
+
+    fun setAlertSharpCurveEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertSharpCurveEnabled(enabled) }
+    }
+
+    fun setAlertTollBoothEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertTollBoothEnabled(enabled) }
+    }
+
+    fun setAlertRailroadEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertRailroadEnabled(enabled) }
+    }
+
+    fun setAlertSchoolZoneEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertSchoolZoneEnabled(enabled) }
+    }
+
+    fun setAlertStopSignEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertStopSignEnabled(enabled) }
     }
 
     fun setAvoidTolls(avoid: Boolean) {
@@ -706,20 +1112,35 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun saveGitHubRepository(owner: String, repo: String) {
+        viewModelScope.launch {
+            prefs.setGitHubRepository(owner, repo)
+            val cleanedOwner = owner.trim()
+            val cleanedRepo = repo.trim()
+            if (cleanedOwner.isNotEmpty() && cleanedRepo.isNotEmpty()) {
+                packManager.fetchManifest("https://github.com/$cleanedOwner/$cleanedRepo/releases/latest/download")
+            }
+        }
+    }
+
     fun savePackBaseUrl(url: String) {
         viewModelScope.launch {
             prefs.setPackBaseUrl(url)
-            if (url.isNotBlank()) {
-                packManager.fetchManifest(url)
+            val effective = url.trim().trimEnd('/').ifEmpty { settings.value.effectivePackBaseUrl }
+            if (effective.isNotBlank()) {
+                packManager.fetchManifest(effective)
             }
         }
+    }
+
+    fun completeOnboarding() {
+        viewModelScope.launch { prefs.setOnboardingCompleted(true) }
     }
 
     fun setDevOnlineOregonMode(enabled: Boolean) {
         viewModelScope.launch {
             prefs.setDevOnlineOregonMode(enabled)
             if (enabled) {
-                // Center map on Eugene, Oregon so the user immediately sees Oregon roads & can test Best Buy search!
                 _cameraCommand.value = CameraTargetCommand(
                     lat = EUGENE_OR_LAT,
                     lon = EUGENE_OR_LON,
@@ -727,6 +1148,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         }
+    }
+
+    fun setSimulateDriveEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setSimulateDriveEnabled(enabled) }
     }
 
     fun testVoiceGuidance() {
@@ -739,7 +1164,6 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     companion object {
-        // Eugene, Oregon coordinates (used as initial Oregon view / emulator reference when GPS is unavailable)
         const val EUGENE_OR_LAT = 44.0521
         const val EUGENE_OR_LON = -123.0868
     }

@@ -25,12 +25,15 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdateAlt
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -86,6 +89,7 @@ fun DownloadMapsScreen(
     val isFetchingManifest by viewModel.isFetchingManifest.collectAsStateWithLifecycle()
     val manifestError by viewModel.manifestError.collectAsStateWithLifecycle()
     val lowStorageStateCode by viewModel.lowStoragePromptStateCode.collectAsStateWithLifecycle()
+    val mismatchedBuilds by viewModel.mismatchedBuildVersions.collectAsStateWithLifecycle()
     val packsTick by viewModel.packsChangedTick.collectAsStateWithLifecycle()
 
     var filterText by remember { mutableStateOf("") }
@@ -95,6 +99,10 @@ fun DownloadMapsScreen(
 
     val (usedBytes, availableBytes) = remember(packsTick, statePacks) {
         viewModel.getStorageStats()
+    }
+    val effectiveUrl = settings.effectivePackBaseUrl
+    val outdatedCount = remember(statePacks) {
+        statePacks.count { it.status == PackInstallStatus.UPDATE_AVAILABLE }
     }
 
     // Zero-permission Android Storage Access Framework document picker for local pack import
@@ -112,27 +120,45 @@ fun DownloadMapsScreen(
         pendingImportStateCode = null
     }
 
-    val filteredPacks = remember(statePacks, filterText, showInstalledOnly) {
+    // Group regional sub-packs under their parent state (CA, TX, FL, NY) when available or installed
+    val regionalByParent = remember(statePacks) {
+        statePacks.filter { it.parentStateCode != null }
+            .groupBy { it.parentStateCode!! }
+    }
+
+    val filteredTopLevelStates = remember(statePacks, filterText, showInstalledOnly, regionalByParent) {
         val q = filterText.trim().lowercase()
-        statePacks.filter { pack ->
-            val matchesFilter = if (showInstalledOnly) {
-                pack.status == PackInstallStatus.INSTALLED ||
-                    pack.status == PackInstallStatus.UPDATE_AVAILABLE ||
-                    pack.status == PackInstallStatus.CORRUPTED
-            } else true
+        statePacks
+            .filter { it.parentStateCode == null }
+            .filter { pack ->
+                val regions = regionalByParent[pack.stateCode].orEmpty()
+                val anyRegionInstalled = regions.any {
+                    it.status == PackInstallStatus.INSTALLED ||
+                        it.status == PackInstallStatus.UPDATE_AVAILABLE ||
+                        it.status == PackInstallStatus.CORRUPTED
+                }
+                val matchesFilter = if (showInstalledOnly) {
+                    pack.status == PackInstallStatus.INSTALLED ||
+                        pack.status == PackInstallStatus.UPDATE_AVAILABLE ||
+                        pack.status == PackInstallStatus.CORRUPTED ||
+                        anyRegionInstalled
+                } else true
 
-            val matchesText = q.isEmpty() ||
-                pack.nameEn.lowercase().contains(q) ||
-                pack.nameFa.contains(q) ||
-                pack.abbr.lowercase().contains(q)
+                val matchesText = q.isEmpty() ||
+                    pack.nameEn.lowercase().contains(q) ||
+                    pack.nameFa.contains(q) ||
+                    pack.abbr.lowercase().contains(q) ||
+                    regions.any {
+                        it.nameEn.lowercase().contains(q) || it.nameFa.contains(q)
+                    }
 
-            matchesFilter && matchesText
-        }.sortedWith(
-            // Keep Oregon & installed states easy to spot when browsing
-            compareByDescending<StatePackUiItem> { it.status == PackInstallStatus.INSTALLED || it.status == PackInstallStatus.UPDATE_AVAILABLE }
-                .thenByDescending { it.stateCode == "or" }
-                .thenBy { it.nameEn }
-        )
+                matchesFilter && matchesText
+            }
+            .sortedWith(
+                // Pin current GPS state at the very top, then sort all 50 states + D.C. alphabetically
+                compareByDescending<StatePackUiItem> { it.isCurrentLocationState }
+                    .thenBy { it.nameEn }
+            )
     }
 
     Column(
@@ -154,11 +180,25 @@ fun DownloadMapsScreen(
             ) {
                 Text(
                     text = strings.mapsScreenTitle,
-                    style = MaterialTheme.typography.headlineMedium
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.weight(1f)
                 )
+                if (outdatedCount > 0 && effectiveUrl.isNotBlank()) {
+                    Button(
+                        onClick = { viewModel.updateAllOutdatedPacks() },
+                        modifier = Modifier
+                            .height(40.dp)
+                            .testTag("update_all_packs_button")
+                    ) {
+                        Icon(Icons.Filled.SystemUpdateAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("${strings.updateAllButton} ($outdatedCount)", fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
                 IconButton(
                     onClick = { viewModel.refreshManifest() },
-                    enabled = !isFetchingManifest && settings.packBaseUrl.isNotBlank(),
+                    enabled = !isFetchingManifest && effectiveUrl.isNotBlank(),
                     modifier = Modifier.testTag("refresh_manifest_button")
                 ) {
                     if (isFetchingManifest) {
@@ -202,7 +242,38 @@ fun DownloadMapsScreen(
                 }
             }
 
-            if (settings.packBaseUrl.isBlank()) {
+            // Build Version Mismatch Warning (Phase 4)
+            if (mismatchedBuilds.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = AlertAmber.copy(alpha = 0.18f),
+                    border = BorderStroke(1.dp, AlertAmber),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("build_mismatch_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(Icons.Filled.Warning, contentDescription = null, tint = AlertAmber)
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = strings.buildMismatchTitle,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "${strings.buildMismatchBody} (${mismatchedBuilds.joinToString(", ")})",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (effectiveUrl.isBlank()) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
@@ -253,31 +324,54 @@ fun DownloadMapsScreen(
                     selected = showInstalledOnly,
                     onClick = { showInstalledOnly = true },
                     label = {
-                        val count = statePacks.count { it.status == PackInstallStatus.INSTALLED || it.status == PackInstallStatus.UPDATE_AVAILABLE }
+                        val count = statePacks.count {
+                            it.status == PackInstallStatus.INSTALLED || it.status == PackInstallStatus.UPDATE_AVAILABLE
+                        }
                         Text("${strings.filterInstalled} (${BilingualFormatter.formatNumber(count, language)})")
                     }
                 )
             }
         }
 
-        // All 50 States + Washington, D.C. List
+        // All 50 States + Washington, D.C. List (with regional sub-packs grouped under CA, TX, FL, NY)
         LazyColumn(
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(filteredPacks, key = { it.stateCode }) { pack ->
-                StatePackCard(
-                    pack = pack,
-                    canDownloadOnline = settings.packBaseUrl.isNotBlank() && pack.hasManifestEntry,
-                    onDownloadOrResume = { viewModel.requestDownloadStatePack(pack.stateCode) },
-                    onPause = { viewModel.pauseStatePackDownload(pack.stateCode) },
-                    onDelete = { deleteConfirmStateCode = pack.stateCode },
-                    onImportLocal = {
-                        pendingImportStateCode = pack.stateCode
-                        importLauncher.launch(arrayOf("*/*"))
-                    }
-                )
+            items(filteredTopLevelStates, key = { it.stateCode }) { pack ->
+                val childRegions = regionalByParent[pack.stateCode].orEmpty()
+                val showRegionalSplit = childRegions.any {
+                    it.hasManifestEntry || it.status != PackInstallStatus.NOT_DOWNLOADED
+                }
+
+                if (showRegionalSplit && !pack.hasManifestEntry && pack.status == PackInstallStatus.NOT_DOWNLOADED) {
+                    // Render parent state header with its regional packs directly underneath
+                    RegionalStateGroupCard(
+                        parentState = pack,
+                        regions = childRegions,
+                        canDownloadOnline = effectiveUrl.isNotBlank(),
+                        onDownloadOrResume = { viewModel.requestDownloadStatePack(it) },
+                        onPause = { viewModel.pauseStatePackDownload(it) },
+                        onDelete = { deleteConfirmStateCode = it },
+                        onImportLocal = { regionCode ->
+                            pendingImportStateCode = regionCode
+                            importLauncher.launch(arrayOf("*/*"))
+                        }
+                    )
+                } else {
+                    StatePackCard(
+                        pack = pack,
+                        canDownloadOnline = effectiveUrl.isNotBlank() && pack.hasManifestEntry,
+                        onDownloadOrResume = { viewModel.requestDownloadStatePack(pack.stateCode) },
+                        onPause = { viewModel.pauseStatePackDownload(pack.stateCode) },
+                        onDelete = { deleteConfirmStateCode = pack.stateCode },
+                        onImportLocal = {
+                            pendingImportStateCode = pack.stateCode
+                            importLauncher.launch(arrayOf("*/*"))
+                        }
+                    )
+                }
             }
         }
     }
@@ -329,6 +423,88 @@ fun DownloadMapsScreen(
 }
 
 @Composable
+private fun RegionalStateGroupCard(
+    parentState: StatePackUiItem,
+    regions: List<StatePackUiItem>,
+    canDownloadOnline: Boolean,
+    onDownloadOrResume: (String) -> Unit,
+    onPause: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onImportLocal: (String) -> Unit
+) {
+    val strings = LocalAppStrings.current
+    val language = LocalAppLanguage.current
+    val parentName = if (language == AppLanguage.PERSIAN) "${parentState.nameFa} (${parentState.abbr})" else "${parentState.nameEn} (${parentState.abbr})"
+
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("regional_group_${parentState.stateCode}")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(parentName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                if (parentState.isCurrentLocationState) {
+                    CurrentLocationBadge()
+                }
+            }
+            Text(
+                text = strings.regionalPacksHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            regions.forEach { region ->
+                StatePackCard(
+                    pack = region,
+                    canDownloadOnline = canDownloadOnline && region.hasManifestEntry,
+                    onDownloadOrResume = { onDownloadOrResume(region.stateCode) },
+                    onPause = { onPause(region.stateCode) },
+                    onDelete = { onDelete(region.stateCode) },
+                    onImportLocal = { onImportLocal(region.stateCode) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CurrentLocationBadge() {
+    val strings = LocalAppStrings.current
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.MyLocation,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(12.dp)
+            )
+            Text(
+                text = strings.currentStateBadge,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
 private fun StatePackCard(
     pack: StatePackUiItem,
     canDownloadOnline: Boolean,
@@ -343,6 +519,7 @@ private fun StatePackCard(
 
     val statusText = when (pack.status) {
         PackInstallStatus.NOT_DOWNLOADED -> strings.statusNotDownloaded
+        PackInstallStatus.QUEUED -> strings.statusQueued
         PackInstallStatus.DOWNLOADING -> "${strings.statusDownloading} (${BilingualFormatter.formatNumber((pack.progress * 100).toInt(), language)}%)"
         PackInstallStatus.PAUSED -> strings.statusPaused
         PackInstallStatus.VERIFYING -> strings.statusVerifying
@@ -355,7 +532,7 @@ private fun StatePackCard(
         PackInstallStatus.INSTALLED -> AlertSafeGreen
         PackInstallStatus.UPDATE_AVAILABLE -> AlertAmber
         PackInstallStatus.CORRUPTED -> AlertRed
-        PackInstallStatus.DOWNLOADING, PackInstallStatus.VERIFYING -> MaterialTheme.colorScheme.primary
+        PackInstallStatus.QUEUED, PackInstallStatus.DOWNLOADING, PackInstallStatus.VERIFYING -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
@@ -363,9 +540,12 @@ private fun StatePackCard(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(
-            width = 1.dp,
-            color = if (pack.status == PackInstallStatus.INSTALLED) AlertSafeGreen.copy(alpha = 0.5f)
-            else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+            width = if (pack.isCurrentLocationState) 1.5.dp else 1.dp,
+            color = when {
+                pack.isCurrentLocationState -> MaterialTheme.colorScheme.primary
+                pack.status == PackInstallStatus.INSTALLED -> AlertSafeGreen.copy(alpha = 0.5f)
+                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+            }
         ),
         modifier = Modifier
             .fillMaxWidth()
@@ -380,8 +560,16 @@ private fun StatePackCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stateName, style = MaterialTheme.typography.titleMedium)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(stateName, style = MaterialTheme.typography.titleMedium)
+                        if (pack.isCurrentLocationState) {
+                            CurrentLocationBadge()
+                        }
+                    }
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
@@ -391,17 +579,21 @@ private fun StatePackCard(
                     )
                 }
 
-                val shownBytes = when {
-                    pack.installedBytesOnDisk > 0L -> pack.installedBytesOnDisk
-                    pack.totalSizeBytes > 0L -> pack.totalSizeBytes
-                    else -> 0L
-                }
-                if (shownBytes > 0L) {
-                    Text(
-                        text = BilingualFormatter.formatBytes(shownBytes, language),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Column(horizontalAlignment = Alignment.End) {
+                    if (pack.totalSizeBytes > 0L) {
+                        Text(
+                            text = BilingualFormatter.formatBytes(pack.totalSizeBytes, language),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (pack.installedBytesOnDisk > 0L && pack.installedBytesOnDisk != pack.totalSizeBytes) {
+                        Text(
+                            text = BilingualFormatter.formatBytes(pack.installedBytesOnDisk, language),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AlertSafeGreen
+                        )
+                    }
                 }
             }
 
@@ -412,11 +604,19 @@ private fun StatePackCard(
                 FilePillBadge("Places FTS5", pack.hasPlacesDb)
             }
 
-            if (pack.status == PackInstallStatus.DOWNLOADING || pack.status == PackInstallStatus.PAUSED || pack.status == PackInstallStatus.VERIFYING) {
-                LinearProgressIndicator(
-                    progress = { pack.progress },
-                    modifier = Modifier.fillMaxWidth()
-                )
+            if (pack.status == PackInstallStatus.DOWNLOADING ||
+                pack.status == PackInstallStatus.PAUSED ||
+                pack.status == PackInstallStatus.VERIFYING ||
+                pack.status == PackInstallStatus.QUEUED
+            ) {
+                if (pack.status == PackInstallStatus.QUEUED) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(
+                        progress = { pack.progress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
 
             // Action Buttons Row
@@ -459,14 +659,18 @@ private fun StatePackCard(
                             }
                         }
                     }
-                    PackInstallStatus.DOWNLOADING, PackInstallStatus.VERIFYING -> {
+                    PackInstallStatus.QUEUED, PackInstallStatus.DOWNLOADING, PackInstallStatus.VERIFYING -> {
                         OutlinedButton(
                             onClick = onPause,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
                         ) {
-                            Icon(Icons.Filled.Pause, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(
+                                imageVector = if (pack.status == PackInstallStatus.QUEUED) Icons.Filled.Schedule else Icons.Filled.Pause,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
                             Spacer(Modifier.width(6.dp))
                             Text(strings.actionPause)
                         }

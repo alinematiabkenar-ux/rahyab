@@ -24,6 +24,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -33,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +64,7 @@ import com.example.ui.RahYabViewModel
 import com.example.ui.screens.DownloadMapsScreen
 import com.example.ui.screens.DriveScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.WelcomeOnboardingScreen
 import com.example.ui.theme.RahYabTheme
 
 object RahYabRoutes {
@@ -110,6 +114,7 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val gpsFix by viewModel.currentGpsFix.collectAsStateWithLifecycle()
     val navState by viewModel.navigationState.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
+    val showPersianTtsDialog by viewModel.showPersianTtsDialog.collectAsStateWithLifecycle()
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
     val strings = remember(settings.language) { stringsFor(settings.language) }
@@ -133,6 +138,7 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
         }
     }
 
+    // Never request ACCESS_BACKGROUND_LOCATION — foreground service with type="location" handles background nav!
     val requestPermissions = {
         val perms = buildList {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -147,8 +153,6 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     LaunchedEffect(hasLocationPermission) {
         if (hasLocationPermission) {
             viewModel.startLocationTracking()
-        } else {
-            requestPermissions()
         }
     }
 
@@ -164,6 +168,8 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: RahYabRoutes.ROUTE_DRIVE
 
+    var startOnMapsAfterOnboarding by remember { mutableStateOf(false) }
+
     CompositionLocalProvider(
         LocalLayoutDirection provides layoutDirection,
         LocalAppStrings provides strings,
@@ -173,91 +179,139 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
             darkTheme = isNightMode,
             isPersian = settings.language.isRtl
         ) {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val useNavigationRail = maxWidth >= 700.dp
-
-                val navDestinations = listOf(
-                    Triple(RahYabRoutes.ROUTE_DRIVE, strings.tabDrive, Icons.Filled.Navigation),
-                    Triple(RahYabRoutes.ROUTE_MAPS, strings.tabMaps, Icons.Filled.Download),
-                    Triple(RahYabRoutes.ROUTE_SETTINGS, strings.tabSettings, Icons.Filled.Settings)
+            if (!settings.onboardingCompleted) {
+                WelcomeOnboardingScreen(
+                    settings = settings,
+                    hasLocationPermission = hasLocationPermission,
+                    onSelectLanguage = { viewModel.setLanguage(it) },
+                    onSelectUnits = { viewModel.setDistanceUnit(it) },
+                    onRequestPermissions = requestPermissions,
+                    onContinueToMaps = {
+                        startOnMapsAfterOnboarding = true
+                        viewModel.completeOnboarding()
+                    }
                 )
+            } else {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val useNavigationRail = maxWidth >= 700.dp
 
-                val navigateTab: (String) -> Unit = { route ->
-                    navController.navigate(route) {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            saveState = true
+                    val navDestinations = listOf(
+                        Triple(RahYabRoutes.ROUTE_DRIVE, strings.tabDrive, Icons.Filled.Navigation),
+                        Triple(RahYabRoutes.ROUTE_MAPS, strings.tabMaps, Icons.Filled.Download),
+                        Triple(RahYabRoutes.ROUTE_SETTINGS, strings.tabSettings, Icons.Filled.Settings)
+                    )
+
+                    val navigateTab: (String) -> Unit = { route ->
+                        navController.navigate(route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
                         }
-                        launchSingleTop = true
-                        restoreState = true
                     }
-                }
 
-                Scaffold(
-                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                    snackbarHost = {
-                        SnackbarHost(
-                            hostState = snackbarHostState,
-                            modifier = Modifier.navigationBarsPadding()
-                        )
-                    },
-                    bottomBar = {
-                        // Hide bottom navigation bar during active turn-by-turn driving for maximum map visibility
-                        if (!useNavigationRail && !navState.isNavigating) {
-                            NavigationBar {
-                                navDestinations.forEach { (route, label, icon) ->
-                                    NavigationBarItem(
-                                        selected = currentRoute == route,
-                                        onClick = { navigateTab(route) },
-                                        icon = { Icon(icon, contentDescription = label) },
-                                        label = { Text(label) },
-                                        modifier = Modifier.testTag("nav_tab_$route")
-                                    )
+                    LaunchedEffect(startOnMapsAfterOnboarding) {
+                        if (startOnMapsAfterOnboarding) {
+                            startOnMapsAfterOnboarding = false
+                            navigateTab(RahYabRoutes.ROUTE_MAPS)
+                        }
+                    }
+
+                    Scaffold(
+                        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                        snackbarHost = {
+                            SnackbarHost(
+                                hostState = snackbarHostState,
+                                modifier = Modifier.navigationBarsPadding()
+                            )
+                        },
+                        bottomBar = {
+                            if (!useNavigationRail && !navState.isNavigating) {
+                                NavigationBar {
+                                    navDestinations.forEach { (route, label, icon) ->
+                                        NavigationBarItem(
+                                            selected = currentRoute == route,
+                                            onClick = { navigateTab(route) },
+                                            icon = { Icon(icon, contentDescription = label) },
+                                            label = { Text(label) },
+                                            modifier = Modifier.testTag("nav_tab_$route")
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
-                ) { innerPadding ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                    ) {
-                        if (useNavigationRail && !navState.isNavigating) {
-                            NavigationRail {
-                                navDestinations.forEach { (route, label, icon) ->
-                                    NavigationRailItem(
-                                        selected = currentRoute == route,
-                                        onClick = { navigateTab(route) },
-                                        icon = { Icon(icon, contentDescription = label) },
-                                        label = { Text(label) },
-                                        modifier = Modifier.testTag("nav_rail_$route")
-                                    )
-                                }
-                            }
-                        }
-
-                        NavHost(
-                            navController = navController,
-                            startDestination = RahYabRoutes.ROUTE_DRIVE,
-                            modifier = Modifier.weight(1f)
+                    ) { innerPadding ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding)
                         ) {
-                            composable(RahYabRoutes.ROUTE_DRIVE) {
-                                DriveScreen(
-                                    viewModel = viewModel,
-                                    hasLocationPermission = hasLocationPermission,
-                                    onRequestLocationPermission = requestPermissions,
-                                    onNavigateToMaps = { navigateTab(RahYabRoutes.ROUTE_MAPS) }
-                                )
+                            if (useNavigationRail && !navState.isNavigating) {
+                                NavigationRail {
+                                    navDestinations.forEach { (route, label, icon) ->
+                                        NavigationRailItem(
+                                            selected = currentRoute == route,
+                                            onClick = { navigateTab(route) },
+                                            icon = { Icon(icon, contentDescription = label) },
+                                            label = { Text(label) },
+                                            modifier = Modifier.testTag("nav_rail_$route")
+                                        )
+                                    }
+                                }
                             }
-                            composable(RahYabRoutes.ROUTE_MAPS) {
-                                DownloadMapsScreen(viewModel = viewModel)
-                            }
-                            composable(RahYabRoutes.ROUTE_SETTINGS) {
-                                SettingsScreen(viewModel = viewModel)
+
+                            NavHost(
+                                navController = navController,
+                                startDestination = RahYabRoutes.ROUTE_DRIVE,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                composable(RahYabRoutes.ROUTE_DRIVE) {
+                                    DriveScreen(
+                                        viewModel = viewModel,
+                                        hasLocationPermission = hasLocationPermission,
+                                        onRequestLocationPermission = requestPermissions,
+                                        onNavigateToMaps = { navigateTab(RahYabRoutes.ROUTE_MAPS) }
+                                    )
+                                }
+                                composable(RahYabRoutes.ROUTE_MAPS) {
+                                    DownloadMapsScreen(viewModel = viewModel)
+                                }
+                                composable(RahYabRoutes.ROUTE_SETTINGS) {
+                                    SettingsScreen(viewModel = viewModel)
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            // One-time Persian TTS Missing Notice Dialog
+            if (showPersianTtsDialog) {
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissPersianTtsNotice() },
+                    title = { Text(strings.persianTtsMissingTitle) },
+                    text = { Text(strings.persianTtsMissingBody) },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                viewModel.dismissPersianTtsNotice()
+                                runCatching {
+                                    context.startActivity(
+                                        Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            }
+                        ) {
+                            Text(strings.openTtsSettings)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { viewModel.dismissPersianTtsNotice() }) {
+                            Text(strings.close)
+                        }
+                    }
+                )
             }
         }
     }
