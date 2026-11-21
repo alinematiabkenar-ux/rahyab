@@ -1,0 +1,230 @@
+name: Build RahYab US Map Packs
+
+on:
+  workflow_dispatch:
+    inputs:
+      states:
+        description: "State code(s) to build: single (e.g. or), comma-separated (e.g. or,wa,id), or 'all'"
+        required: true
+        default: "or"
+        type: string
+      build_version:
+        description: "Optional version label (leave blank to use today's YYYY.MM.DD date)"
+        required: false
+        default: ""
+        type: string
+      skip_existing:
+        description: "Skip states that already exist in the current Release with the same version"
+        required: false
+        default: false
+        type: boolean
+      protomaps_url:
+        description: "Optional Protomaps basemap PMTiles URL (leave blank to auto-detect latest build)"
+        required: false
+        default: ""
+        type: string
+      overture_release:
+        description: "Optional Overture Maps Places release tag (leave blank to auto-detect latest release)"
+        required: false
+        default: ""
+        type: string
+
+  # Optional automatic monthly refresh (OFF by default so you stay in full control).
+  # To turn on monthly automatic map updates on the 1st of every month at 06:00 UTC,
+  # simply remove the '#' characters from the two lines below:
+  # schedule:
+  #   - cron: "0 6 1 * *"
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    name: Plan State Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      packs: ${{ steps.resolve.outputs.packs }}
+      build_version: ${{ steps.resolve.outputs.build_version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      protomaps_url: ${{ steps.resolve.outputs.protomaps_url }}
+      overture_release: ${{ steps.resolve.outputs.overture_release }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve states, regional splits, and latest upstream releases
+        id: resolve
+        run: |
+          INPUT_STATES="${{ github.event.inputs.states || 'or' }}"
+          PACKS_JSON=$(python3 data-pipeline/build_state_pack.py --resolve-matrix "$INPUT_STATES")
+
+          BUILD_VER="${{ github.event.inputs.build_version }}"
+          if [ -z "$BUILD_VER" ]; then
+            BUILD_VER=$(date -u +"%Y.%m.%d")
+          fi
+
+          PROTOMAPS_URL="${{ github.event.inputs.protomaps_url }}"
+          if [ -z "$PROTOMAPS_URL" ]; then
+            LATEST_PM_KEY=$(curl -fsSL https://build-metadata.protomaps.dev/builds.json | jq -r '.[-1].key')
+            PROTOMAPS_URL="https://build.protomaps.com/${LATEST_PM_KEY}"
+          fi
+
+          OVERTURE_REL="${{ github.event.inputs.overture_release }}"
+          if [ -z "$OVERTURE_REL" ]; then
+            OVERTURE_REL=$(curl -fsSL https://stac.overturemaps.org/catalog.json | jq -r '.latest')
+          fi
+
+          echo "packs=$PACKS_JSON" >> "$GITHUB_OUTPUT"
+          echo "build_version=$BUILD_VER" >> "$GITHUB_OUTPUT"
+          echo "release_tag=packs-latest" >> "$GITHUB_OUTPUT"
+          echo "protomaps_url=$PROTOMAPS_URL" >> "$GITHUB_OUTPUT"
+          echo "overture_release=$OVERTURE_REL" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved packs to build: $PACKS_JSON"
+          echo "Build version: $BUILD_VER"
+          echo "Protomaps URL: $PROTOMAPS_URL"
+          echo "Overture release: $OVERTURE_REL"
+
+      - name: Ensure GitHub Release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "packs-latest" >/dev/null 2>&1; then
+            gh release create "packs-latest" \
+              --title "RahYab Offline US Map Packs" \
+              --notes "Automatically built offline US state packs (PMTiles + Valhalla 30-mile buffered routing + Overture/OSM FTS5 Places)." \
+              --latest
+          fi
+
+  build-pack:
+    name: Build ${{ matrix.pack }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        pack: ${{ fromJson(needs.plan.outputs.packs) }}
+    steps:
+      - name: Free disk space on standard GitHub runner
+        run: |
+          echo "Disk before cleanup:"
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/share/swift || true
+          sudo swapoff -a && sudo rm -f /mnt/swapfile || true
+          docker system prune -af || true
+          echo "Disk after cleanup:"
+          df -h /
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check if pack already exists with current version
+        id: check_skip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.skip_existing }}" = "true" ]; then
+            if gh release download "packs-latest" --pattern "manifest.json" --dir /tmp/existing 2>/dev/null; then
+              MATCH=$(python3 -c "
+          import json
+          m = json.load(open('/tmp/existing/manifest.json'))
+          ver = '${{ needs.plan.outputs.build_version }}'
+          code = '${{ matrix.pack }}'
+          print('yes' if any(s.get('stateCode') == code and s.get('buildVersion') == ver for s in m.get('states', [])) else 'no')
+          ")
+              echo "skip=$MATCH" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=no" >> "$GITHUB_OUTPUT"
+
+      - name: Build state pack inside Valhalla + Osmium + DuckDB container
+        if: steps.check_skip.outputs.skip != 'yes'
+        run: |
+          mkdir -p "$RUNNER_TEMP/output" "$RUNNER_TEMP/cache"
+          docker build -t rahyab-builder ./data-pipeline
+          BASE_URL="https://github.com/${{ github.repository }}/releases/latest/download"
+          docker run --rm \
+            -e CI=true \
+            -v "$RUNNER_TEMP/output:/output" \
+            -v "$RUNNER_TEMP/cache:/cache" \
+            rahyab-builder \
+            --state "${{ matrix.pack }}" \
+            --output-dir /output \
+            --cache-dir /cache \
+            --version "${{ needs.plan.outputs.build_version }}" \
+            --build-version "${{ needs.plan.outputs.build_version }}" \
+            --base-url "$BASE_URL" \
+            --protomaps-url "${{ needs.plan.outputs.protomaps_url }}" \
+            --overture-release "${{ needs.plan.outputs.overture_release }}"
+
+      - name: Upload pack files directly to GitHub Release
+        if: steps.check_skip.outputs.skip != 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          ASSETS=(
+            "$RUNNER_TEMP/output/${{ matrix.pack }}.pmtiles"*
+            "$RUNNER_TEMP/output/${{ matrix.pack }}_valhalla.tar"*
+            "$RUNNER_TEMP/output/${{ matrix.pack }}_places.db"*
+          )
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "No release assets found for ${{ matrix.pack }}" >&2
+            exit 1
+          fi
+          echo "Uploading ${#ASSETS[@]} release asset(s) for ${{ matrix.pack }}..."
+          gh release upload "packs-latest" "${ASSETS[@]}" --clobber
+
+      - name: Upload per-pack manifest artifact
+        if: steps.check_skip.outputs.skip != 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-${{ matrix.pack }}
+          path: ${{ runner.temp }}/output/manifest_${{ matrix.pack }}.json
+          retention-days: 3
+
+  publish-manifest:
+    name: Update Combined manifest.json
+    needs: [plan, build-pack]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download newly built per-pack manifests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: manifest-*
+          path: /tmp/manifests
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Fetch existing release manifest.json (if present)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/existing /tmp/final
+          gh release download "packs-latest" --pattern "manifest.json" --dir /tmp/existing --clobber || true
+
+      - name: Merge and upload combined manifest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BASE_URL="https://github.com/${{ github.repository }}/releases/latest/download"
+          EXISTING_ARG=""
+          if [ -f /tmp/existing/manifest.json ]; then
+            EXISTING_ARG="--existing-manifest /tmp/existing/manifest.json"
+          fi
+          shopt -s nullglob
+          FILES=(/tmp/manifests/manifest_*.json)
+          python3 data-pipeline/build_state_pack.py \
+            --merge-manifests "${FILES[@]}" \
+            $EXISTING_ARG \
+            --output-dir /tmp/final \
+            --base-url "$BASE_URL" \
+            --build-version "${{ needs.plan.outputs.build_version }}"
+          gh release upload "packs-latest" /tmp/final/manifest.json --clobber
+          echo "Manifest published at: $BASE_URL/manifest.json"
