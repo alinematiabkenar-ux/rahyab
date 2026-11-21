@@ -128,7 +128,9 @@ private val RoutePreviewColors = listOf(
 fun DriveScreen(
     viewModel: RahYabViewModel,
     hasLocationPermission: Boolean,
+    isApproximateLocationOnly: Boolean,
     onRequestLocationPermission: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     onNavigateToMaps: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -227,33 +229,51 @@ fun DriveScreen(
                     onDismissJunctionPreview = { viewModel.dismissJunctionPreview() }
                 )
 
-                // Small tunnel / GPS signal loss notice
-                if (navState.isGpsSignalLost) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = AlertAmber,
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.testTag("gps_signal_lost_banner")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                // Status strip during active navigation (SIMULATION badge + GPS lost notice)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (settings.simulateDriveEnabled || navState.isSimulatingDrive) {
+                        SimulationModeBadge(label = strings.simulationModeBadge)
+                    }
+
+                    if (navState.isGpsSignalLost && !navState.isSimulatingDrive) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = AlertAmber,
+                            shadowElevation = 4.dp,
+                            modifier = Modifier.testTag("gps_signal_lost_banner")
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.GpsOff,
-                                contentDescription = strings.gpsSignalLost,
-                                tint = Color(0xFF0F172A),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = strings.gpsSignalLost,
-                                color = Color(0xFF0F172A),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.GpsOff,
+                                    contentDescription = strings.gpsSignalLost,
+                                    tint = Color(0xFF0F172A),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = strings.gpsSignalLost,
+                                    color = Color(0xFF0F172A),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
+                }
+
+                if (isApproximateLocationOnly && !navState.isSimulatingDrive) {
+                    ApproximateLocationBanner(
+                        title = strings.approximateLocationTitle,
+                        body = strings.approximateLocationBanner,
+                        buttonLabel = strings.openAppSettings,
+                        onOpenSettings = onOpenAppSettings
+                    )
                 }
 
                 // Approaching Road / User Alert Banner
@@ -384,6 +404,10 @@ fun DriveScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (settings.simulateDriveEnabled) {
+                        SimulationModeBadge(label = strings.simulationModeBadge)
+                    }
+
                     if (settings.devOnlineOregonMode && installedPmtiles.isEmpty()) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -431,7 +455,43 @@ fun DriveScreen(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             )
                         }
+                    } else if (gpsFix == null && !settings.simulateDriveEnabled) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = CockpitMidnight.copy(alpha = 0.90f),
+                            border = BorderStroke(1.dp, CyanBeacon.copy(alpha = 0.55f)),
+                            shadowElevation = 4.dp,
+                            modifier = Modifier.testTag("finding_location_pill")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 2.dp,
+                                    color = CyanBeacon
+                                )
+                                Text(
+                                    text = strings.gpsWaiting,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
                     }
+                }
+
+                // Approximate-location-only warning banner with Settings shortcut
+                if (isApproximateLocationOnly && !isSearchExpanded) {
+                    ApproximateLocationBanner(
+                        title = strings.approximateLocationTitle,
+                        body = strings.approximateLocationBanner,
+                        buttonLabel = strings.openAppSettings,
+                        onOpenSettings = onOpenAppSettings
+                    )
                 }
 
                 // Graceful prompt when no offline map pack is installed and dev online mode is off
@@ -738,6 +798,92 @@ fun DriveScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun SimulationModeBadge(
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = AlertRed,
+        shadowElevation = 6.dp,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.45f)),
+        modifier = modifier.testTag("simulation_mode_badge")
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 12.sp,
+            letterSpacing = 0.8.sp,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        )
+    }
+}
+
+@Composable
+private fun ApproximateLocationBanner(
+    title: String,
+    body: String,
+    buttonLabel: String,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)),
+        border = BorderStroke(1.5.dp, AlertAmber),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("approximate_location_banner")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.GpsOff,
+                    contentDescription = title,
+                    tint = AlertAmber,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(
+                onClick = onOpenSettings,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AlertAmber,
+                    contentColor = Color(0xFF0F172A)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("open_app_settings_button")
+            ) {
+                Text(
+                    text = buttonLabel,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }
 

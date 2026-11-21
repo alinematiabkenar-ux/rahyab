@@ -21,6 +21,7 @@ object MapStyleBuilder {
     const val SOURCE_PRIMARY_ROUTE = "rahyab_primary_route"
     const val SOURCE_DESTINATION = "rahyab_destination"
     const val SOURCE_USER_REPORTS = "rahyab_user_reports"
+    const val SOURCE_GPS_ACCURACY = "rahyab_gps_accuracy"
     const val SOURCE_GPS_PUCK = "rahyab_gps_puck"
 
     const val LAYER_ROUTE_0 = "rahyab_route_0_line"
@@ -30,7 +31,8 @@ object MapStyleBuilder {
     const val LAYER_PRIMARY_ROUTE = "rahyab_primary_route_line"
     const val LAYER_DESTINATION_CIRCLE = "rahyab_destination_circle"
     const val LAYER_USER_REPORTS_CIRCLE = "rahyab_user_reports_circle"
-    const val LAYER_GPS_ACCURACY = "rahyab_gps_accuracy"
+    const val LAYER_GPS_ACCURACY = "rahyab_gps_accuracy_fill"
+    const val LAYER_GPS_ACCURACY_OUTLINE = "rahyab_gps_accuracy_outline"
     const val LAYER_GPS_PUCK = "rahyab_gps_puck_circle"
 
     const val ROUTE_COLOR_0 = "#00A8E8" // Cyan-Blue (Fastest / Route 1)
@@ -298,6 +300,7 @@ object MapStyleBuilder {
             SOURCE_PRIMARY_ROUTE,
             SOURCE_DESTINATION,
             SOURCE_USER_REPORTS,
+            SOURCE_GPS_ACCURACY,
             SOURCE_GPS_PUCK
         ).forEach { id ->
             sources.put(id, JSONObject().apply {
@@ -394,15 +397,24 @@ object MapStyleBuilder {
             })
         })
 
-        // GPS accuracy halo & snapped navigation puck
+        // Light blue GPS accuracy circle (geographic radius in meters) + live position puck
         layers.put(JSONObject().apply {
             put("id", LAYER_GPS_ACCURACY)
-            put("type", "circle")
-            put("source", SOURCE_GPS_PUCK)
+            put("type", "fill")
+            put("source", SOURCE_GPS_ACCURACY)
             put("paint", JSONObject().apply {
-                put("circle-radius", 22.0)
-                put("circle-color", "#00D4C8")
-                put("circle-opacity", 0.22)
+                put("fill-color", "#60A5FA")
+                put("fill-opacity", 0.22)
+            })
+        })
+        layers.put(JSONObject().apply {
+            put("id", LAYER_GPS_ACCURACY_OUTLINE)
+            put("type", "line")
+            put("source", SOURCE_GPS_ACCURACY)
+            put("paint", JSONObject().apply {
+                put("line-color", "#38BDF8")
+                put("line-width", 1.5)
+                put("line-opacity", 0.65)
             })
         })
         layers.put(JSONObject().apply {

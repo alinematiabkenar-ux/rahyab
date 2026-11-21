@@ -36,7 +36,11 @@ import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
+import org.maplibre.geojson.Polygon
 import java.io.File
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Lifecycle-safe Jetpack Compose host for MapLibre Native Android `MapView`.
@@ -213,8 +217,21 @@ fun MapLibreMapContainer(
             )
         )
 
-        // Snapped navigation marker (when actively navigating) or live GPS puck
+        // Snapped navigation marker (when actively navigating within 30 m) or live GPS puck
         val displayLoc = snappedNavLocation ?: gpsFix?.let { LatLon(it.lat, it.lon) }
+        val accuracyMeters = gpsFix?.accuracyMeters?.toDouble() ?: 0.0
+        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_ACCURACY)?.setGeoJson(
+            if (displayLoc != null && accuracyMeters > 0.0) {
+                val circle = buildAccuracyCirclePolygon(
+                    centerLat = displayLoc.lat,
+                    centerLon = displayLoc.lon,
+                    radiusMeters = accuracyMeters.coerceIn(5.0, 1000.0)
+                )
+                FeatureCollection.fromFeature(Feature.fromGeometry(circle))
+            } else {
+                emptyFc
+            }
+        )
         style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(
             if (displayLoc != null) {
                 FeatureCollection.fromFeature(
@@ -302,4 +319,26 @@ fun MapLibreMapContainer(
         },
         modifier = modifier
     )
+}
+
+private fun buildAccuracyCirclePolygon(
+    centerLat: Double,
+    centerLon: Double,
+    radiusMeters: Double,
+    steps: Int = 48
+): Polygon {
+    val earthRadiusMeters = 6_371_000.0
+    val latRad = Math.toRadians(centerLat)
+    val dLatDeg = Math.toDegrees(radiusMeters / earthRadiusMeters)
+    val cosLat = cos(latRad).coerceAtLeast(0.01)
+    val dLonDeg = dLatDeg / cosLat
+
+    val ring = ArrayList<Point>(steps + 1)
+    for (i in 0..steps) {
+        val angle = 2.0 * PI * i / steps
+        val ptLat = (centerLat + dLatDeg * sin(angle)).coerceIn(-85.0, 85.0)
+        val ptLon = centerLon + dLonDeg * cos(angle)
+        ring.add(Point.fromLngLat(ptLon, ptLat))
+    }
+    return Polygon.fromLngLats(listOf(ring))
 }

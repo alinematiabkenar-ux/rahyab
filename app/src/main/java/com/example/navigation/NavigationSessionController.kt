@@ -12,7 +12,7 @@ import kotlin.math.max
 
 /**
  * Pure turn-by-turn navigation session calculator covering Phases 2, 3, and 4:
- *  - Orthogonal segment projection map matching (snap-to-road within 48 m)
+ *  - Orthogonal segment projection map matching (snap-to-road within 30 m)
  *  - Off-route detection (> 48 m off route for 3 consecutive updates)
  *  - Speed-aware & road-class-aware voice timing:
  *      * Highways: ~2 mi, ~1 mi, ~0.25 mi, and at maneuver
@@ -89,8 +89,10 @@ class NavigationSessionController {
             offRouteCount = 0
         }
 
-        val snappedLoc = if (!isOffRouteNow) snap.point else LatLon(fix.lat, fix.lon)
-        val snappedBearing = if (!isOffRouteNow) snap.roadBearing else fix.bearing
+        // Only snap position/bearing to the route when within 30 meters; otherwise show real GPS position
+        val shouldSnapToRoute = bestDist <= 30.0
+        val snappedLoc = if (shouldSnapToRoute) snap.point else LatLon(fix.lat, fix.lon)
+        val snappedBearing = if (shouldSnapToRoute) snap.roadBearing else fix.bearing
 
         // 3. Determine upcoming maneuver
         var upcomingManeuverIdx = route.maneuvers.indexOfFirst { it.beginShapeIndex > bestIdx }

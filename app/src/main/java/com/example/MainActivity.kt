@@ -6,8 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -38,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +53,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -120,21 +126,74 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val strings = remember(settings.language) { stringsFor(settings.language) }
     val layoutDirection = if (settings.language.isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
 
-    var hasLocationPermission by remember {
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var hasFineLocationPermission by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         )
     }
+    var hasCoarseLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val hasLocationPermission = hasFineLocationPermission || hasCoarseLocationPermission
+    val isApproximateLocationOnly = hasCoarseLocationPermission && !hasFineLocationPermission
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        val locGranted = (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
-            (grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
-        hasLocationPermission = locGranted
-        if (locGranted) {
-            viewModel.startLocationTracking()
+        val fineGranted = (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = (grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true) ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        hasFineLocationPermission = fineGranted
+        hasCoarseLocationPermission = coarseGranted
+        if (fineGranted || coarseGranted) {
+            viewModel.refreshLocationTracking()
+        }
+    }
+
+    // Track foreground/background state for GPS priority & re-check precise location permission on resume
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> viewModel.setAppInForeground(true)
+                Lifecycle.Event.ON_RESUME -> {
+                    val fineNow = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val coarseNow = ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val upgradedToFine = !hasFineLocationPermission && fineNow
+                    val newlyGrantedAny = !hasLocationPermission && (fineNow || coarseNow)
+                    hasFineLocationPermission = fineNow
+                    hasCoarseLocationPermission = coarseNow
+                    if (upgradedToFine || newlyGrantedAny) {
+                        viewModel.refreshLocationTracking()
+                    }
+                }
+                Lifecycle.Event.ON_STOP -> viewModel.setAppInForeground(false)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    val openAppSettings: () -> Unit = {
+        runCatching {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null)
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
         }
     }
 
@@ -270,7 +329,9 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                                     DriveScreen(
                                         viewModel = viewModel,
                                         hasLocationPermission = hasLocationPermission,
+                                        isApproximateLocationOnly = isApproximateLocationOnly,
                                         onRequestLocationPermission = requestPermissions,
+                                        onOpenAppSettings = openAppSettings,
                                         onNavigateToMaps = { navigateTab(RahYabRoutes.ROUTE_MAPS) }
                                     )
                                 }

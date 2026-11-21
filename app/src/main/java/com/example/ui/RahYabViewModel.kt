@@ -271,6 +271,14 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         locationTracker.startTracking()
     }
 
+    fun setAppInForeground(inForeground: Boolean) {
+        locationTracker.setAppInForeground(inForeground)
+    }
+
+    fun refreshLocationTracking() {
+        locationTracker.refreshTrackingProfile()
+    }
+
     fun getInstalledPmtilesFiles() = packManager.getInstalledPmtilesFiles()
 
     fun getInstalledPlacesDbCount() = packManager.getInstalledPlacesDatabases().size

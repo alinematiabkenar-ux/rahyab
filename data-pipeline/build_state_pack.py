@@ -27,7 +27,9 @@ import argparse
 import datetime
 import hashlib
 import json
+import math
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -336,6 +338,71 @@ def _build_category_keywords(*parts: str | None) -> str:
     return " ".join(seen)
 
 
+def _overture_filter_expressions(
+    cols: dict[str, str],
+    bbox: tuple[float, float, float, float],
+) -> tuple[str, str, str, str]:
+    """
+    Return the four sequential Overture filter SQL expressions:
+      (bbox_cond, country_cond, name_cond, status_cond)
+    Intentionally does NOT filter on addresses[1].region because Overture region
+    values are inconsistent across releases and state formats.
+    """
+    min_lon, min_lat, max_lon, max_lat = bbox
+    if "bbox" in cols:
+        bbox_cond = (
+            f"(bbox.xmin >= {min_lon} AND bbox.xmax <= {max_lon} "
+            f"AND bbox.ymin >= {min_lat} AND bbox.ymax <= {max_lat})"
+        )
+    else:
+        bbox_cond = (
+            f"(ST_X(geometry) BETWEEN {min_lon} AND {max_lon} "
+            f"AND ST_Y(geometry) BETWEEN {min_lat} AND {max_lat})"
+        )
+
+    addr_type = cols.get("addresses", "")
+    has_addresses = "addresses" in cols
+    if has_addresses and _duckdb_struct_has_field(addr_type, "country"):
+        country_cond = (
+            "(addresses IS NULL OR len(addresses) = 0 "
+            "OR addresses[1].country IS NULL OR addresses[1].country = 'US')"
+        )
+    else:
+        country_cond = "TRUE"
+
+    name_cond = "(names.primary IS NOT NULL AND TRIM(names.primary) != '')"
+
+    if "operating_status" in cols:
+        status_cond = (
+            "(operating_status IS NULL OR "
+            "(LOWER(operating_status) NOT LIKE '%permanently_closed%' "
+            "AND LOWER(operating_status) NOT IN ('closed_permanently', 'closed')))"
+        )
+    else:
+        status_cond = "TRUE"
+
+    return bbox_cond, country_cond, name_cond, status_cond
+
+
+def build_overture_filter_counts_sql(
+    columns: dict[str, str],
+    overture_s3: str,
+    bbox: tuple[float, float, float, float],
+) -> str:
+    """Build a single-pass DuckDB diagnostic query returning row counts after each filter step."""
+    cols = {k.lower(): (v or "") for k, v in columns.items()}
+    bbox_cond, country_cond, name_cond, status_cond = _overture_filter_expressions(cols, bbox)
+    return f"""
+        SELECT
+            COUNT(*) AS rows_in_bbox,
+            COUNT(*) FILTER (WHERE {country_cond}) AS rows_after_country,
+            COUNT(*) FILTER (WHERE {country_cond} AND {name_cond}) AS rows_after_name,
+            COUNT(*) FILTER (WHERE {country_cond} AND {name_cond} AND {status_cond}) AS rows_after_operating_status
+        FROM read_parquet('{overture_s3}', filename=false, hive_partitioning=1)
+        WHERE {bbox_cond}
+    """
+
+
 def build_overture_places_sql(
     columns: dict[str, str],
     overture_s3: str,
@@ -347,7 +414,6 @@ def build_overture_places_sql(
     (`taxonomy`, `basic_category`, `operating_status`), older releases (`categories`),
     and future schema changes work without BinderException failures.
     """
-    min_lon, min_lat, max_lon, max_lat = bbox
     cols = {k.lower(): (v or "") for k, v in columns.items()}
 
     if "names" not in cols or not _duckdb_struct_has_field(cols["names"], "primary"):
@@ -411,33 +477,13 @@ def build_overture_places_sql(
     # Confidence -> popularity score
     popularity_expr = "COALESCE(confidence, 0.8) * 5.0" if "confidence" in cols else "4.0"
 
-    where_clauses: list[str] = []
-    if "bbox" in cols:
-        where_clauses.append(
-            f"bbox.xmin >= {min_lon} AND bbox.xmax <= {max_lon} "
-            f"AND bbox.ymin >= {min_lat} AND bbox.ymax <= {max_lat}"
-        )
-    else:
-        where_clauses.append(
-            f"ST_X(geometry) BETWEEN {min_lon} AND {max_lon} "
-            f"AND ST_Y(geometry) BETWEEN {min_lat} AND {max_lat}"
-        )
-
-    where_clauses.append("names.primary IS NOT NULL")
-
-    if "operating_status" in cols:
-        where_clauses.append(
-            "(operating_status IS NULL OR "
-            "(LOWER(operating_status) NOT LIKE '%permanently_closed%' "
-            "AND LOWER(operating_status) NOT IN ('closed_permanently', 'closed')))"
-        )
-
-    if has_addresses and _duckdb_struct_has_field(addr_type, "country"):
-        where_clauses.append("(addresses IS NULL OR len(addresses) = 0 OR addresses[1].country IS NULL OR addresses[1].country = 'US')")
-    if has_addresses and _duckdb_struct_has_field(addr_type, "region"):
-        where_clauses.append(
-            f"(addresses IS NULL OR len(addresses) = 0 OR addresses[1].region IS NULL OR addresses[1].region = '{base_state_abbr}')"
-        )
+    bbox_cond, country_cond, name_cond, status_cond = _overture_filter_expressions(cols, bbox)
+    where_clauses = [bbox_cond]
+    if country_cond != "TRUE":
+        where_clauses.append(country_cond)
+    where_clauses.append(name_cond)
+    if status_cond != "TRUE":
+        where_clauses.append(status_cond)
 
     where_sql = "\n          AND ".join(where_clauses)
     return f"""
@@ -456,6 +502,118 @@ def build_overture_places_sql(
         FROM read_parquet('{overture_s3}', filename=false, hive_partitioning=1)
         WHERE {where_sql}
     """
+
+
+EUGENE_OR_LAT = 44.0521
+EUGENE_OR_LON = -123.0868
+EUGENE_CHECK_RADIUS_M = 15_000.0
+FULL_STATE_MIN_OVERTURE_PLACES = 50_000
+DEDUP_MAX_DISTANCE_M = 50.0
+
+
+def _haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6_371_000.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    return 2.0 * r * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+
+
+def _normalize_place_name(name: str) -> str:
+    return re.sub(r"[^\w]+", " ", (name or "").lower().replace("_", " ")).strip()
+
+
+def _address_completeness_score(row: tuple) -> tuple[int, int, int, int]:
+    """
+    Score address completeness for a 12-tuple place row:
+      (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity)
+    Prefers rows with street address, city, postcode, and state filled in.
+    """
+    address = (row[4] or "").strip()
+    city = (row[5] or "").strip()
+    state = (row[6] or "").strip()
+    postcode = (row[7] or "").strip()
+    source = (row[10] or "").strip().lower()
+
+    has_address = 1 if address else 0
+    has_city = 1 if city else 0
+    has_postcode = 1 if postcode else 0
+    has_state = 1 if state else 0
+    weighted = has_address * 4 + has_city * 2 + has_postcode * 2 + has_state
+    field_count = has_address + has_city + has_postcode + has_state
+    char_len = len(address) + len(city) + len(postcode)
+    source_tiebreak = 1 if source == "overture" else 0
+    return (weighted, field_count, char_len, source_tiebreak)
+
+
+def deduplicate_overture_and_osm_places(
+    overture_rows: list[tuple],
+    osm_rows: list[tuple],
+    max_distance_m: float = DEDUP_MAX_DISTANCE_M,
+) -> tuple[list[tuple], list[tuple], int]:
+    """
+    When an Overture place and an OSM place share the same normalized name within
+    `max_distance_m` meters (50 m), keep only one, preferring the one with the more
+    complete address. All other places from both sources are preserved.
+    """
+    if not overture_rows or not osm_rows:
+        return list(overture_rows), list(osm_rows), 0
+
+    cell_deg = 0.001  # ~111 m lat, ~78 m lon at mid-US latitudes; 3x3 search safely covers 50 m
+    overture_grid: dict[tuple[str, int, int], list[int]] = {}
+    for idx, row in enumerate(overture_rows):
+        norm = _normalize_place_name(row[0])
+        if not norm:
+            continue
+        clat = int(math.floor(row[8] / cell_deg))
+        clon = int(math.floor(row[9] / cell_deg))
+        overture_grid.setdefault((norm, clat, clon), []).append(idx)
+
+    dropped_overture: set[int] = set()
+    kept_osm: list[tuple] = []
+    dedup_removed = 0
+
+    for osm_row in osm_rows:
+        norm = _normalize_place_name(osm_row[0])
+        if not norm:
+            kept_osm.append(osm_row)
+            continue
+
+        lat = osm_row[8]
+        lon = osm_row[9]
+        clat = int(math.floor(lat / cell_deg))
+        clon = int(math.floor(lon / cell_deg))
+
+        best_match_idx = -1
+        best_match_dist = max_distance_m + 1.0
+        for dlat in (-1, 0, 1):
+            for dlon in (-1, 0, 1):
+                candidates = overture_grid.get((norm, clat + dlat, clon + dlon))
+                if not candidates:
+                    continue
+                for ov_idx in candidates:
+                    if ov_idx in dropped_overture:
+                        continue
+                    ov_row = overture_rows[ov_idx]
+                    dist = _haversine_meters(lat, lon, ov_row[8], ov_row[9])
+                    if dist <= max_distance_m and dist < best_match_dist:
+                        best_match_dist = dist
+                        best_match_idx = ov_idx
+
+        if best_match_idx >= 0:
+            dedup_removed += 1
+            ov_row = overture_rows[best_match_idx]
+            if _address_completeness_score(osm_row) > _address_completeness_score(ov_row):
+                dropped_overture.add(best_match_idx)
+                kept_osm.append(osm_row)
+            # Else keep the Overture row and drop this OSM duplicate
+        else:
+            kept_osm.append(osm_row)
+
+    kept_overture = [row for idx, row in enumerate(overture_rows) if idx not in dropped_overture]
+    return kept_overture, kept_osm, dedup_removed
 
 
 def build_places_fts5_db(
@@ -590,6 +748,7 @@ def build_places_fts5_db(
     base_state_abbr = state_abbr.split("-")[0]
     overture_s3 = f"s3://overturemaps-us-west-2/release/{overture_release}/theme=places/type=place/*"
     places_source = "overture+osm"
+    normalized_overture_rows: list[tuple] = []
     duck = None
     try:
         import duckdb
@@ -605,6 +764,19 @@ def build_places_fts5_db(
         schema_cols = {str(r[0]): str(r[1]) for r in describe_rows}
         print(f"[overture] Discovered {len(schema_cols)} parquet columns: {', '.join(sorted(schema_cols.keys()))}", flush=True)
 
+        counts_sql = build_overture_filter_counts_sql(
+            columns=schema_cols,
+            overture_s3=overture_s3,
+            bbox=bbox,
+        )
+        cnt_bbox, cnt_country, cnt_name, cnt_status = duck.execute(counts_sql).fetchone()
+        print(
+            f"[overture] Row counts for {pack_code.upper()}: "
+            f"in_bbox={cnt_bbox:,} -> after_country={cnt_country:,} -> "
+            f"after_name={cnt_name:,} -> after_operating_status={cnt_status:,}",
+            flush=True,
+        )
+
         overture_query = build_overture_places_sql(
             columns=schema_cols,
             overture_s3=overture_s3,
@@ -612,25 +784,19 @@ def build_places_fts5_db(
             base_state_abbr=base_state_abbr,
         )
         raw_overture_rows = duck.execute(overture_query).fetchall()
-        normalized_overture_rows = []
         for row in raw_overture_rows:
             name, brand, category, raw_cat_kw, address, city, state_val, postcode, lat, lon, popularity = row
             cat_keywords = _build_category_keywords(category, raw_cat_kw)
             normalized_overture_rows.append((
                 name, brand or "", category or "", cat_keywords, address or "",
                 city or "", state_val or base_state_abbr, postcode or "",
-                lat, lon, popularity,
+                lat, lon, "overture", popularity,
             ))
 
-        print(f"[overture] Inserted {len(normalized_overture_rows):,} Overture businesses for {pack_code.upper()}", flush=True)
-        cur.executemany(
-            "INSERT INTO places (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'overture', ?)",
-            normalized_overture_rows,
-        )
-        conn.commit()
+        print(f"[overture] Loaded {len(normalized_overture_rows):,} Overture businesses for {pack_code.upper()}", flush=True)
     except Exception as exc:
         places_source = "osm-only"
+        normalized_overture_rows = []
         print(
             f"RAHYAB WARNING: Overture Places query failed for {pack_code.upper()} ({exc}); "
             "building places database from OpenStreetMap only.",
@@ -643,7 +809,7 @@ def build_places_fts5_db(
             except Exception:
                 pass
 
-    # 2. Merge OSM addresses, POIs, and road hazards
+    # 2. Extract OSM addresses, POIs, and road hazards
     print(f"[osm] Extracting addresses, POIs, and hazards from {pbf_path.name}...", flush=True)
     osm_places: list = []
     osm_hazards: list = []
@@ -651,10 +817,27 @@ def build_places_fts5_db(
     handler.apply_file(str(pbf_path), locations=True)
     print(f"[osm] Extracted {len(osm_places):,} OSM places/addresses and {len(osm_hazards):,} road hazards", flush=True)
 
+    # 2b. Cross-source deduplication: same normalized name within 50 m -> keep richer address
+    dedup_overture, dedup_osm, dedup_removed = deduplicate_overture_and_osm_places(
+        normalized_overture_rows,
+        osm_places,
+        max_distance_m=DEDUP_MAX_DISTANCE_M,
+    )
+    print(
+        f"[dedup] Removed {dedup_removed:,} Overture/OSM duplicates within {int(DEDUP_MAX_DISTANCE_M)}m "
+        f"(keeping {len(dedup_overture):,} Overture + {len(dedup_osm):,} OSM).",
+        flush=True,
+    )
+
     cur.executemany(
         "INSERT INTO places (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        osm_places,
+        dedup_overture,
+    )
+    cur.executemany(
+        "INSERT INTO places (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        dedup_osm,
     )
     cur.executemany(
         "INSERT INTO road_hazards (type, lat, lon, label, speed_limit_mph) VALUES (?, ?, ?, ?, ?)",
@@ -693,35 +876,55 @@ def build_places_fts5_db(
     """)
     conn.commit()
 
-    # 4. Post-build verification check: total place count + FTS5 search for "Best Buy"
+    # 4. Post-build verification check: total counts, full-state Overture warning, and Eugene 15 km Best Buy check
     total_places = cur.execute("SELECT COUNT(*) FROM places").fetchone()[0]
     overture_count = cur.execute("SELECT COUNT(*) FROM places WHERE source = 'overture'").fetchone()[0]
     osm_count = cur.execute("SELECT COUNT(*) FROM places WHERE source = 'osm'").fetchone()[0]
-    best_buy_rows = cur.execute(
-        """
-        SELECT p.name, p.brand, p.category, p.address, p.city, p.state, p.postcode, p.source
-        FROM places_fts
-        JOIN places p ON p.id = places_fts.rowid
-        WHERE places_fts MATCH '"best" "buy"'
-        ORDER BY bm25(places_fts, 10.0, 12.0, 4.0, 5.0, 3.0, 2.0) ASC
-        LIMIT 5
-        """
-    ).fetchall()
     print(
         f"[check] {pack_code.upper()} places DB ready ({places_source}): "
         f"{total_places:,} total places ({overture_count:,} Overture, {osm_count:,} OSM).",
         flush=True,
     )
-    if best_buy_rows:
-        for idx, (b_name, b_brand, b_cat, b_addr, b_city, b_state, b_zip, b_src) in enumerate(best_buy_rows, start=1):
+
+    is_full_state = "parent" not in ALL_PACK_CATALOG.get(pack_code.lower(), {})
+    if is_full_state and places_source != "osm-only" and overture_count < FULL_STATE_MIN_OVERTURE_PLACES:
+        print(
+            f"RAHYAB WARNING: Full state {pack_code.upper()} has only {overture_count:,} Overture places "
+            f"(expected at least {FULL_STATE_MIN_OVERTURE_PLACES:,}).",
+            flush=True,
+        )
+
+    best_buy_candidates = cur.execute(
+        """
+        SELECT p.name, p.brand, p.category, p.address, p.city, p.state, p.postcode, p.lat, p.lon, p.source
+        FROM places_fts
+        JOIN places p ON p.id = places_fts.rowid
+        WHERE places_fts MATCH '"best" "buy"'
+        ORDER BY bm25(places_fts, 10.0, 12.0, 4.0, 5.0, 3.0, 2.0) ASC
+        LIMIT 200
+        """
+    ).fetchall()
+    eugene_best_buy = []
+    for row in best_buy_candidates:
+        dist_m = _haversine_meters(EUGENE_OR_LAT, EUGENE_OR_LON, row[7], row[8])
+        if dist_m <= EUGENE_CHECK_RADIUS_M:
+            eugene_best_buy.append((dist_m, row))
+    eugene_best_buy.sort(key=lambda item: item[0])
+
+    if eugene_best_buy:
+        for idx, (dist_m, (b_name, b_brand, b_cat, b_addr, b_city, b_state, b_zip, _, _, b_src)) in enumerate(eugene_best_buy, start=1):
             formatted_addr = ", ".join(p for p in (b_addr, b_city, b_state, b_zip) if p)
             print(
-                f"[check] Best Buy FTS5 match #{idx}: {b_name} "
-                f"(brand='{b_brand}', category='{b_cat}', source='{b_src}') — {formatted_addr or '(no street address)'}",
+                f"[check] Eugene Best Buy FTS5 match #{idx} ({dist_m / 1000.0:.2f} km from Eugene): "
+                f"{b_name} (brand='{b_brand}', source='{b_src}') — {formatted_addr or '(no street address)'}",
                 flush=True,
             )
     else:
-        print(f"[check] Best Buy FTS5 search returned 0 matches in {pack_code.upper()}.", flush=True)
+        print(
+            f"[check] Eugene Best Buy FTS5 search (within 15 km of {EUGENE_OR_LAT}, {EUGENE_OR_LON}) "
+            f"returned 0 matches in {pack_code.upper()}.",
+            flush=True,
+        )
 
     conn.close()
     print(f"[sqlite] Built {out_db} ({out_db.stat().st_size / (1024 * 1024):.1f} MB)", flush=True)
