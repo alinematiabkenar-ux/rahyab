@@ -1,0 +1,305 @@
+package com.example.ui.components
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.data.local.ReportType
+import com.example.data.local.UserReportEntity
+import com.example.data.search.OfflinePlaceSearchEngine
+import com.example.data.search.PlaceSearchResult
+import com.example.map.MapStyleBuilder
+import com.example.navigation.GpsFix
+import com.example.navigation.LatLon
+import com.example.navigation.OfflineRoute
+import com.example.ui.CameraTargetCommand
+import com.example.ui.RahYabViewModel
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.gestures.MoveGestureDetector
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.Point
+import java.io.File
+
+/**
+ * Lifecycle-safe Jetpack Compose host for MapLibre Native Android `MapView`.
+ *
+ * Features:
+ * - Local per-state & regional PMTiles vector maps (`pmtiles://file://...`)
+ * - Up to 3 candidate routes in distinct colors, tappable directly on the map
+ * - Long-press anywhere on the map to drop a pin and request Directions
+ * - Snapped road location rendering during active navigation
+ * - User map pan detection to pause auto-follow until user taps Recenter
+ * - Color-coded Waze-style user report markers
+ */
+@Composable
+fun MapLibreMapContainer(
+    installedPmtiles: List<Pair<String, File>>,
+    isNightMode: Boolean,
+    useDevOnlineBasemap: Boolean,
+    packsChangedTick: Long,
+    gpsFix: GpsFix?,
+    snappedNavLocation: LatLon?,
+    candidateRoutes: List<OfflineRoute>,
+    selectedRouteIndex: Int,
+    activeNavRoute: OfflineRoute?,
+    selectedPlace: PlaceSearchResult?,
+    userReports: List<UserReportEntity>,
+    cameraCommand: CameraTargetCommand?,
+    onMapLongClick: (Double, Double) -> Unit,
+    onRouteTapped: (Int) -> Unit,
+    onUserMovedMap: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val currentCandidates by rememberUpdatedState(candidateRoutes)
+    val currentActiveRoute by rememberUpdatedState(activeNavRoute)
+    val currentOnMapLongClick by rememberUpdatedState(onMapLongClick)
+    val currentOnRouteTapped by rememberUpdatedState(onRouteTapped)
+    val currentOnUserMovedMap by rememberUpdatedState(onUserMovedMap)
+
+    val mapView = remember {
+        MapView(context).apply {
+            onCreate(null)
+        }
+    }
+
+    var mapLibreMap by remember { mutableStateOf<MapLibreMap?>(null) }
+    var loadedStyle by remember { mutableStateOf<Style?>(null) }
+
+    DisposableEffect(lifecycleOwner, mapView) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> mapView.onStart()
+                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                Lifecycle.Event.ON_STOP -> mapView.onStop()
+                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapView.onPause()
+            mapView.onStop()
+            mapView.onDestroy()
+        }
+    }
+
+    val styleJson = remember(installedPmtiles, isNightMode, useDevOnlineBasemap, packsChangedTick) {
+        MapStyleBuilder.buildOfflineStyleJson(
+            installedPmtiles = installedPmtiles,
+            isNightMode = isNightMode,
+            useDevOnlineBasemap = useDevOnlineBasemap
+        )
+    }
+
+    LaunchedEffect(mapLibreMap, styleJson) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
+            loadedStyle = style
+        }
+    }
+
+    LaunchedEffect(
+        loadedStyle,
+        candidateRoutes,
+        selectedRouteIndex,
+        activeNavRoute,
+        selectedPlace,
+        gpsFix,
+        snappedNavLocation,
+        userReports
+    ) {
+        val style = loadedStyle ?: return@LaunchedEffect
+
+        val routeColors = listOf(
+            MapStyleBuilder.ROUTE_COLOR_0,
+            MapStyleBuilder.ROUTE_COLOR_1,
+            MapStyleBuilder.ROUTE_COLOR_2
+        )
+        val routeSources = listOf(
+            MapStyleBuilder.SOURCE_ROUTE_0,
+            MapStyleBuilder.SOURCE_ROUTE_1,
+            MapStyleBuilder.SOURCE_ROUTE_2
+        )
+
+        val emptyFc = FeatureCollection.fromFeatures(emptyArray())
+
+        if (activeNavRoute != null && activeNavRoute.shape.size >= 2) {
+            // Active navigation: show only active route prominently
+            routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
+            val line = LineString.fromLngLats(activeNavRoute.shape.map { Point.fromLngLat(it.lon, it.lat) })
+            val feat = Feature.fromGeometry(line).apply {
+                addStringProperty("color", MapStyleBuilder.ROUTE_COLOR_0)
+            }
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)
+                ?.setGeoJson(FeatureCollection.fromFeature(feat))
+        } else if (candidateRoutes.isNotEmpty()) {
+            // Route preview: draw up to 3 routes in 3 distinct colors, selected route thicker on top
+            routeSources.forEachIndexed { idx, srcId ->
+                val route = candidateRoutes.getOrNull(idx)
+                if (route != null && idx != selectedRouteIndex && route.shape.size >= 2) {
+                    val line = LineString.fromLngLats(route.shape.map { Point.fromLngLat(it.lon, it.lat) })
+                    style.getSourceAs<GeoJsonSource>(srcId)
+                        ?.setGeoJson(FeatureCollection.fromFeature(Feature.fromGeometry(line)))
+                } else {
+                    style.getSourceAs<GeoJsonSource>(srcId)?.setGeoJson(emptyFc)
+                }
+            }
+            val selected = candidateRoutes.getOrNull(selectedRouteIndex)
+            if (selected != null && selected.shape.size >= 2) {
+                val line = LineString.fromLngLats(selected.shape.map { Point.fromLngLat(it.lon, it.lat) })
+                val feat = Feature.fromGeometry(line).apply {
+                    addStringProperty("color", routeColors.getOrElse(selectedRouteIndex) { MapStyleBuilder.ROUTE_COLOR_0 })
+                }
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)
+                    ?.setGeoJson(FeatureCollection.fromFeature(feat))
+            } else {
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(emptyFc)
+            }
+        } else {
+            routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(emptyFc)
+        }
+
+        // Destination pin
+        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DESTINATION)?.setGeoJson(
+            if (selectedPlace != null) {
+                FeatureCollection.fromFeature(
+                    Feature.fromGeometry(Point.fromLngLat(selectedPlace.lon, selectedPlace.lat))
+                )
+            } else {
+                emptyFc
+            }
+        )
+
+        // Color-coded Waze-style user report markers
+        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_USER_REPORTS)?.setGeoJson(
+            FeatureCollection.fromFeatures(
+                userReports.map { r ->
+                    val rType = runCatching { ReportType.valueOf(r.type) }.getOrNull()
+                    val colorHex = when (rType) {
+                        ReportType.POLICE, ReportType.SPEED_TRAP -> "#2563EB"
+                        ReportType.CRASH, ReportType.ROAD_CLOSURE -> "#E53935"
+                        ReportType.CONSTRUCTION -> "#F97316"
+                        else -> "#F59E0B"
+                    }
+                    Feature.fromGeometry(Point.fromLngLat(r.lon, r.lat)).apply {
+                        addStringProperty("color", colorHex)
+                        addStringProperty("type", r.type)
+                    }
+                }
+            )
+        )
+
+        // Snapped navigation marker (when actively navigating) or live GPS puck
+        val displayLoc = snappedNavLocation ?: gpsFix?.let { LatLon(it.lat, it.lon) }
+        style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(
+            if (displayLoc != null) {
+                FeatureCollection.fromFeature(
+                    Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat))
+                )
+            } else {
+                emptyFc
+            }
+        )
+    }
+
+    LaunchedEffect(mapLibreMap, cameraCommand) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        val cmd = cameraCommand ?: return@LaunchedEffect
+        val pos = CameraPosition.Builder()
+            .target(LatLng(cmd.lat, cmd.lon))
+            .zoom(cmd.zoom)
+            .tilt(cmd.tilt)
+            .bearing(cmd.bearing)
+            .build()
+        map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 500)
+    }
+
+    AndroidView(
+        factory = {
+            mapView.apply {
+                getMapAsync { map ->
+                    map.uiSettings.isAttributionEnabled = false
+                    map.uiSettings.isLogoEnabled = false
+                    map.uiSettings.isCompassEnabled = true
+                    map.cameraPosition = CameraPosition.Builder()
+                        .target(LatLng(RahYabViewModel.EUGENE_OR_LAT, RahYabViewModel.EUGENE_OR_LON))
+                        .zoom(11.5)
+                        .build()
+
+                    // Long press anywhere on the map to drop a pin -> Directions
+                    map.addOnMapLongClickListener { latLng ->
+                        if (currentActiveRoute == null) {
+                            currentOnMapLongClick(latLng.latitude, latLng.longitude)
+                            true
+                        } else {
+                            false
+                        }
+                    }
+
+                    // Tap a candidate route line directly on the map to select it
+                    map.addOnMapClickListener { latLng ->
+                        val routes = currentCandidates
+                        if (currentActiveRoute == null && routes.size > 1) {
+                            var bestRouteIdx = -1
+                            var bestDistMeters = 900.0
+                            routes.forEachIndexed { idx, route ->
+                                val step = (route.shape.size / 120).coerceAtLeast(1)
+                                for (i in route.shape.indices step step) {
+                                    val pt = route.shape[i]
+                                    val d = OfflinePlaceSearchEngine.haversineMeters(
+                                        latLng.latitude, latLng.longitude, pt.lat, pt.lon
+                                    )
+                                    if (d < bestDistMeters) {
+                                        bestDistMeters = d
+                                        bestRouteIdx = idx
+                                    }
+                                }
+                            }
+                            if (bestRouteIdx >= 0) {
+                                currentOnRouteTapped(bestRouteIdx)
+                                return@addOnMapClickListener true
+                            }
+                        }
+                        false
+                    }
+
+                    // Detect manual user pan to pause camera follow until Recenter is tapped
+                    map.addOnMoveListener(object : MapLibreMap.OnMoveListener {
+                        override fun onMoveBegin(detector: MoveGestureDetector) {
+                            currentOnUserMovedMap()
+                        }
+                        override fun onMove(detector: MoveGestureDetector) {}
+                        override fun onMoveEnd(detector: MoveGestureDetector) {}
+                    })
+
+                    mapLibreMap = map
+                }
+            }
+        },
+        modifier = modifier
+    )
+}

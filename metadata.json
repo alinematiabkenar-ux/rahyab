@@ -1,0 +1,6 @@
+{
+  "name": "RahYab",
+  "description": "Fully offline US turn-by-turn car navigation with MapLibre PMTiles, Valhalla routing, FTS5 place search, Sygic-style lane guidance, Waze-style driving alerts, and Persian/English bilingual support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

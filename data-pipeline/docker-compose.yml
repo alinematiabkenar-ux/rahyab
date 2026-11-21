@@ -1,0 +1,11 @@
+services:
+  pipeline:
+    build: .
+    image: rahyab-data-pipeline:latest
+    volumes:
+      - ./output:/output
+      - ./cache:/cache
+    environment:
+      - OVERTURE_RELEASE=${OVERTURE_RELEASE:-2025-02-19.0}
+      - PROTOMAPS_BASEMAP_URL=${PROTOMAPS_BASEMAP_URL:-https://build.protomaps.com/20250219.pmtiles}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
