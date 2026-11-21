@@ -33,6 +33,7 @@ import sqlite3
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
@@ -41,8 +42,17 @@ if _SCRIPT_DIR not in sys.path:
 
 from states import ALL_PACK_CATALOG, US_STATES, resolve_pack_targets
 
-GEOFABRIK_US_URL = "https://download.geofabrik.de/north-america/us/{slug}-latest.osm.pbf"
-GEOFABRIK_SUB_URL = "https://download.geofabrik.de/north-america/us/california/{slug}-latest.osm.pbf"
+GEOFABRIK_INDEX_URL = "https://download.geofabrik.de/index-v1-nogeom.json"
+GEOFABRIK_FALLBACK_PATTERNS = (
+    "https://download.geofabrik.de/north-america/us/{slug}/{slug}-latest.osm.pbf",
+    "https://download.geofabrik.de/north-america/us/{slug}-latest.osm.pbf",
+)
+GEOFABRIK_CA_SUB_FALLBACK_PATTERNS = (
+    "https://download.geofabrik.de/north-america/us/california/{slug}/{slug}-latest.osm.pbf",
+    "https://download.geofabrik.de/north-america/us/california/{slug}-latest.osm.pbf",
+)
+_GEOFABRIK_INDEX_CACHE: dict[str, str] | None = None
+_GEOFABRIK_INDEX_LOADED = False
 
 # ~30-mile border buffer in degrees (~0.45 deg lat / ~0.55 deg lon at US latitudes)
 BORDER_BUFFER_DEG_LAT = 0.45
@@ -75,6 +85,73 @@ def expand_bbox(bbox: tuple[float, float, float, float], pad_lon: float, pad_lat
     )
 
 
+def load_geofabrik_index() -> dict[str, str]:
+    """Download Geofabrik's machine-readable index once per run and map region id -> pbf URL."""
+    global _GEOFABRIK_INDEX_CACHE, _GEOFABRIK_INDEX_LOADED
+    if _GEOFABRIK_INDEX_LOADED:
+        return _GEOFABRIK_INDEX_CACHE or {}
+
+    import requests
+
+    _GEOFABRIK_INDEX_LOADED = True
+    last_err: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            print(f"[geofabrik] Downloading index ({attempt}/3): {GEOFABRIK_INDEX_URL}", flush=True)
+            resp = requests.get(GEOFABRIK_INDEX_URL, timeout=60)
+            resp.raise_for_status()
+            payload = resp.json()
+            mapping: dict[str, str] = {}
+            for feature in payload.get("features", []):
+                props = feature.get("properties") or {}
+                region_id = props.get("id")
+                pbf_url = (props.get("urls") or {}).get("pbf")
+                if isinstance(region_id, str) and isinstance(pbf_url, str) and pbf_url:
+                    mapping[region_id.strip().lower()] = pbf_url.strip()
+            _GEOFABRIK_INDEX_CACHE = mapping
+            print(f"[geofabrik] Loaded {len(mapping)} region URLs from official index.", flush=True)
+            return mapping
+        except Exception as exc:
+            last_err = exc
+            print(f"[warn] Geofabrik index attempt {attempt}/3 failed: {exc}", flush=True)
+            if attempt < 3:
+                time.sleep(2 * attempt)
+
+    print(f"[warn] Could not load Geofabrik index ({last_err}); falling back to URL patterns.", flush=True)
+    _GEOFABRIK_INDEX_CACHE = {}
+    return {}
+
+
+def resolve_geofabrik_urls(slug: str) -> list[str]:
+    """Return ordered list of candidate Geofabrik PBF URLs for a state or CA sub-region slug."""
+    index = load_geofabrik_index()
+    if slug in ("norcal", "socal"):
+        candidate_ids = (f"us/california/{slug}", f"north-america/us/california/{slug}")
+        fallback_templates = GEOFABRIK_CA_SUB_FALLBACK_PATTERNS + GEOFABRIK_FALLBACK_PATTERNS
+    else:
+        candidate_ids = (f"us/{slug}", f"north-america/us/{slug}")
+        fallback_templates = GEOFABRIK_FALLBACK_PATTERNS
+
+    urls: list[str] = []
+    matched_id: str | None = None
+    for region_id in candidate_ids:
+        found = index.get(region_id)
+        if found:
+            matched_id = region_id
+            urls.append(found)
+            print(f"[geofabrik] Matched region id '{region_id}' -> {found}", flush=True)
+            break
+
+    if not matched_id:
+        print(f"[warn] Region id '{candidate_ids[0]}' not found in Geofabrik index; using fallback patterns.", flush=True)
+
+    for tmpl in fallback_templates:
+        candidate = tmpl.format(slug=slug)
+        if candidate not in urls:
+            urls.append(candidate)
+    return urls
+
+
 def download_geofabrik_pbf(slug: str, cache_dir: Path) -> Path:
     import requests
 
@@ -83,21 +160,31 @@ def download_geofabrik_pbf(slug: str, cache_dir: Path) -> Path:
         print(f"[cache] Reusing {dest}", flush=True)
         return dest
 
-    url = (
-        GEOFABRIK_SUB_URL.format(slug=slug)
-        if slug in ("norcal", "socal")
-        else GEOFABRIK_US_URL.format(slug=slug)
-    )
-    print(f"[download] Fetching Geofabrik extract: {url}", flush=True)
+    candidate_urls = resolve_geofabrik_urls(slug)
     tmp = dest.with_suffix(".pbf.part")
-    with requests.get(url, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with tmp.open("wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-    tmp.rename(dest)
-    return dest
+
+    for url in candidate_urls:
+        for attempt in range(1, 4):
+            try:
+                print(f"[download] Fetching Geofabrik extract ({attempt}/3): {url}", flush=True)
+                with requests.get(url, stream=True, timeout=120) as r:
+                    r.raise_for_status()
+                    with tmp.open("wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024 * 1024):
+                            if chunk:
+                                f.write(chunk)
+                tmp.rename(dest)
+                return dest
+            except Exception as exc:
+                tmp.unlink(missing_ok=True)
+                print(f"[warn] Download failed ({attempt}/3) for {url}: {exc}", flush=True)
+                if attempt < 3:
+                    time.sleep(2 * attempt)
+
+    tried_str = ", ".join(candidate_urls)
+    raise SystemExit(
+        f"RAHYAB ERROR: Failed to download Geofabrik OSM extract for '{slug}' after 3 attempts per URL. URLs tried: {tried_str}"
+    )
 
 
 def extract_pmtiles(pack_code: str, bbox: tuple[float, float, float, float], protomaps_url: str, out_file: Path) -> None:
@@ -612,20 +699,27 @@ def main():
         print(json.dumps(resolved))
         return
 
-    output_dir = Path(args.output_dir)
-    cache_dir = Path(args.cache_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
     if args.merge_manifests is not None:
-        files = [Path(p) for p in args.merge_manifests]
+        valid_files = [Path(p) for p in args.merge_manifests if Path(p).is_file()]
+        if not valid_files:
+            print(
+                "[manifest] Skipping manifest merge: no new per-pack manifests found (all pack builds failed or were skipped).",
+                flush=True,
+            )
+            return
+        output_dir = Path(args.output_dir)
         existing = Path(args.existing_manifest) if args.existing_manifest else None
-        merge_manifests(files, output_dir / "manifest.json", args.base_url, args.build_version, existing)
+        merge_manifests(valid_files, output_dir / "manifest.json", args.base_url, args.build_version, existing)
         return
 
     raw_spec = "all" if args.all else " ".join(args.state or [])
     if not raw_spec.strip():
         parser.error("Specify --state <code...>, --all, --resolve-matrix, or --merge-manifests")
+
+    output_dir = Path(args.output_dir)
+    cache_dir = Path(args.cache_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     targets = resolve_pack_targets(raw_spec, split_large_states=not args.no_split_large)
     manifest_files: list[Path] = []
