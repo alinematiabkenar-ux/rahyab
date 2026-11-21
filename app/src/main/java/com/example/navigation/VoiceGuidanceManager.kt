@@ -194,6 +194,24 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         return utterance
     }
 
+    /**
+     * Speaks the initial departure instruction when navigation starts, describing the initial
+     * compass direction and starting street plus the first upcoming turn (e.g.,
+     * "Head east on East 22nd Avenue, then turn right onto Hilyard Street." and Persian equivalent).
+     */
+    fun speakStartInstruction(route: OfflineRoute, language: AppLanguage): String {
+        val effectiveLanguage = resolveEffectiveLanguage(language)
+        val utterance = formatStartInstruction(route, effectiveLanguage)
+        if (utterance.isBlank()) return ""
+        _lastSpokenText.value = utterance
+        if (voiceEnabled && isInitialized) {
+            speakRaw(utterance, effectiveLanguage)
+            lastSpokenKey = "route_start_${route.id}"
+            lastSpokenTimeMs = System.currentTimeMillis()
+        }
+        return utterance
+    }
+
     fun speakRerouting(language: AppLanguage): String {
         val effectiveLanguage = resolveEffectiveLanguage(language)
         val utterance = formatReroutingPrompt(effectiveLanguage)
@@ -297,6 +315,102 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     ManeuverType.ARRIVE_RIGHT -> "You have arrived. Your destination is on the right."
                     ManeuverType.ARRIVE_LEFT -> "You have arrived. Your destination is on the left."
                     else -> if (destinationName.isNotBlank()) "You have arrived at $destinationName." else "You have arrived at your destination."
+                }
+            }
+        }
+
+        /**
+         * Formats the starting departure instruction, e.g.:
+         * EN: "Head east on East 22nd Avenue, then turn right onto Hilyard Street."
+         * FA: "به سمت شرق در East 22nd Avenue حرکت کنید، سپس به راست بپیچید و وارد Hilyard Street شوید."
+         */
+        fun formatStartInstruction(route: OfflineRoute, language: AppLanguage): String {
+            val firstManeuver = route.maneuvers.firstOrNull() ?: return ""
+            val nextManeuver = route.maneuvers.getOrNull(1)
+            val startRoad = firstManeuver.streetNames.firstOrNull().orEmpty()
+            val startBearing = computeInitialRouteBearing(route.shape)
+            val cardinal = startBearing?.let { cardinalDirectionLabel(it, language) }
+
+            val departClause = if (language == AppLanguage.PERSIAN) {
+                when {
+                    cardinal != null && startRoad.isNotBlank() -> "به سمت $cardinal در $startRoad حرکت کنید"
+                    cardinal != null -> "به سمت $cardinal حرکت کنید"
+                    startRoad.isNotBlank() -> "در $startRoad حرکت کنید"
+                    else -> "مسیر را شروع کنید"
+                }
+            } else {
+                when {
+                    cardinal != null && startRoad.isNotBlank() -> "Head $cardinal on $startRoad"
+                    cardinal != null -> "Head $cardinal"
+                    startRoad.isNotBlank() -> "Head along $startRoad"
+                    else -> "Start on the route"
+                }
+            }
+
+            val thenClause = if (nextManeuver != null &&
+                nextManeuver.type != ManeuverType.DEPART &&
+                nextManeuver.type != ManeuverType.ARRIVE &&
+                nextManeuver.type != ManeuverType.ARRIVE_LEFT &&
+                nextManeuver.type != ManeuverType.ARRIVE_RIGHT
+            ) {
+                val nextSentence = formatSpokenInstruction(
+                    maneuver = nextManeuver,
+                    distanceMeters = 0.0,
+                    unit = DistanceUnit.IMPERIAL,
+                    language = language,
+                    includeLaneGuidance = false
+                ).trimEnd('.')
+                if (language == AppLanguage.PERSIAN) {
+                    "سپس $nextSentence"
+                } else {
+                    "then ${nextSentence.replaceFirstChar { it.lowercase() }}"
+                }
+            } else {
+                null
+            }
+
+            return if (!thenClause.isNullOrBlank()) {
+                if (language == AppLanguage.PERSIAN) "$departClause، $thenClause." else "$departClause, $thenClause."
+            } else {
+                "$departClause."
+            }
+        }
+
+        private fun computeInitialRouteBearing(shape: List<LatLon>): Double? {
+            if (shape.size < 2) return null
+            val start = shape.first()
+            val target = shape.drop(1).firstOrNull { pt ->
+                com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
+                    start.lat, start.lon, pt.lat, pt.lon
+                ) >= 12.0
+            } ?: shape[1]
+            return ValhallaResponseParser.bearingDegrees(start, target)
+        }
+
+        private fun cardinalDirectionLabel(bearingDeg: Double, language: AppLanguage): String {
+            val normalized = ((bearingDeg % 360.0) + 360.0) % 360.0
+            val idx = (((normalized + 22.5) % 360.0) / 45.0).toInt().coerceIn(0, 7)
+            return if (language == AppLanguage.PERSIAN) {
+                when (idx) {
+                    0 -> "شمال"
+                    1 -> "شمال شرق"
+                    2 -> "شرق"
+                    3 -> "جنوب شرق"
+                    4 -> "جنوب"
+                    5 -> "جنوب غرب"
+                    6 -> "غرب"
+                    else -> "شمال غرب"
+                }
+            } else {
+                when (idx) {
+                    0 -> "north"
+                    1 -> "northeast"
+                    2 -> "east"
+                    3 -> "southeast"
+                    4 -> "south"
+                    5 -> "southwest"
+                    6 -> "west"
+                    else -> "northwest"
                 }
             }
         }

@@ -6,6 +6,7 @@ import com.example.data.packs.StatePackManager
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.OnlineOregonDevSearchClient
+import com.example.navigation.CompassTracker
 import com.example.navigation.LocationTracker
 import com.example.navigation.ValhallaRoutingEngine
 import com.example.navigation.VoiceGuidanceManager
@@ -27,6 +28,8 @@ class RahYabApplication : Application() {
         private set
     lateinit var locationTracker: LocationTracker
         private set
+    lateinit var compassTracker: CompassTracker
+        private set
     lateinit var voiceGuidanceManager: VoiceGuidanceManager
         private set
 
@@ -42,12 +45,14 @@ class RahYabApplication : Application() {
         onlineOregonDevSearchClient = OnlineOregonDevSearchClient()
         routingEngine = ValhallaRoutingEngine(this, packManager)
         locationTracker = LocationTracker(this)
+        compassTracker = CompassTracker(this)
         voiceGuidanceManager = VoiceGuidanceManager(this)
     }
 
     override fun onTerminate() {
         super.onTerminate()
         locationTracker.stopTracking()
+        compassTracker.stop()
         voiceGuidanceManager.shutdown()
         routingEngine.close()
     }

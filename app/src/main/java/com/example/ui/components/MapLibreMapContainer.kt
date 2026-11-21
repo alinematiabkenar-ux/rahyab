@@ -1,9 +1,15 @@
 package com.example.ui.components
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color as AndroidColor
+import android.graphics.Paint
+import android.graphics.Path
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -19,6 +25,7 @@ import com.example.data.local.UserReportEntity
 import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.PlaceSearchResult
 import com.example.map.MapStyleBuilder
+import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
 import com.example.navigation.LatLon
 import com.example.navigation.OfflineRoute
@@ -39,6 +46,7 @@ import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
 import java.io.File
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -61,6 +69,9 @@ fun MapLibreMapContainer(
     packsChangedTick: Long,
     gpsFix: GpsFix?,
     snappedNavLocation: LatLon?,
+    userHeadingDegrees: Float,
+    isHeadingUpMode: Boolean,
+    isCameraFollowing: Boolean,
     candidateRoutes: List<OfflineRoute>,
     selectedRouteIndex: Int,
     activeNavRoute: OfflineRoute?,
@@ -70,6 +81,7 @@ fun MapLibreMapContainer(
     onMapLongClick: (Double, Double) -> Unit,
     onRouteTapped: (Int) -> Unit,
     onUserMovedMap: () -> Unit,
+    onMapBearingChanged: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -80,6 +92,7 @@ fun MapLibreMapContainer(
     val currentOnMapLongClick by rememberUpdatedState(onMapLongClick)
     val currentOnRouteTapped by rememberUpdatedState(onRouteTapped)
     val currentOnUserMovedMap by rememberUpdatedState(onUserMovedMap)
+    val currentOnMapBearingChanged by rememberUpdatedState(onMapBearingChanged)
 
     val mapView = remember {
         MapView(context).apply {
@@ -89,6 +102,7 @@ fun MapLibreMapContainer(
 
     var mapLibreMap by remember { mutableStateOf<MapLibreMap?>(null) }
     var loadedStyle by remember { mutableStateOf<Style?>(null) }
+    var lastAppliedHeadingBearing by remember { mutableFloatStateOf(Float.NaN) }
 
     DisposableEffect(lifecycleOwner, mapView) {
         val observer = LifecycleEventObserver { _, event ->
@@ -121,6 +135,9 @@ fun MapLibreMapContainer(
     LaunchedEffect(mapLibreMap, styleJson) {
         val map = mapLibreMap ?: return@LaunchedEffect
         map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
+            runCatching {
+                style.addImage(MapStyleBuilder.IMAGE_USER_ARROW, createUserArrowBitmap())
+            }
             loadedStyle = style
         }
     }
@@ -133,6 +150,7 @@ fun MapLibreMapContainer(
         selectedPlace,
         gpsFix,
         snappedNavLocation,
+        userHeadingDegrees,
         userReports
     ) {
         val style = loadedStyle ?: return@LaunchedEffect
@@ -234,9 +252,10 @@ fun MapLibreMapContainer(
         )
         style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(
             if (displayLoc != null) {
-                FeatureCollection.fromFeature(
-                    Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat))
-                )
+                val feat = Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat)).apply {
+                    addNumberProperty("bearing", CompassTracker.normalizeAngle(userHeadingDegrees))
+                }
+                FeatureCollection.fromFeature(feat)
             } else {
                 emptyFc
             }
@@ -246,6 +265,7 @@ fun MapLibreMapContainer(
     LaunchedEffect(mapLibreMap, cameraCommand) {
         val map = mapLibreMap ?: return@LaunchedEffect
         val cmd = cameraCommand ?: return@LaunchedEffect
+        lastAppliedHeadingBearing = cmd.bearing.toFloat()
         val pos = CameraPosition.Builder()
             .target(LatLng(cmd.lat, cmd.lon))
             .zoom(cmd.zoom)
@@ -255,17 +275,37 @@ fun MapLibreMapContainer(
         map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 500)
     }
 
+    // Smoothly rotate map camera bearing in heading-up mode when browsing or stationary
+    LaunchedEffect(mapLibreMap, userHeadingDegrees, isHeadingUpMode, isCameraFollowing, activeNavRoute, selectedPlace) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        if (!isHeadingUpMode || !isCameraFollowing || activeNavRoute != null || selectedPlace != null) return@LaunchedEffect
+        val normalizedHeading = CompassTracker.normalizeAngle(userHeadingDegrees)
+        val currentBearing = map.cameraPosition.bearing.toFloat()
+        val diff = abs(CompassTracker.shortestAngleDelta(currentBearing, normalizedHeading))
+        if (lastAppliedHeadingBearing.isNaN() || diff >= 3.0f) {
+            lastAppliedHeadingBearing = normalizedHeading
+            val updatedPos = CameraPosition.Builder(map.cameraPosition)
+                .bearing(normalizedHeading.toDouble())
+                .build()
+            map.animateCamera(CameraUpdateFactory.newCameraPosition(updatedPos), 250)
+        }
+    }
+
     AndroidView(
         factory = {
             mapView.apply {
                 getMapAsync { map ->
                     map.uiSettings.isAttributionEnabled = false
                     map.uiSettings.isLogoEnabled = false
-                    map.uiSettings.isCompassEnabled = true
+                    // Disable built-in compass so our custom Compose Compass Button handles North-Up / Heading-Up
+                    map.uiSettings.isCompassEnabled = false
                     map.cameraPosition = CameraPosition.Builder()
                         .target(LatLng(RahYabViewModel.EUGENE_OR_LAT, RahYabViewModel.EUGENE_OR_LON))
                         .zoom(11.5)
                         .build()
+                    map.addOnCameraMoveListener {
+                        currentOnMapBearingChanged(map.cameraPosition.bearing.toFloat())
+                    }
 
                     // Long press anywhere on the map to drop a pin -> Directions
                     map.addOnMapLongClickListener { latLng ->
@@ -341,4 +381,36 @@ private fun buildAccuracyCirclePolygon(
         ring.add(Point.fromLngLat(ptLon, ptLat))
     }
     return Polygon.fromLngLats(listOf(ring))
+}
+
+private fun createUserArrowBitmap(): Bitmap {
+    val size = 84
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Crisp upward-pointing navigation chevron (north = 0 deg) with white outline & cyan-blue fill
+    val path = Path().apply {
+        moveTo(cx, 6f)
+        lineTo(cx + 22f, size - 16f)
+        lineTo(cx, cy + 10f)
+        lineTo(cx - 22f, size - 16f)
+        close()
+    }
+
+    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.parseColor("#0284C7")
+    }
+    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 5f
+        strokeJoin = Paint.Join.ROUND
+        color = AndroidColor.WHITE
+    }
+
+    canvas.drawPath(path, fillPaint)
+    canvas.drawPath(path, strokePaint)
+    return bmp
 }

@@ -23,12 +23,15 @@ import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
 import com.example.i18n.stringsFor
 import com.example.navigation.ActiveNavigationState
+import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
 import com.example.navigation.LatLon
+import com.example.navigation.LocationTracker
 import com.example.navigation.MissingStatesException
 import com.example.navigation.NavigationSessionController
 import com.example.navigation.OfflineRoute
 import com.example.navigation.RouteOptions
+import com.example.navigation.RoutePreference
 import com.example.navigation.SolarNightCalculator
 import com.example.service.NavigationForegroundService
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +65,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val devOnlineSearch = app.onlineOregonDevSearchClient
     private val routingEngine = app.routingEngine
     private val locationTracker = app.locationTracker
+    private val compassTracker = app.compassTracker
     private val voiceManager = app.voiceGuidanceManager
     private val savedPlaceDao = app.database.savedPlaceDao()
     private val userReportDao = app.database.userReportDao()
@@ -75,6 +79,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     val currentGpsFix: StateFlow<GpsFix?> = locationTracker.currentFix
+    val isCompassLowAccuracy: StateFlow<Boolean> = compassTracker.isLowAccuracy
     val isPersianTtsAvailable: StateFlow<Boolean> = voiceManager.isPersianVoiceAvailable
     val isFetchingManifest: StateFlow<Boolean> = packManager.isFetchingManifest
     val manifestError: StateFlow<String?> = packManager.manifestError
@@ -200,6 +205,15 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _isCameraFollowing = MutableStateFlow(true)
     val isCameraFollowing: StateFlow<Boolean> = _isCameraFollowing.asStateFlow()
 
+    // Compass / map orientation mode (true = Heading-Up, false = North-Up)
+    private val _isHeadingUpMode = MutableStateFlow(true)
+    val isHeadingUpMode: StateFlow<Boolean> = _isHeadingUpMode.asStateFlow()
+
+    // Smoothly blended user arrow & heading-up direction (compass < 3 mph, GPS bearing > 3 mph)
+    private val _userHeadingDegrees = MutableStateFlow(0f)
+    val userHeadingDegrees: StateFlow<Float> = _userHeadingDegrees.asStateFlow()
+    private var hasHeadingSample = false
+
     // Transient UI feedback message
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
@@ -256,9 +270,48 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        // Start hardware compass sensor (automatically stops in background when not navigating)
+        compassTracker.startIfActive()
+
+        // Smoothly combine compass (< 3 mph) and GPS bearing (> 3 mph) for position arrow & heading-up map
+        viewModelScope.launch {
+            combine(
+                currentGpsFix,
+                compassTracker.headingDegrees,
+                _navigationState
+            ) { fix, compassHeading, nav ->
+                when {
+                    nav.isNavigating && nav.isSimulatingDrive -> nav.snappedBearing
+                    fix != null && fix.speedMps > LocationTracker.MIN_BEARING_SPEED_MPS && fix.hasBearing -> {
+                        if (nav.isNavigating && !nav.isOffRoute) nav.snappedBearing else fix.bearing
+                    }
+                    compassHeading != null -> compassHeading
+                    fix != null && fix.hasBearing -> fix.bearing
+                    else -> null
+                }
+            }.collect { targetHeading ->
+                if (targetHeading != null) {
+                    val normalized = CompassTracker.normalizeAngle(targetHeading)
+                    if (!hasHeadingSample) {
+                        hasHeadingSample = true
+                        _userHeadingDegrees.value = normalized
+                    } else {
+                        _userHeadingDegrees.value = CompassTracker.lerpAngle(
+                            _userHeadingDegrees.value,
+                            normalized,
+                            0.35f
+                        )
+                    }
+                }
+            }
+        }
+
         // Process live GPS updates during active navigation (ignored when Simulate Drive is driving)
         viewModelScope.launch {
             currentGpsFix.collect { fix ->
+                if (fix != null) {
+                    compassTracker.updateLocationForDeclination(fix.lat, fix.lon)
+                }
                 if (fix != null && _navigationState.value.isNavigating && !_navigationState.value.isSimulatingDrive) {
                     lastGpsReceivedMs = System.currentTimeMillis()
                     handleNavigationGpsFix(fix)
@@ -269,10 +322,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startLocationTracking() {
         locationTracker.startTracking()
+        compassTracker.startIfActive()
     }
 
     fun setAppInForeground(inForeground: Boolean) {
         locationTracker.setAppInForeground(inForeground)
+        compassTracker.setAppInForeground(inForeground)
     }
 
     fun refreshLocationTracking() {
@@ -461,6 +516,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             avoidTolls = s.avoidTolls,
             avoidHighways = s.avoidHighways,
             avoidFerries = s.avoidFerries,
+            preferShortest = (s.routePreference == RoutePreference.SHORTEST),
             avoidLocations = closedLocations
         )
     }
@@ -471,6 +527,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         val origin = getEffectiveReferenceLocation()
         val s = settings.value
         val options = buildCurrentRouteOptions(s)
+        // Only send GPS bearing when moving > 3 mph with a fresh (< 10 s) bearing; never send compass heading
+        val routingHeading = LocationTracker.resolveRoutingHeadingDegrees(currentGpsFix.value)
 
         viewModelScope.launch {
             _isCalculatingRoute.value = true
@@ -480,7 +538,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 origin = origin,
                 destination = LatLon(dest.lat, dest.lon),
                 options = options,
-                headingDegrees = currentGpsFix.value?.bearing,
+                headingDegrees = routingHeading,
                 allowDevOnlineFallback = s.devOnlineOregonMode
             )
             _isCalculatingRoute.value = false
@@ -520,6 +578,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         navController.reset()
         voiceManager.resetDeduplication()
         locationTracker.setNavigationMode(true)
+        compassTracker.setNavigationMode(true)
         _isCameraFollowing.value = true
         lastGpsReceivedMs = System.currentTimeMillis()
         simulatedWrongTurnTicksRemaining = 0
@@ -562,9 +621,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             body = firstInstruction
         )
 
-        // Announce first instruction
-        initialManeuver?.let {
-            val spoken = voiceManager.speakManeuver(it, it.lengthMeters, s.distanceUnit, s.language, "start")
+        // Announce clear departure instruction with compass direction, starting street, and next turn
+        val spoken = voiceManager.speakStartInstruction(route, s.language)
+        if (spoken.isNotBlank()) {
             _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
         }
 
@@ -574,7 +633,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             lon = startLoc.lon,
             zoom = 16.8,
             tilt = if (s.is3DView) 55.0 else 0.0,
-            bearing = currentGpsFix.value?.bearing?.toDouble() ?: 0.0
+            bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
         )
 
         if (s.simulateDriveEnabled) {
@@ -601,7 +660,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                                 lon = loc.lon,
                                 zoom = 16.5,
                                 tilt = if (s.is3DView) 55.0 else 0.0,
-                                bearing = if (s.is3DView) deadReckoned.snappedBearing.toDouble() else 0.0
+                                bearing = if (_isHeadingUpMode.value) deadReckoned.snappedBearing.toDouble() else 0.0
                             )
                         }
                     }
@@ -654,12 +713,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun stopNavigation() {
         stopInternalNavJobs()
         locationTracker.setNavigationMode(false)
+        compassTracker.setNavigationMode(false)
         _navigationState.value = ActiveNavigationState()
         navController.reset()
         NavigationForegroundService.stop(app)
         _isCameraFollowing.value = true
         val ref = getEffectiveReferenceLocation()
-        _cameraCommand.value = CameraTargetCommand(lat = ref.lat, lon = ref.lon, zoom = 14.0, tilt = 0.0, bearing = 0.0)
+        _cameraCommand.value = CameraTargetCommand(
+            lat = ref.lat,
+            lon = ref.lon,
+            zoom = 14.0,
+            tilt = 0.0,
+            bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
+        )
     }
 
     private fun stopInternalNavJobs() {
@@ -739,7 +805,15 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         // Follow driving camera unless user manually panned away
         if (_isCameraFollowing.value) {
             val targetLoc = result.state.snappedLocation ?: LatLon(fix.lat, fix.lon)
-            val targetBearing = if (s.is3DView) result.state.snappedBearing.toDouble() else 0.0
+            val targetBearing = if (_isHeadingUpMode.value) {
+                if (fix.speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || s.simulateDriveEnabled) {
+                    result.state.snappedBearing.toDouble()
+                } else {
+                    _userHeadingDegrees.value.toDouble()
+                }
+            } else {
+                0.0
+            }
             _cameraCommand.value = CameraTargetCommand(
                 lat = targetLoc.lat,
                 lon = targetLoc.lon,
@@ -757,20 +831,21 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private fun triggerAutomaticReroute(fix: GpsFix) {
         val dest = _selectedPlace.value ?: return
         val s = settings.value
+        val routingHeading = LocationTracker.resolveRoutingHeadingDegrees(fix)
         voiceManager.speakRerouting(s.language)
         viewModelScope.launch {
             val res = routingEngine.calculateRoutes(
                 origin = LatLon(fix.lat, fix.lon),
                 destination = LatLon(dest.lat, dest.lon),
                 options = buildCurrentRouteOptions(s),
-                headingDegrees = fix.bearing,
+                headingDegrees = routingHeading,
                 allowDevOnlineFallback = s.devOnlineOregonMode
             )
             res.onSuccess { routes ->
                 val newRoute = routes.firstOrNull() ?: return@onSuccess
                 navController.reset()
                 voiceManager.resetDeduplication()
-                val firstManeuver = newRoute.maneuvers.firstOrNull()
+                val spoken = voiceManager.speakStartInstruction(newRoute, s.language)
                 _navigationState.value = _navigationState.value.copy(
                     route = newRoute,
                     currentManeuverIndex = 0,
@@ -779,11 +854,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                     isRerouting = false,
                     remainingDistanceMeters = newRoute.distanceMeters,
                     remainingTimeSeconds = newRoute.durationSeconds,
-                    dismissedJunctionManeuverIndex = -1
+                    dismissedJunctionManeuverIndex = -1,
+                    lastSpokenInstruction = spoken.ifBlank { _navigationState.value.lastSpokenInstruction }
                 )
-                firstManeuver?.let {
-                    voiceManager.speakManeuver(it, it.lengthMeters, s.distanceUnit, s.language, "reroute_start")
-                }
             }.onFailure {
                 _navigationState.value = _navigationState.value.copy(isRerouting = false)
             }
@@ -926,6 +999,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                         prefs.setAvoidTolls(s.avoidTolls)
                         prefs.setAvoidHighways(s.avoidHighways)
                         prefs.setAvoidFerries(s.avoidFerries)
+                        prefs.setRoutePreference(s.routePreference)
                         prefs.setGitHubRepository(s.githubOwner, s.githubRepo)
                         prefs.setPackBaseUrl(s.packBaseUrl)
                         prefs.setOnboardingCompleted(true)
@@ -1017,7 +1091,36 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             lon = ref.lon,
             zoom = if (_navigationState.value.isNavigating) 16.5 else 14.5,
             tilt = if (next) 55.0 else 0.0,
-            bearing = if (next) (currentGpsFix.value?.bearing?.toDouble() ?: 0.0) else 0.0
+            bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
+        )
+    }
+
+    fun toggleCompassHeadingMode() {
+        val nextHeadingUp = !_isHeadingUpMode.value
+        _isHeadingUpMode.value = nextHeadingUp
+        val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+        val s = settings.value
+        if (nextHeadingUp) {
+            _isCameraFollowing.value = true
+        }
+        val targetBearing = if (nextHeadingUp) {
+            if (_navigationState.value.isNavigating &&
+                (_navigationState.value.isSimulatingDrive ||
+                    (currentGpsFix.value?.speedMps ?: 0f) > LocationTracker.MIN_BEARING_SPEED_MPS)
+            ) {
+                _navigationState.value.snappedBearing.toDouble()
+            } else {
+                _userHeadingDegrees.value.toDouble()
+            }
+        } else {
+            0.0
+        }
+        _cameraCommand.value = CameraTargetCommand(
+            lat = ref.lat,
+            lon = ref.lon,
+            zoom = if (_navigationState.value.isNavigating) 16.8 else 14.5,
+            tilt = if (s.is3DView && _navigationState.value.isNavigating) 55.0 else 0.0,
+            bearing = targetBearing
         )
     }
 
@@ -1025,14 +1128,24 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _isCameraFollowing.value = true
         val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
         val s = settings.value
+        val targetBearing = if (_isHeadingUpMode.value) {
+            if (_navigationState.value.isNavigating &&
+                (_navigationState.value.isSimulatingDrive ||
+                    (currentGpsFix.value?.speedMps ?: 0f) > LocationTracker.MIN_BEARING_SPEED_MPS)
+            ) {
+                _navigationState.value.snappedBearing.toDouble()
+            } else {
+                _userHeadingDegrees.value.toDouble()
+            }
+        } else {
+            0.0
+        }
         _cameraCommand.value = CameraTargetCommand(
             lat = ref.lat,
             lon = ref.lon,
             zoom = if (_navigationState.value.isNavigating) 16.8 else 14.5,
             tilt = if (s.is3DView && _navigationState.value.isNavigating) 55.0 else 0.0,
-            bearing = if (s.is3DView && _navigationState.value.isNavigating) {
-                _navigationState.value.snappedBearing.toDouble()
-            } else 0.0
+            bearing = targetBearing
         )
     }
 
@@ -1117,6 +1230,13 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setAvoidFerries(avoid: Boolean) {
         viewModelScope.launch {
             prefs.setAvoidFerries(avoid)
+            if (_candidateRoutes.value.isNotEmpty()) calculateRoutesToSelectedPlace()
+        }
+    }
+
+    fun setRoutePreference(preference: RoutePreference) {
+        viewModelScope.launch {
+            prefs.setRoutePreference(preference)
             if (_candidateRoutes.value.isNotEmpty()) calculateRoutesToSelectedPlace()
         }
     }

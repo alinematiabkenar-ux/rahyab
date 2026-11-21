@@ -5,6 +5,7 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GpsOff
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -76,14 +78,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -156,6 +163,9 @@ fun DriveScreen(
     val activeReports by viewModel.activeUserReports.collectAsStateWithLifecycle()
     val cameraCmd by viewModel.cameraCommand.collectAsStateWithLifecycle()
     val isCameraFollowing by viewModel.isCameraFollowing.collectAsStateWithLifecycle()
+    val userHeadingDegrees by viewModel.userHeadingDegrees.collectAsStateWithLifecycle()
+    val isHeadingUpMode by viewModel.isHeadingUpMode.collectAsStateWithLifecycle()
+    val isCompassLowAccuracy by viewModel.isCompassLowAccuracy.collectAsStateWithLifecycle()
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
     val installedPmtiles = remember(packsTick) { viewModel.getInstalledPmtilesFiles() }
@@ -164,6 +174,14 @@ fun DriveScreen(
     var isSearchExpanded by remember { mutableStateOf(false) }
     var showReportSheet by remember { mutableStateOf(false) }
     var showAttributionDialog by remember { mutableStateOf(false) }
+    var mapCameraBearingDegrees by remember { mutableFloatStateOf(0f) }
+    var compassCalibDismissed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isCompassLowAccuracy) {
+        if (isCompassLowAccuracy) {
+            compassCalibDismissed = false
+        }
+    }
 
     // Keep screen awake strictly while actively navigating
     DisposableEffect(navState.isNavigating, context) {
@@ -195,6 +213,9 @@ fun DriveScreen(
             packsChangedTick = packsTick,
             gpsFix = gpsFix,
             snappedNavLocation = if (navState.isNavigating) navState.snappedLocation else null,
+            userHeadingDegrees = userHeadingDegrees,
+            isHeadingUpMode = isHeadingUpMode,
+            isCameraFollowing = isCameraFollowing,
             candidateRoutes = if (!navState.isNavigating) candidateRoutes else emptyList(),
             selectedRouteIndex = selectedRouteIdx,
             activeNavRoute = if (navState.isNavigating) navState.route else null,
@@ -204,6 +225,7 @@ fun DriveScreen(
             onMapLongClick = { lat, lon -> viewModel.dropPinOnMap(lat, lon) },
             onRouteTapped = { idx -> viewModel.selectCandidateRoute(idx) },
             onUserMovedMap = { viewModel.pauseCameraFollow() },
+            onMapBearingChanged = { bearing -> mapCameraBearingDegrees = bearing },
             modifier = Modifier.fillMaxSize()
         )
 
@@ -273,6 +295,14 @@ fun DriveScreen(
                         body = strings.approximateLocationBanner,
                         buttonLabel = strings.openAppSettings,
                         onOpenSettings = onOpenAppSettings
+                    )
+                }
+
+                if (isCompassLowAccuracy && !compassCalibDismissed && !navState.isSimulatingDrive) {
+                    CompassCalibrationBanner(
+                        message = strings.compassLowAccuracyMessage,
+                        closeContentDescription = strings.close,
+                        onDismiss = { compassCalibDismissed = true }
                     )
                 }
 
@@ -494,6 +524,15 @@ fun DriveScreen(
                     )
                 }
 
+                // Low-accuracy compass sensor calibration prompt
+                if (isCompassLowAccuracy && !compassCalibDismissed && !settings.simulateDriveEnabled && !isSearchExpanded) {
+                    CompassCalibrationBanner(
+                        message = strings.compassLowAccuracyMessage,
+                        closeContentDescription = strings.close,
+                        onDismiss = { compassCalibDismissed = true }
+                    )
+                }
+
                 // Graceful prompt when no offline map pack is installed and dev online mode is off
                 if (installedPmtiles.isEmpty() && !settings.devOnlineOregonMode && !isSearchExpanded) {
                     Card(
@@ -671,6 +710,14 @@ fun DriveScreen(
                     )
                 }
             }
+
+            // Interactive Compass Button (needle points to geographic North; tap toggles North-Up / Heading-Up)
+            CompassControlButton(
+                mapBearingDegrees = mapCameraBearingDegrees,
+                isHeadingUpMode = isHeadingUpMode,
+                contentDescription = if (isHeadingUpMode) strings.compassNorthUp else strings.compassHeadingUp,
+                onClick = { viewModel.toggleCompassHeadingMode() }
+            )
 
             // Recenter GPS (highlighted cyan when user panned map away during navigation)
             SmallCockpitButton(
@@ -881,6 +928,127 @@ private fun ApproximateLocationBanner(
                 Text(
                     text = buttonLabel,
                     fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompassControlButton(
+    mapBearingDegrees: Float,
+    isHeadingUpMode: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = if (isHeadingUpMode) BorderStroke(2.dp, CyanBeacon) else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .size(50.dp)
+            .clickable(onClick = onClick)
+            .testTag("compass_mode_button")
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(
+                modifier = Modifier
+                    .size(34.dp)
+                    .graphicsLayer { rotationZ = -mapBearingDegrees }
+            ) {
+                val cx = size.width / 2f
+                val cy = size.height / 2f
+                val tipY = size.height * 0.12f
+                val tailY = size.height * 0.88f
+                val halfWidth = size.width * 0.17f
+
+                // North needle (red)
+                val northPath = Path().apply {
+                    moveTo(cx, tipY)
+                    lineTo(cx + halfWidth, cy)
+                    lineTo(cx - halfWidth, cy)
+                    close()
+                }
+                drawPath(path = northPath, color = AlertRed)
+
+                // South needle (muted slate)
+                val southPath = Path().apply {
+                    moveTo(cx, tailY)
+                    lineTo(cx + halfWidth, cy)
+                    lineTo(cx - halfWidth, cy)
+                    close()
+                }
+                drawPath(path = southPath, color = Color(0xFF94A3B8))
+
+                // Center pivot
+                drawCircle(
+                    color = Color.White,
+                    radius = size.minDimension * 0.08f,
+                    center = Offset(cx, cy)
+                )
+            }
+            Text(
+                text = "N",
+                fontSize = 8.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = AlertRed,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 1.dp)
+            )
+            // Keep screen-reader label accessible
+            Icon(
+                imageVector = Icons.Filled.Explore,
+                contentDescription = contentDescription,
+                tint = Color.Transparent,
+                modifier = Modifier.size(1.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompassCalibrationBanner(
+    message: String,
+    closeContentDescription: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        border = BorderStroke(1.dp, CyanBeacon.copy(alpha = 0.65f)),
+        shadowElevation = 4.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("compass_calibration_banner")
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Explore,
+                contentDescription = null,
+                tint = CyanBeacon,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("dismiss_compass_calibration_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = closeContentDescription,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
@@ -1278,6 +1446,12 @@ private fun PlaceAndRoutePreviewCard(
                     routes.take(3).forEachIndexed { idx, route ->
                         val isSelected = idx == selectedRouteIndex
                         val routeAccent = RoutePreviewColors.getOrElse(idx) { CyanBeacon }
+                        val routeBadgeLabel = when {
+                            route.isFastestRoute && route.isShortestRoute -> "${strings.routePrimary} • ${strings.routeShortest}"
+                            route.isShortestRoute -> strings.routeShortest
+                            route.isFastestRoute -> strings.routePrimary
+                            else -> strings.routeAlternate
+                        }
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = if (isSelected) routeAccent.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant,
@@ -1291,6 +1465,14 @@ private fun PlaceAndRoutePreviewCard(
                                 .testTag("route_card_$idx")
                         ) {
                             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = routeBadgeLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = routeAccent,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(5.dp)

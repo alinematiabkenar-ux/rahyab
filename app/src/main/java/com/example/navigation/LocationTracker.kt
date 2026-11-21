@@ -24,7 +24,9 @@ data class GpsFix(
     val bearing: Float,
     val speedMps: Float,
     val accuracyMeters: Float,
-    val timestampMs: Long
+    val timestampMs: Long,
+    val hasBearing: Boolean = false,
+    val bearingTimestampMs: Long = 0L
 )
 
 /**
@@ -267,10 +269,20 @@ class LocationTracker(context: Context) {
             }
         }
 
-        val bearing = if (loc.hasBearing() && loc.speed > 1.2f) {
+        val nowWallMs = loc.time.takeIf { it > 0 } ?: System.currentTimeMillis()
+        val speedMps = if (loc.hasSpeed()) loc.speed.coerceAtLeast(0f) else 0f
+        val locHasRealBearing = loc.hasBearing() && speedMps > MIN_BEARING_SPEED_MPS
+        val bearing = if (locHasRealBearing) {
+            loc.bearing
+        } else if (loc.hasBearing() && speedMps > 0.5f) {
             loc.bearing
         } else {
             prev?.bearing ?: 0f
+        }
+        val bearingTimestampMs = when {
+            locHasRealBearing -> nowWallMs
+            prev?.hasBearing == true -> prev.bearingTimestampMs
+            else -> 0L
         }
 
         lastAcceptedElapsedMs = nowElapsed
@@ -280,9 +292,11 @@ class LocationTracker(context: Context) {
             lat = loc.latitude,
             lon = loc.longitude,
             bearing = bearing,
-            speedMps = if (loc.hasSpeed()) loc.speed.coerceAtLeast(0f) else 0f,
+            speedMps = speedMps,
             accuracyMeters = if (loc.hasAccuracy()) loc.accuracy.coerceAtLeast(0f) else 0f,
-            timestampMs = loc.time.takeIf { it > 0 } ?: System.currentTimeMillis()
+            timestampMs = nowWallMs,
+            hasBearing = loc.hasBearing(),
+            bearingTimestampMs = bearingTimestampMs
         )
     }
 
@@ -295,5 +309,28 @@ class LocationTracker(context: Context) {
         const val NAV_INTERVAL_MS = 1_000L
         const val FOREGROUND_MAP_INTERVAL_MS = 2_000L
         const val BACKGROUND_LOW_POWER_INTERVAL_MS = 10_000L
+
+        /** 3 mph in meters per second. */
+        const val MIN_BEARING_SPEED_MPS = 1.34112f
+        const val MAX_ROUTING_BEARING_AGE_MS = 10_000L
+
+        /**
+         * Returns a GPS heading for Valhalla routing ONLY when the fix has a real GPS bearing,
+         * speed is strictly above 3 mph, and the bearing is less than 10 seconds old.
+         * Never uses phone compass heading (which can be disturbed by car metal).
+         */
+        fun resolveRoutingHeadingDegrees(
+            fix: GpsFix?,
+            nowMs: Long = System.currentTimeMillis()
+        ): Float? {
+            if (fix == null) return null
+            if (!fix.hasBearing) return null
+            if (fix.speedMps <= MIN_BEARING_SPEED_MPS) return null
+            val ageMs = nowMs - fix.bearingTimestampMs
+            if (fix.bearingTimestampMs <= 0L || ageMs < 0L || ageMs >= MAX_ROUTING_BEARING_AGE_MS) {
+                return null
+            }
+            return ((fix.bearing % 360f) + 360f) % 360f
+        }
     }
 }

@@ -29,11 +29,15 @@ class NavigationSessionController {
     private var offRouteCount = 0
     private var lastRerouteRequestMs = 0L
     private val lastSpokenAlertIds = mutableSetOf<String>()
+    private val spokenStagesByManeuver = mutableMapOf<Int, MutableSet<String>>()
+    private var trackedRouteId: String? = null
 
     fun reset() {
         offRouteCount = 0
         lastRerouteRequestMs = 0L
         lastSpokenAlertIds.clear()
+        spokenStagesByManeuver.clear()
+        trackedRouteId = null
     }
 
     data class UpdateResult(
@@ -70,20 +74,28 @@ class NavigationSessionController {
             return UpdateResult(currentState, shouldReroute = false)
         }
 
+        if (trackedRouteId != route.id) {
+            spokenStagesByManeuver.clear()
+            trackedRouteId = route.id
+        }
+
         // 1. Orthogonal projection map matching (snap-to-road)
         val snap = snapToRoute(fix, route.shape)
         val bestIdx = snap.segmentIndex
         val bestDist = snap.distanceMeters
 
-        // 2. Off-route check (> 48 m away for 3 consecutive GPS updates)
-        val isOffRouteNow = bestDist > 48.0
+        // 2. Off-route check (> 48 m away for 3 consecutive updates) — disabled below 3 mph to prevent GPS drift reroutes
+        val isMovingFastEnoughToReroute = fix.speedMps >= MIN_REROUTE_SPEED_MPS
+        val isOffRouteNow = bestDist > 48.0 && isMovingFastEnoughToReroute
         if (isOffRouteNow) {
             offRouteCount++
         } else {
             offRouteCount = 0
         }
         val now = System.currentTimeMillis()
-        val shouldReroute = offRouteCount >= 3 && (now - lastRerouteRequestMs > 12_000L)
+        val shouldReroute = isMovingFastEnoughToReroute &&
+            offRouteCount >= 3 &&
+            (now - lastRerouteRequestMs > 12_000L)
         if (shouldReroute) {
             lastRerouteRequestMs = now
             offRouteCount = 0
@@ -129,10 +141,12 @@ class NavigationSessionController {
         val hasArrived = distToDest < 35.0 && remainingDistance < 60.0
 
         // 6. Speed-aware & road-class-aware voice timing
+        // Never speak maneuver prompts while moving under 2 mph, and speak each stage only once per maneuver.
         val isHighway = upcomingManeuver.isHighwayRoad || fix.speedMps >= 20f
         val speedLeadMeters = max(0.0, fix.speedMps * 4.5)
-        val stageKey: String? = when {
+        val rawStageKey: String? = when {
             hasArrived -> "arrived"
+            fix.speedMps < MIN_VOICE_SPEED_MPS -> null
             isHighway -> when {
                 distToNextManeuver in (2950.0..3450.0) -> "hw_2mi"
                 distToNextManeuver in (1450.0..1780.0) -> "hw_1mi"
@@ -146,7 +160,14 @@ class NavigationSessionController {
                 else -> null
             }
         }
-        val maneuverToSpeak = stageKey?.let { upcomingManeuver to it }
+        val maneuverToSpeak = rawStageKey?.let { stage ->
+            val spokenForManeuver = spokenStagesByManeuver.getOrPut(upcomingManeuver.index) { mutableSetOf() }
+            if (spokenForManeuver.add(stage)) {
+                upcomingManeuver to stage
+            } else {
+                null
+            }
+        }
 
         // 7. Phase 3: Early Sygic-style Lane Strip visibility (~1 mi highway, ~1,000 ft city)
         // Strictly hidden if `upcomingManeuver.lanes` is empty — NEVER invented!
@@ -498,5 +519,13 @@ class NavigationSessionController {
             sum += OfflinePlaceSearchEngine.haversineMeters(a.lat, a.lon, b.lat, b.lon)
         }
         return sum
+    }
+
+    companion object {
+        /** 2 mph in meters per second — below this speed, maneuver prompts are suppressed after startup. */
+        const val MIN_VOICE_SPEED_MPS = 0.89408f
+
+        /** 3 mph in meters per second — below this speed, GPS drift will not trigger rerouting. */
+        const val MIN_REROUTE_SPEED_MPS = 1.34112f
     }
 }

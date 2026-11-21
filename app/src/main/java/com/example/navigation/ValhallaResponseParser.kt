@@ -45,6 +45,9 @@ object ValhallaResponseParser {
             put("use_tolls", if (options.avoidTolls) 0.0 else 0.5)
             put("use_highways", if (options.avoidHighways) 0.0 else 1.0)
             put("use_ferry", if (options.avoidFerries) 0.0 else 0.5)
+            if (options.preferShortest) {
+                put("shortest", true)
+            }
         }
 
         return JSONObject().apply {
@@ -103,6 +106,77 @@ object ValhallaResponseParser {
 
         // Fastest route is always selected by default at index 0
         return routes.sortedBy { it.durationSeconds }
+    }
+
+    /**
+     * Combines fastest-costing routes with an optional shortest-costing route so that:
+     *  - When the shortest route differs meaningfully from the fastest route, it is ALWAYS
+     *    included in the preview options (up to 3 total routes) and tagged `isShortestRoute = true`.
+     *  - Index 0 reflects the user's RoutePreference (`preferShortest = true` puts Shortest first;
+     *    default `FASTEST` puts Fastest first).
+     */
+    fun mergeFastestAndShortestRoutes(
+        fastestRoutes: List<OfflineRoute>,
+        shortestRoute: OfflineRoute?,
+        preferShortest: Boolean
+    ): List<OfflineRoute> {
+        if (fastestRoutes.isEmpty() && shortestRoute == null) return emptyList()
+        if (fastestRoutes.isEmpty()) {
+            return listOf(shortestRoute!!.copy(id = "route_shortest", isFastestRoute = true, isShortestRoute = true))
+        }
+
+        val sortedFastest = fastestRoutes.sortedBy { it.durationSeconds }
+        val primaryFastest = sortedFastest.first().copy(isFastestRoute = true)
+        val otherAlternates = sortedFastest.drop(1)
+
+        val candidateShortest = shortestRoute?.takeIf { s ->
+            // Shortest route is genuinely shorter or distinct from the primary fastest route
+            isDistinctRoute(s, primaryFastest)
+        }
+
+        val merged = mutableListOf<OfflineRoute>()
+        if (candidateShortest == null) {
+            // Fastest route is already the shortest route
+            merged.add(primaryFastest.copy(isFastestRoute = true, isShortestRoute = true))
+            merged.addAll(otherAlternates.take(2))
+        } else {
+            val taggedShortest = candidateShortest.copy(
+                id = "route_shortest",
+                isShortestRoute = true,
+                isFastestRoute = false
+            )
+            // Keep at most 1 non-duplicate alternate alongside fastest + shortest (3 cards max)
+            val extraAlt = otherAlternates.firstOrNull { alt ->
+                isDistinctRoute(alt, taggedShortest) && isDistinctRoute(alt, primaryFastest)
+            }
+            if (preferShortest) {
+                merged.add(taggedShortest)
+                merged.add(primaryFastest)
+                if (extraAlt != null) merged.add(extraAlt)
+            } else {
+                merged.add(primaryFastest)
+                merged.add(taggedShortest)
+                if (extraAlt != null) merged.add(extraAlt)
+            }
+        }
+        return merged.take(3)
+    }
+
+    private fun isDistinctRoute(a: OfflineRoute, b: OfflineRoute): Boolean {
+        val distDiff = abs(a.distanceMeters - b.distanceMeters)
+        val timeDiff = abs(a.durationSeconds - b.durationSeconds)
+        val pctDistDiff = if (b.distanceMeters > 1.0) distDiff / b.distanceMeters else 0.0
+        if (distDiff >= 100.0 || pctDistDiff >= 0.02 || timeDiff >= 20.0) {
+            return true
+        }
+        // Check midpoint divergence in case distance & duration are nearly identical on different streets
+        if (a.shape.size >= 3 && b.shape.size >= 3) {
+            val midA = a.shape[a.shape.size / 2]
+            val midB = b.shape[b.shape.size / 2]
+            val midDist = OfflinePlaceSearchEngine.haversineMeters(midA.lat, midA.lon, midB.lat, midB.lon)
+            if (midDist >= 120.0) return true
+        }
+        return false
     }
 
     private fun parseSingleTrip(trip: JSONObject, routeIndex: Int): OfflineRoute {

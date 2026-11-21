@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
+import com.example.navigation.RoutePreference
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -32,6 +33,7 @@ data class UserSettings(
     val alertSchoolZoneEnabled: Boolean = true,
     val alertStopSignEnabled: Boolean = false, // Optional — OFF by default
     val is3DView: Boolean = true,
+    val routePreference: RoutePreference = RoutePreference.FASTEST,
     val avoidTolls: Boolean = false,
     val avoidHighways: Boolean = false,
     val avoidFerries: Boolean = false,
@@ -84,6 +86,7 @@ class UserPreferencesRepository(private val context: Context) {
         val ALERT_SCHOOL_ZONE = booleanPreferencesKey("alert_school_zone")
         val ALERT_STOP_SIGN = booleanPreferencesKey("alert_stop_sign")
         val IS_3D_VIEW = booleanPreferencesKey("is_3d_view")
+        val ROUTE_PREFERENCE = stringPreferencesKey("route_preference")
         val AVOID_TOLLS = booleanPreferencesKey("avoid_tolls")
         val AVOID_HIGHWAYS = booleanPreferencesKey("avoid_highways")
         val AVOID_FERRIES = booleanPreferencesKey("avoid_ferries")
@@ -112,6 +115,8 @@ class UserPreferencesRepository(private val context: Context) {
             alertSchoolZoneEnabled = prefs[Keys.ALERT_SCHOOL_ZONE] ?: true,
             alertStopSignEnabled = prefs[Keys.ALERT_STOP_SIGN] ?: false,
             is3DView = prefs[Keys.IS_3D_VIEW] ?: true,
+            routePreference = RoutePreference.entries.find { it.code == prefs[Keys.ROUTE_PREFERENCE] }
+                ?: RoutePreference.FASTEST,
             avoidTolls = prefs[Keys.AVOID_TOLLS] ?: false,
             avoidHighways = prefs[Keys.AVOID_HIGHWAYS] ?: false,
             avoidFerries = prefs[Keys.AVOID_FERRIES] ?: false,
@@ -179,6 +184,10 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun set3DView(enabled: Boolean) {
         context.rahYabDataStore.edit { it[Keys.IS_3D_VIEW] = enabled }
+    }
+
+    suspend fun setRoutePreference(preference: RoutePreference) {
+        context.rahYabDataStore.edit { it[Keys.ROUTE_PREFERENCE] = preference.code }
     }
 
     suspend fun setAvoidTolls(avoid: Boolean) {

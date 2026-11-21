@@ -71,6 +71,7 @@ import com.example.i18n.DistanceUnit
 import com.example.i18n.LocalAppLanguage
 import com.example.i18n.LocalAppStrings
 import com.example.i18n.MapThemeMode
+import com.example.navigation.RoutePreference
 import com.example.ui.RahYabViewModel
 import com.example.ui.theme.AlertAmber
 import com.example.ui.theme.AlertRed
@@ -444,6 +445,30 @@ fun SettingsScreen(
                 title = strings.sectionRoutingDefaults,
                 icon = Icons.Filled.Route
             ) {
+                Text(strings.routePreferenceLabel, style = MaterialTheme.typography.labelLarge)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = settings.routePreference == RoutePreference.FASTEST,
+                        onClick = { viewModel.setRoutePreference(RoutePreference.FASTEST) },
+                        label = { Text(strings.routePrimary) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("route_pref_fastest_chip")
+                    )
+                    FilterChip(
+                        selected = settings.routePreference == RoutePreference.SHORTEST,
+                        onClick = { viewModel.setRoutePreference(RoutePreference.SHORTEST) },
+                        label = { Text(strings.routeShortest) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("route_pref_shortest_chip")
+                    )
+                }
+
+                HorizontalDivider()
                 SettingsToggleRow(
                     label = strings.avoidTolls,
                     checked = settings.avoidTolls,

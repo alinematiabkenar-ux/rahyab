@@ -116,6 +116,11 @@ data class AheadAlert(
     val userReportId: Long? = null
 )
 
+enum class RoutePreference(val code: String) {
+    FASTEST("fastest"),
+    SHORTEST("shortest")
+}
+
 data class OfflineRoute(
     val id: String,
     val summaryLabel: String,
@@ -127,13 +132,16 @@ data class OfflineRoute(
     val roadAlerts: List<AheadAlert> = emptyList(),
     val crossesStateLines: Boolean = false,
     val statesCrossed: List<String> = emptyList(),
-    val hasTolls: Boolean = false
+    val hasTolls: Boolean = false,
+    val isFastestRoute: Boolean = false,
+    val isShortestRoute: Boolean = false
 )
 
 data class RouteOptions(
     val avoidTolls: Boolean = false,
     val avoidHighways: Boolean = false,
     val avoidFerries: Boolean = false,
+    val preferShortest: Boolean = false,
     val avoidLocations: List<LatLon> = emptyList() // Active user-reported road closures
 )
 

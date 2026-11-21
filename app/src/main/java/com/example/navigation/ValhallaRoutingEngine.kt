@@ -62,12 +62,19 @@ class ValhallaRoutingEngine(
         headingDegrees: Float? = null,
         allowDevOnlineFallback: Boolean = false
     ): Result<List<OfflineRoute>> = withContext(Dispatchers.IO) {
-        val requestJson = ValhallaResponseParser.buildRouteRequestJson(
+        val fastestRequestJson = ValhallaResponseParser.buildRouteRequestJson(
             origin = origin,
             destination = destination,
-            options = options,
+            options = options.copy(preferShortest = false),
             headingDegrees = headingDegrees,
             alternatesCount = 2
+        )
+        val shortestRequestJson = ValhallaResponseParser.buildRouteRequestJson(
+            origin = origin,
+            destination = destination,
+            options = options.copy(preferShortest = true),
+            headingDegrees = headingDegrees,
+            alternatesCount = 0
         )
 
         val installedCodes = packManager.getInstalledRoutingPackCodes()
@@ -94,12 +101,20 @@ class ValhallaRoutingEngine(
                 mutex.withLock {
                     val engine = getOrCreateLocalValhalla(hasLocalTiles, tarFiles)
                         ?: throw IllegalStateException("Valhalla routing engine could not initialize for installed tiles.")
-                    val rawJson = engine.routeRaw(requestJson)
-                    val parsed = ValhallaResponseParser.parseRoutes(rawJson)
-                    if (parsed.isEmpty()) {
+                    val fastestRaw = engine.routeRaw(fastestRequestJson)
+                    val fastestParsed = ValhallaResponseParser.parseRoutes(fastestRaw)
+                    val shortestParsed = runCatching {
+                        ValhallaResponseParser.parseRoutes(engine.routeRaw(shortestRequestJson)).firstOrNull()
+                    }.getOrNull()
+                    val merged = ValhallaResponseParser.mergeFastestAndShortestRoutes(
+                        fastestRoutes = fastestParsed,
+                        shortestRoute = shortestParsed,
+                        preferShortest = options.preferShortest
+                    )
+                    if (merged.isEmpty()) {
                         throw IllegalStateException("No offline route found between these locations.")
                     }
-                    Result.success(parsed)
+                    Result.success(merged)
                 }
             } catch (ule: UnsatisfiedLinkError) {
                 Result.failure(
@@ -120,24 +135,19 @@ class ValhallaRoutingEngine(
         // 2. Temporary Developer Option: Public Valhalla server (FOSSGIS / openstreetmap.de)
         if (allowDevOnlineFallback) {
             return@withContext runCatching {
-                val mediaType = "application/json; charset=utf-8".toMediaType()
-                val req = Request.Builder()
-                    .url(DEV_PUBLIC_VALHALLA_URL)
-                    .header("User-Agent", "RahYab-Android-Nav/1.1")
-                    .post(requestJson.toRequestBody(mediaType))
-                    .build()
-
-                httpClient.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        throw IllegalStateException("Dev online Valhalla returned HTTP ${resp.code}: $body")
-                    }
-                    val parsed = ValhallaResponseParser.parseRoutes(body)
-                    if (parsed.isEmpty()) {
-                        throw IllegalStateException("No route returned from public Valhalla test server.")
-                    }
-                    parsed
+                val fastestParsed = executeOnlineValhallaRequest(fastestRequestJson)
+                val shortestParsed = runCatching {
+                    executeOnlineValhallaRequest(shortestRequestJson).firstOrNull()
+                }.getOrNull()
+                val merged = ValhallaResponseParser.mergeFastestAndShortestRoutes(
+                    fastestRoutes = fastestParsed,
+                    shortestRoute = shortestParsed,
+                    preferShortest = options.preferShortest
+                )
+                if (merged.isEmpty()) {
+                    throw IllegalStateException("No route returned from public Valhalla test server.")
                 }
+                merged
             }
         }
 
@@ -146,6 +156,23 @@ class ValhallaRoutingEngine(
                 "Offline routing tiles are not installed for this area. Download or import a state pack in Download Maps."
             )
         )
+    }
+
+    private fun executeOnlineValhallaRequest(requestJson: String): List<OfflineRoute> {
+        val mediaType = "application/json; charset=utf-8".toMediaType()
+        val req = Request.Builder()
+            .url(DEV_PUBLIC_VALHALLA_URL)
+            .header("User-Agent", "RahYab-Android-Nav/1.1")
+            .post(requestJson.toRequestBody(mediaType))
+            .build()
+
+        return httpClient.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw IllegalStateException("Dev online Valhalla returned HTTP ${resp.code}: $body")
+            }
+            ValhallaResponseParser.parseRoutes(body)
+        }
     }
 
     private fun getOrCreateLocalValhalla(

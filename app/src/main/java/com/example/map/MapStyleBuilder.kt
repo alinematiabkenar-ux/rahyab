@@ -34,6 +34,8 @@ object MapStyleBuilder {
     const val LAYER_GPS_ACCURACY = "rahyab_gps_accuracy_fill"
     const val LAYER_GPS_ACCURACY_OUTLINE = "rahyab_gps_accuracy_outline"
     const val LAYER_GPS_PUCK = "rahyab_gps_puck_circle"
+    const val LAYER_GPS_ARROW = "rahyab_gps_arrow_symbol"
+    const val IMAGE_USER_ARROW = "rahyab_user_heading_arrow"
 
     const val ROUTE_COLOR_0 = "#00A8E8" // Cyan-Blue (Fastest / Route 1)
     const val ROUTE_COLOR_1 = "#10B981" // Emerald (Alternative 1)
@@ -422,10 +424,23 @@ object MapStyleBuilder {
             put("type", "circle")
             put("source", SOURCE_GPS_PUCK)
             put("paint", JSONObject().apply {
-                put("circle-radius", 9.5)
+                put("circle-radius", 8.5)
                 put("circle-color", "#00D4C8")
-                put("circle-stroke-width", 3.0)
+                put("circle-stroke-width", 2.5)
                 put("circle-stroke-color", "#FFFFFF")
+            })
+        })
+        layers.put(JSONObject().apply {
+            put("id", LAYER_GPS_ARROW)
+            put("type", "symbol")
+            put("source", SOURCE_GPS_PUCK)
+            put("layout", JSONObject().apply {
+                put("icon-image", IMAGE_USER_ARROW)
+                put("icon-size", 0.95)
+                put("icon-rotate", JSONArray().put("get").put("bearing"))
+                put("icon-rotation-alignment", "map")
+                put("icon-allow-overlap", true)
+                put("icon-ignore-placement", true)
             })
         })
 

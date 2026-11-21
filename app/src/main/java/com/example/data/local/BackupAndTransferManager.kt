@@ -4,6 +4,7 @@ import com.example.data.preferences.UserSettings
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
+import com.example.navigation.RoutePreference
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -94,6 +95,7 @@ object BackupAndTransferManager {
             put("alertSchoolZoneEnabled", settings.alertSchoolZoneEnabled)
             put("alertStopSignEnabled", settings.alertStopSignEnabled)
             put("is3DView", settings.is3DView)
+            put("routePreference", settings.routePreference.code)
             put("avoidTolls", settings.avoidTolls)
             put("avoidHighways", settings.avoidHighways)
             put("avoidFerries", settings.avoidFerries)
@@ -145,6 +147,8 @@ object BackupAndTransferManager {
                 alertSchoolZoneEnabled = s.optBoolean("alertSchoolZoneEnabled", true),
                 alertStopSignEnabled = s.optBoolean("alertStopSignEnabled", false),
                 is3DView = s.optBoolean("is3DView", true),
+                routePreference = RoutePreference.entries.find { it.code == s.optString("routePreference") }
+                    ?: RoutePreference.FASTEST,
                 avoidTolls = s.optBoolean("avoidTolls", false),
                 avoidHighways = s.optBoolean("avoidHighways", false),
                 avoidFerries = s.optBoolean("avoidFerries", false),
