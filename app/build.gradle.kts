@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.rahyab.kqzmxv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 3
-    versionName = "3.0"
+    versionCode = 5
+    versionName = "5.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
