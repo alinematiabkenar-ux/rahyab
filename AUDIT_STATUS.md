@@ -44,7 +44,11 @@
 | 23 | FIXED | Updated `data-pipeline/build_state_pack.py` to add `direction` & `osm_id` columns to `road_hazards`, extract `highway=speed_camera` nodes and `type=enforcement` (`maxspeed` -> `speed_camera`, `traffic_signals` -> `red_light_camera`) relations with `device` position, `from` travel bearing, `direction` tag, `maxspeed` (mph), deduplication, and printed counts (`.github/workflows/build-map-packs.yml` untouched). |
 | 24 | FIXED | Added zoom >= 13 speed/red-light camera map icons (`SOURCE_CAMERAS`/`LAYER_CAMERAS_SYMBOL`), direction- & lateral-offset-filtered ahead warnings (~315 m city / ~420 m highway, once per camera) in both active navigation/simulation (1x–32x) and free driving, alert chime + EN/FA voice with optional speed limit, two Settings toggles (ON by default) + backup sync, and backward-compatible `PRAGMA table_info` schema probing for older map packs. |
 
-## GROUP 6: OPEN ADDRESSES FROM OTHER APPS — PENDING
+## GROUP 6: OPEN ADDRESSES FROM OTHER APPS — IN PROGRESS
+| # | Status | Note |
+|---|---|---|
+| 25 | FIXED | Added `VIEW` intent filters on `MainActivity` for `geo:`, `https` hosts `maps.google.com`, `maps.app.goo.gl`, `maps.apple.com`, path-prefixed `www.google.com/maps` and `google.com/maps`, plus `ACTION_SEND` `text/plain` for the Android Share menu. |
+
 ## GROUP 7: PERSIAN VOICE ENGINE — PENDING
 ## GROUP 8: ONLINE FEATURES WITHOUT KEYS — PENDING
 ## GROUP 9: SIMULATION — PENDING

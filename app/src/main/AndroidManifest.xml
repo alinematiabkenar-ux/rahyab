@@ -42,6 +42,40 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Tap geo: links in contacts, messages, calendar, and other apps -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="geo" />
+            </intent-filter>
+
+            <!-- Direct map host HTTPS links (any path) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="maps.google.com" />
+                <data android:scheme="https" android:host="maps.app.goo.gl" />
+                <data android:scheme="https" android:host="maps.apple.com" />
+            </intent-filter>
+
+            <!-- Google Maps path-prefixed HTTPS links -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.google.com" android:pathPrefix="/maps" />
+                <data android:scheme="https" android:host="google.com" android:pathPrefix="/maps" />
+            </intent-filter>
+
+            <!-- Share an address or map link to RahYab via Android Share menu -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
         <service
