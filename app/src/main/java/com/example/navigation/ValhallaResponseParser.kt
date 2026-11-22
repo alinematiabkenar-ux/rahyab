@@ -9,6 +9,7 @@ import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -77,6 +78,160 @@ object ValhallaResponseParser {
                 put("exclude_locations", avoidArr)
             }
         }.toString()
+    }
+
+    /**
+     * Builds a Valhalla `trace_attributes` JSON request using `shape_match: "edge_walk"` to fetch
+     * real OSM edge speed limits (`edge.speed_limit` in km/h), shape index spans, and `edge.lane_count`
+     * along a calculated route shape.
+     */
+    fun buildTraceAttributesRequestJson(encodedPolyline6: String): String {
+        return JSONObject().apply {
+            put("encoded_polyline", encodedPolyline6)
+            put("shape_match", "edge_walk")
+            put("costing", "auto")
+            put("units", "kilometers")
+            put("filters", JSONObject().apply {
+                put(
+                    "attributes",
+                    JSONArray()
+                        .put("edge.speed_limit")
+                        .put("edge.begin_shape_index")
+                        .put("edge.end_shape_index")
+                        .put("edge.lane_count")
+                )
+                put("action", "include")
+            })
+        }.toString()
+    }
+
+    data class TraceAttributesData(
+        val speedLimitsByShapeIndex: Map<Int, Int>,
+        val laneCountsByShapeIndex: Map<Int, Int>
+    )
+
+    /**
+     * Parses Valhalla `trace_attributes` response JSON into per-shape-index speed limits (mph,
+     * converted from Valhalla's km/h values; missing/zero/unlimited values are strictly ignored)
+     * and per-shape-index lane counts.
+     */
+    fun parseTraceAttributes(traceJson: String, shapeSize: Int): TraceAttributesData {
+        if (traceJson.isBlank() || shapeSize <= 0) {
+            return TraceAttributesData(emptyMap(), emptyMap())
+        }
+        val root = JSONObject(traceJson)
+        if (root.has("error_code") || root.has("error")) {
+            return TraceAttributesData(emptyMap(), emptyMap())
+        }
+        val edges = root.optJSONArray("edges") ?: return TraceAttributesData(emptyMap(), emptyMap())
+        val speedLimits = mutableMapOf<Int, Int>()
+        val laneCounts = mutableMapOf<Int, Int>()
+        val lastIdx = shapeSize - 1
+
+        for (i in 0 until edges.length()) {
+            val edge = edges.optJSONObject(i) ?: continue
+            val beginRaw = edge.optInt("begin_shape_index", -1)
+            val endRaw = edge.optInt("end_shape_index", -1)
+            if (beginRaw < 0 || endRaw < beginRaw) continue
+            val beginIdx = beginRaw.coerceIn(0, lastIdx)
+            val endIdx = endRaw.coerceIn(beginIdx, lastIdx)
+
+            // Valhalla returns edge.speed_limit in km/h (0 or omitted or 255 = unlimited/unknown)
+            val speedKph = if (edge.has("speed_limit") && !edge.isNull("speed_limit")) {
+                edge.optDouble("speed_limit", 0.0)
+            } else {
+                0.0
+            }
+            if (speedKph > 0.0 && speedKph < 250.0) {
+                val speedMph = (speedKph * 0.621371).roundToInt().coerceIn(5, 85)
+                for (idx in beginIdx..endIdx) {
+                    speedLimits[idx] = speedMph
+                }
+            }
+
+            val laneCount = if (edge.has("lane_count") && !edge.isNull("lane_count")) {
+                edge.optInt("lane_count", 0)
+            } else {
+                0
+            }
+            if (laneCount > 0) {
+                for (idx in beginIdx..endIdx) {
+                    laneCounts[idx] = laneCount
+                }
+            }
+        }
+
+        return TraceAttributesData(
+            speedLimitsByShapeIndex = speedLimits,
+            laneCountsByShapeIndex = laneCounts
+        )
+    }
+
+    /**
+     * Enriches an [OfflineRoute] with real OSM speed limits and edge lane counts returned by
+     * Valhalla's `trace_attributes` action. Never invents speed limits where OSM data is absent.
+     */
+    fun enrichRouteWithTraceAttributes(route: OfflineRoute, traceJson: String): OfflineRoute {
+        if (route.shape.isEmpty() || traceJson.isBlank()) return route
+        val traceData = runCatching { parseTraceAttributes(traceJson, route.shape.size) }.getOrNull()
+            ?: return route
+        if (traceData.speedLimitsByShapeIndex.isEmpty() && traceData.laneCountsByShapeIndex.isEmpty()) {
+            return route
+        }
+
+        val mergedSpeedLimits = LinkedHashMap<Int, Int>(route.speedLimitsByShapeIndex.size + traceData.speedLimitsByShapeIndex.size)
+        mergedSpeedLimits.putAll(route.speedLimitsByShapeIndex)
+        mergedSpeedLimits.putAll(traceData.speedLimitsByShapeIndex)
+
+        val updatedManeuvers = route.maneuvers.map { maneuver ->
+            val edgeSpeedMph = mergedSpeedLimits[maneuver.beginShapeIndex]
+            val edgeLaneCount = traceData.laneCountsByShapeIndex[maneuver.beginShapeIndex] ?: 0
+            val finalLaneCount = maxOf(maneuver.laneCount, edgeLaneCount, maneuver.lanes.size)
+            val finalSpeedMph = maneuver.speedLimitMph ?: edgeSpeedMph
+            maneuver.copy(
+                speedLimitMph = finalSpeedMph,
+                laneCount = finalLaneCount,
+                isMultiLaneRoad = maneuver.isMultiLaneRoad ||
+                    finalLaneCount >= 2 ||
+                    (finalSpeedMph != null && finalSpeedMph >= 35)
+            )
+        }
+
+        // Detect any newly revealed >= 15 mph speed limit drops along the route
+        val existingDropIds = route.roadAlerts
+            .filter { it.kind == RoadAlertKind.SPEED_LIMIT_DROP }
+            .map { it.id }
+            .toSet()
+        val extraAlerts = mutableListOf<AheadAlert>()
+        var prevSpeed: Int? = null
+        for (m in updatedManeuvers) {
+            val curSpeed = m.speedLimitMph
+            if (curSpeed != null) {
+                val dropId = "speed_drop_${m.index}"
+                if (prevSpeed != null && (prevSpeed - curSpeed) >= 15 && dropId !in existingDropIds) {
+                    val faSpeed = BilingualFormatter.formatNumber(curSpeed, AppLanguage.PERSIAN)
+                    extraAlerts.add(
+                        AheadAlert(
+                            id = dropId,
+                            kind = RoadAlertKind.SPEED_LIMIT_DROP,
+                            lat = m.lat,
+                            lon = m.lon,
+                            distanceMeters = 0.0,
+                            titleEn = "Speed limit drops to $curSpeed ahead",
+                            titleFa = "سرعت مجاز جلوتر به $faSpeed مایل کاهش پیدا می‌کند",
+                            newSpeedLimitMph = curSpeed
+                        )
+                    )
+                }
+                prevSpeed = curSpeed
+            }
+        }
+
+        return route.copy(
+            maneuvers = updatedManeuvers,
+            speedLimitsByShapeIndex = mergedSpeedLimits,
+            roadAlerts = if (extraAlerts.isEmpty()) route.roadAlerts else route.roadAlerts + extraAlerts
+        )
     }
 
     /**
@@ -200,8 +355,11 @@ object ValhallaResponseParser {
             combinedShape.addAll(legPoints)
 
             val maneuversArr = leg.optJSONArray("maneuvers") ?: JSONArray()
+            val legEdgesArr = leg.optJSONArray("edges") ?: leg.optJSONArray("segments")
+            val legIntersectionsArr = leg.optJSONArray("intersections")
             var previousSpeedLimit: Int? = null
             var pendingApproachLanes: List<LaneInfo> = emptyList()
+            var pendingApproachDistanceMeters = 0.0
 
             for (m in 0 until maneuversArr.length()) {
                 val mObj = maneuversArr.optJSONObject(m) ?: continue
@@ -214,16 +372,50 @@ object ValhallaResponseParser {
                 val streetNames = parseStringArray(mObj.optJSONArray("street_names"))
                 val signpost = parseSignpost(mObj.optJSONObject("sign"))
 
-                // Phase 3: Parse real Valhalla turn_lanes on this maneuver OR on the approach
-                // segment right before the stop line. NEVER guess or invent lanes when absent!
-                val directLanes = parseTurnLanes(mObj)
-                val approachLanes = parseApproachSegmentLanes(mObj)
+                // Phase 3 & Banner Lane Guidance: Read real Valhalla lane data from the maneuver
+                // itself (turn_lanes / lanes / banner_instructions / intersections) AND from
+                // approaching road segments before the intersection. NEVER invent lanes when absent!
+                val directLanes = parseManeuverDirectLanes(mObj, type)
+                val approachLanesOnManeuver = parseApproachSegmentLanes(mObj)
+                val edgeApproachLanes = findApproachingEdgeLanes(
+                    edgesArr = legEdgesArr,
+                    intersectionsArr = legIntersectionsArr,
+                    shapeOffset = shapeOffset,
+                    maneuverBeginIdx = beginIdx,
+                    combinedShape = combinedShape,
+                    maneuverType = type
+                )
+
                 val resolvedLanes = when {
                     directLanes.isNotEmpty() -> directLanes
-                    pendingApproachLanes.isNotEmpty() && isTurnOrExitManeuver(type) -> pendingApproachLanes
+                    edgeApproachLanes.isNotEmpty() && isTurnOrExitManeuver(type) -> edgeApproachLanes
+                    pendingApproachLanes.isNotEmpty() &&
+                        pendingApproachDistanceMeters <= MAX_APPROACH_LANE_LOOKBACK_METERS &&
+                        isTurnOrExitManeuver(type) ->
+                        alignApproachLanesWithManeuver(pendingApproachLanes, type)
                     else -> emptyList()
                 }
-                pendingApproachLanes = approachLanes
+
+                // Track lane data stored on approaching road segments leading into the next turn
+                val segmentLengthMeters = mObj.optDouble("length", 0.0) * 1000.0
+                val carryFromThisSegment = when {
+                    approachLanesOnManeuver.isNotEmpty() -> approachLanesOnManeuver
+                    !isTurnOrExitManeuver(type) && directLanes.isNotEmpty() -> directLanes
+                    else -> emptyList()
+                }
+                if (carryFromThisSegment.isNotEmpty()) {
+                    pendingApproachLanes = carryFromThisSegment
+                    pendingApproachDistanceMeters = segmentLengthMeters
+                } else if (type == ManeuverType.STRAIGHT || type == ManeuverType.DEPART || type == ManeuverType.MERGE) {
+                    pendingApproachDistanceMeters += segmentLengthMeters
+                    if (pendingApproachDistanceMeters > MAX_APPROACH_LANE_LOOKBACK_METERS) {
+                        pendingApproachLanes = emptyList()
+                    }
+                } else {
+                    // A turn/exit consumed or ended the previous approach corridor
+                    pendingApproachLanes = emptyList()
+                    pendingApproachDistanceMeters = 0.0
+                }
 
                 val isToll = mObj.optBoolean("toll", false)
                 val isHighwayFlag = mObj.optBoolean("highway", false) ||
@@ -370,56 +562,335 @@ object ValhallaResponseParser {
         ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT
     )
 
+    private const val MAX_APPROACH_LANE_LOOKBACK_METERS = 1750.0
+
+    private fun parseManeuverDirectLanes(maneuverObj: JSONObject, type: ManeuverType): List<LaneInfo> {
+        val direct = parseTurnLanes(maneuverObj, type)
+        if (direct.isNotEmpty()) return direct
+
+        val bannerLanes = parseBannerInstructionLanes(maneuverObj, type)
+        if (bannerLanes.isNotEmpty()) return bannerLanes
+
+        val intersectionLanes = parseIntersectionLanes(maneuverObj.optJSONArray("intersections"), type)
+        if (intersectionLanes.isNotEmpty()) return intersectionLanes
+
+        return emptyList()
+    }
+
     private fun parseApproachSegmentLanes(maneuverObj: JSONObject): List<LaneInfo> {
         val approachArr = maneuverObj.optJSONArray("approach_lanes")
             ?: maneuverObj.optJSONArray("preceding_turn_lanes")
-            ?: return emptyList()
-        return parseLaneJsonArray(approachArr)
+            ?: maneuverObj.optJSONArray("approach_turn_lanes")
+        if (approachArr != null) {
+            val parsed = parseLaneJsonArray(approachArr, maneuverType = null)
+            if (parsed.isNotEmpty()) return parsed
+        }
+        // Intersections along this approaching segment (last intersection right before the next turn)
+        val intersections = maneuverObj.optJSONArray("intersections")
+        if (intersections != null) {
+            val parsed = parseIntersectionLanes(intersections, maneuverType = null)
+            if (parsed.isNotEmpty()) return parsed
+        }
+        return emptyList()
     }
 
-    fun parseTurnLanes(maneuverObj: JSONObject): List<LaneInfo> {
-        val rawArray = maneuverObj.optJSONArray("turn_lanes")
-            ?: maneuverObj.optJSONArray("lanes")
-            ?: return emptyList()
-        return parseLaneJsonArray(rawArray)
+    private fun findApproachingEdgeLanes(
+        edgesArr: JSONArray?,
+        intersectionsArr: JSONArray?,
+        shapeOffset: Int,
+        maneuverBeginIdx: Int,
+        combinedShape: List<LatLon>,
+        maneuverType: ManeuverType
+    ): List<LaneInfo> {
+        if (edgesArr != null && edgesArr.length() > 0) {
+            // Walk edges backwards from the intersection to find the closest approaching segment with real lanes
+            var bestEndIdx = -1
+            var bestLanes: List<LaneInfo> = emptyList()
+            for (i in 0 until edgesArr.length()) {
+                val edge = edgesArr.optJSONObject(i) ?: continue
+                val edgeEndIdx = shapeOffset + edge.optInt("end_shape_index", -1)
+                if (edgeEndIdx < 0 || edgeEndIdx > maneuverBeginIdx) continue
+                val distToTurn = shapeDistanceBetween(combinedShape, edgeEndIdx, maneuverBeginIdx)
+                if (distToTurn > MAX_APPROACH_LANE_LOOKBACK_METERS) continue
+                val lanes = parseTurnLanes(edge, maneuverType)
+                if (lanes.isNotEmpty() && edgeEndIdx >= bestEndIdx) {
+                    bestEndIdx = edgeEndIdx
+                    bestLanes = lanes
+                }
+            }
+            if (bestLanes.isNotEmpty()) {
+                return alignApproachLanesWithManeuver(bestLanes, maneuverType)
+            }
+        }
+        if (intersectionsArr != null && intersectionsArr.length() > 0) {
+            var bestIdx = -1
+            var bestLanes: List<LaneInfo> = emptyList()
+            for (i in 0 until intersectionsArr.length()) {
+                val inter = intersectionsArr.optJSONObject(i) ?: continue
+                val interShapeIdx = shapeOffset + inter.optInt("shape_index", -1)
+                if (interShapeIdx < 0 || interShapeIdx > maneuverBeginIdx) continue
+                val distToTurn = shapeDistanceBetween(combinedShape, interShapeIdx, maneuverBeginIdx)
+                if (distToTurn > MAX_APPROACH_LANE_LOOKBACK_METERS) continue
+                val rawLanes = inter.optJSONArray("lanes") ?: inter.optJSONArray("turn_lanes") ?: continue
+                val parsed = parseLaneJsonArray(rawLanes, maneuverType)
+                if (parsed.isNotEmpty() && interShapeIdx >= bestIdx) {
+                    bestIdx = interShapeIdx
+                    bestLanes = parsed
+                }
+            }
+            if (bestLanes.isNotEmpty()) {
+                return alignApproachLanesWithManeuver(bestLanes, maneuverType)
+            }
+        }
+        return emptyList()
     }
 
-    private fun parseLaneJsonArray(rawArray: JSONArray): List<LaneInfo> {
+    private fun shapeDistanceBetween(shape: List<LatLon>, fromIdx: Int, toIdx: Int): Double {
+        if (shape.size < 2 || fromIdx >= toIdx) return 0.0
+        val start = fromIdx.coerceIn(0, shape.lastIndex)
+        val end = toIdx.coerceIn(start, shape.lastIndex)
+        var sum = 0.0
+        for (i in start until end) {
+            sum += OfflinePlaceSearchEngine.haversineMeters(
+                shape[i].lat, shape[i].lon,
+                shape[i + 1].lat, shape[i + 1].lon
+            )
+        }
+        return sum
+    }
+
+    private fun parseBannerInstructionLanes(maneuverObj: JSONObject, maneuverType: ManeuverType?): List<LaneInfo> {
+        val banners = maneuverObj.optJSONArray("banner_instructions") ?: return emptyList()
+        for (i in 0 until banners.length()) {
+            val banner = banners.optJSONObject(i) ?: continue
+            val containers = listOfNotNull(
+                banner.optJSONObject("sub"),
+                banner.optJSONObject("primary")
+            )
+            for (container in containers) {
+                val comps = container.optJSONArray("components") ?: continue
+                val laneObjs = JSONArray()
+                for (c in 0 until comps.length()) {
+                    val comp = comps.optJSONObject(c) ?: continue
+                    if (comp.optString("type").equals("lane", ignoreCase = true)) {
+                        laneObjs.put(comp)
+                    }
+                }
+                if (laneObjs.length() > 0) {
+                    val parsed = parseLaneJsonArray(laneObjs, maneuverType)
+                    if (parsed.isNotEmpty()) return parsed
+                }
+            }
+        }
+        return emptyList()
+    }
+
+    private fun parseIntersectionLanes(intersectionsArr: JSONArray?, maneuverType: ManeuverType?): List<LaneInfo> {
+        if (intersectionsArr == null || intersectionsArr.length() == 0) return emptyList()
+        for (i in intersectionsArr.length() - 1 downTo 0) {
+            val inter = intersectionsArr.optJSONObject(i) ?: continue
+            val rawLanes = inter.optJSONArray("lanes") ?: inter.optJSONArray("turn_lanes") ?: continue
+            val parsed = parseLaneJsonArray(rawLanes, maneuverType)
+            if (parsed.isNotEmpty()) return parsed
+        }
+        return emptyList()
+    }
+
+    /**
+     * When lane arrows come from an approaching road segment before the turn, refine active
+     * directions for combined-arrow lanes so only the arrow(s) needed for [maneuverType] are
+     * highlighted (never inventing new lanes).
+     */
+    private fun alignApproachLanesWithManeuver(lanes: List<LaneInfo>, maneuverType: ManeuverType): List<LaneInfo> {
+        val preferredDirs = preferredDirectionsForManeuver(maneuverType)
+        val alreadyHasHighlight = lanes.any { it.isActive || it.isValid || it.isRecommended }
+        if (alreadyHasHighlight) {
+            return lanes.map { lane ->
+                if ((lane.isActive || lane.isValid) && lane.directions.size > 1 && lane.activeDirections.size == lane.directions.size) {
+                    val narrowed = lane.directions.filter { it in preferredDirs }
+                    if (narrowed.isNotEmpty()) lane.copy(activeDirections = narrowed) else lane
+                } else {
+                    lane
+                }
+            }
+        }
+        // Approaching segment had raw OSM turn:lanes without active/valid flags: highlight matching real lanes only
+        val hasMatchingLane = lanes.any { lane -> lane.directions.any { it in preferredDirs } }
+        if (!hasMatchingLane) return lanes
+        return lanes.map { lane ->
+            val matched = lane.directions.filter { it in preferredDirs }
+            if (matched.isNotEmpty()) {
+                lane.copy(
+                    activeDirections = matched,
+                    isRecommended = true,
+                    isActive = true,
+                    isValid = true
+                )
+            } else {
+                lane
+            }
+        }
+    }
+
+    private fun preferredDirectionsForManeuver(type: ManeuverType): Set<LaneDirection> = when (type) {
+        ManeuverType.LEFT -> setOf(LaneDirection.LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.SHARP_LEFT)
+        ManeuverType.SLIGHT_LEFT, ManeuverType.STAY_LEFT, ManeuverType.EXIT_LEFT, ManeuverType.RAMP_LEFT ->
+            setOf(LaneDirection.SLIGHT_LEFT, LaneDirection.LEFT)
+        ManeuverType.SHARP_LEFT -> setOf(LaneDirection.SHARP_LEFT, LaneDirection.LEFT)
+        ManeuverType.RIGHT -> setOf(LaneDirection.RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.SHARP_RIGHT)
+        ManeuverType.SLIGHT_RIGHT, ManeuverType.STAY_RIGHT, ManeuverType.EXIT_RIGHT, ManeuverType.RAMP_RIGHT ->
+            setOf(LaneDirection.SLIGHT_RIGHT, LaneDirection.RIGHT)
+        ManeuverType.SHARP_RIGHT -> setOf(LaneDirection.SHARP_RIGHT, LaneDirection.RIGHT)
+        ManeuverType.U_TURN_LEFT -> setOf(LaneDirection.U_TURN_LEFT, LaneDirection.LEFT)
+        ManeuverType.U_TURN_RIGHT -> setOf(LaneDirection.U_TURN_RIGHT, LaneDirection.RIGHT)
+        ManeuverType.MERGE -> setOf(LaneDirection.THROUGH, LaneDirection.MERGE_LEFT, LaneDirection.MERGE_RIGHT)
+        ManeuverType.STRAIGHT, ManeuverType.DEPART -> setOf(LaneDirection.THROUGH)
+        else -> emptySet()
+    }
+
+    fun parseTurnLanes(maneuverObj: JSONObject, maneuverType: ManeuverType? = null): List<LaneInfo> {
+        val rawArray = maneuverObj.optJSONArray("lanes")
+            ?: maneuverObj.optJSONArray("turn_lanes")
+            ?: return emptyList()
+        return parseLaneJsonArray(rawArray, maneuverType)
+    }
+
+    private fun parseLaneJsonArray(rawArray: JSONArray, maneuverType: ManeuverType? = null): List<LaneInfo> {
         if (rawArray.length() == 0) return emptyList()
+
+        // Detect whether legacy boolean-style payloads explicitly distinguish `active` vs `valid`
+        var anyLegacyExplicitActive = false
+        for (i in 0 until rawArray.length()) {
+            val laneObj = rawArray.optJSONObject(i) ?: continue
+            val rawActive = laneObj.opt("active")
+            if ((rawActive is Boolean && rawActive) ||
+                (rawActive is Number && rawActive.toInt() != 0) ||
+                laneObj.optInt("active_direction", 0) > 0 ||
+                laneObj.optString("active_direction", "").isNotBlank()
+            ) {
+                anyLegacyExplicitActive = true
+                break
+            }
+        }
+
+        val preferredDirs = maneuverType?.let { preferredDirectionsForManeuver(it) }.orEmpty()
         val result = mutableListOf<LaneInfo>()
         for (i in 0 until rawArray.length()) {
             val laneObj = rawArray.optJSONObject(i) ?: continue
             val dirs = mutableListOf<LaneDirection>()
             val activeDirs = mutableListOf<LaneDirection>()
 
-            val indicationsArr = laneObj.optJSONArray("indications")
-                ?: laneObj.optJSONArray("directions")
-            if (indicationsArr != null) {
-                for (j in 0 until indicationsArr.length()) {
-                    parseLaneDirectionToken(indicationsArr.optString(j))?.let { dirs.add(it) }
-                }
-            } else if (laneObj.has("directions_mask")) {
-                dirs.addAll(decodeValhallaTurnLaneMask(laneObj.optInt("directions_mask")))
-            }
-
-            val activeMask = laneObj.optInt("active_direction", 0)
-            if (activeMask > 0) {
-                activeDirs.addAll(decodeValhallaTurnLaneMask(activeMask))
+            // 1. Official Valhalla format: "directions" is an integer bitmask (always present).
+            //    Fall back to JSON array, semicolon/pipe-delimited string, or "directions_mask".
+            val rawDirections = laneObj.opt("directions")
+            val directionsInt = if (rawDirections is Number) laneObj.optInt("directions", 0) else 0
+            if (directionsInt > 0) {
+                dirs.addAll(decodeValhallaTurnLaneMask(directionsInt))
             } else {
-                val activeStr = laneObj.optString("active_direction", "")
-                parseLaneDirectionToken(activeStr)?.let { activeDirs.add(it) }
+                val indicationsArr = laneObj.optJSONArray("directions")
+                    ?: laneObj.optJSONArray("indications")
+                if (indicationsArr != null) {
+                    for (j in 0 until indicationsArr.length()) {
+                        parseLaneDirectionToken(indicationsArr.optString(j))?.let { dirs.add(it) }
+                    }
+                } else if (rawDirections is String && rawDirections.isNotBlank()) {
+                    rawDirections.split(';', '|', ',').forEach { token ->
+                        parseLaneDirectionToken(token)?.let { dirs.add(it) }
+                    }
+                } else if (laneObj.has("directions_mask")) {
+                    dirs.addAll(decodeValhallaTurnLaneMask(laneObj.optInt("directions_mask", 0)))
+                }
             }
 
-            val valid = laneObj.optBoolean("valid", false) ||
-                laneObj.optBoolean("active", false) ||
-                activeDirs.isNotEmpty()
+            // 2. Official Valhalla format: "active" and "valid" are optional integer bitmasks.
+            //    - Best lane (`ACTIVE`): `active` bitmask is non-zero
+            //    - Allowed lane (`VALID`): `valid` bitmask is non-zero (and `active` is zero)
+            //    - activeDirections = decode(active) if non-zero, else decode(valid)
+            val rawActive = laneObj.opt("active")
+            val rawValid = laneObj.opt("valid")
+            val activeBitmask = if (rawActive is Number) laneObj.optInt("active", 0) else 0
+            val validBitmask = if (rawValid is Number) laneObj.optInt("valid", 0) else 0
+            val isOfficialBitmaskLane = (rawDirections is Number) || (rawActive is Number) || (rawValid is Number)
+
+            val isActive: Boolean
+            val isValid: Boolean
+            if (isOfficialBitmaskLane && rawActive !is Boolean && rawValid !is Boolean) {
+                if (activeBitmask != 0) {
+                    activeDirs.addAll(decodeValhallaTurnLaneMask(activeBitmask))
+                } else if (validBitmask != 0) {
+                    activeDirs.addAll(decodeValhallaTurnLaneMask(validBitmask))
+                }
+                isActive = activeBitmask != 0
+                isValid = validBitmask != 0 || activeBitmask != 0
+            } else {
+                // Fallback for legacy / Mapbox-style JSON payloads (boolean valid/active + string active_direction)
+                val activeDirMask = laneObj.optInt("active_direction", 0)
+                if (activeDirMask > 0) {
+                    activeDirs.addAll(decodeValhallaTurnLaneMask(activeDirMask))
+                } else {
+                    val activeStr = laneObj.optString("active_direction", "")
+                    parseLaneDirectionToken(activeStr)?.let { activeDirs.add(it) }
+                }
+                val validIndication = laneObj.optString("valid_indication", "")
+                if (validIndication.isNotBlank()) {
+                    parseLaneDirectionToken(validIndication)?.let { activeDirs.add(it) }
+                }
+                val activeDirsArr = laneObj.optJSONArray("active_directions")
+                if (activeDirsArr != null) {
+                    for (j in 0 until activeDirsArr.length()) {
+                        parseLaneDirectionToken(activeDirsArr.optString(j))?.let { activeDirs.add(it) }
+                    }
+                }
+
+                val hasActiveBool = rawActive is Boolean
+                val explicitActive = (rawActive as? Boolean) == true
+                val explicitValid = (rawValid as? Boolean) == true
+                val hasExplicitActiveDir = activeDirMask > 0 || laneObj.optString("active_direction", "").isNotBlank()
+
+                when {
+                    hasActiveBool -> {
+                        isActive = explicitActive
+                        isValid = explicitValid || explicitActive
+                    }
+                    hasExplicitActiveDir -> {
+                        isActive = true
+                        isValid = true
+                    }
+                    explicitValid -> {
+                        isActive = !anyLegacyExplicitActive
+                        isValid = true
+                    }
+                    else -> {
+                        isActive = false
+                        isValid = false
+                    }
+                }
+            }
+
+            val isRecommended = isActive || isValid
+            val level = when {
+                isActive -> LaneHighlightTier.ACTIVE
+                isValid -> LaneHighlightTier.VALID
+                else -> LaneHighlightTier.INACTIVE
+            }
 
             if (dirs.isNotEmpty()) {
+                val distinctDirs = dirs.distinct()
+                val resolvedActiveDirs = when {
+                    activeDirs.isNotEmpty() -> activeDirs.distinct().filter { it in distinctDirs }.ifEmpty { activeDirs.distinct() }
+                    isRecommended && distinctDirs.size > 1 && preferredDirs.isNotEmpty() ->
+                        distinctDirs.filter { it in preferredDirs }.ifEmpty { distinctDirs }
+                    isRecommended -> distinctDirs
+                    else -> emptyList()
+                }
                 result.add(
                     LaneInfo(
-                        directions = dirs.distinct(),
-                        activeDirections = if (activeDirs.isNotEmpty()) activeDirs.distinct() else if (valid) dirs.distinct() else emptyList(),
-                        isRecommended = valid
+                        directions = distinctDirs,
+                        activeDirections = resolvedActiveDirs,
+                        isRecommended = isRecommended,
+                        isActive = isActive,
+                        isValid = isValid,
+                        level = level
                     )
                 )
             }
@@ -436,13 +907,20 @@ object ValhallaResponseParser {
             "slight_right", "slight right" -> LaneDirection.SLIGHT_RIGHT
             "right" -> LaneDirection.RIGHT
             "sharp_right", "sharp right" -> LaneDirection.SHARP_RIGHT
-            "reverse", "uturn", "u_turn", "uturn_left", "reverse_left" -> LaneDirection.U_TURN_LEFT
+            "reverse", "uturn", "u_turn", "uturn_left", "reverse_left", "u-turn" -> LaneDirection.U_TURN_LEFT
             "uturn_right", "reverse_right" -> LaneDirection.U_TURN_RIGHT
+            "merge_to_left", "merge_left", "merge left" -> LaneDirection.MERGE_LEFT
+            "merge_to_right", "merge_right", "merge right" -> LaneDirection.MERGE_RIGHT
             else -> null
         }
     }
 
-    private fun decodeValhallaTurnLaneMask(mask: Int): List<LaneDirection> {
+    /**
+     * Decodes an official Valhalla turn lane bitmask into ordered [LaneDirection] values:
+     * 1 None, 2 Through, 4 SharpLeft, 8 Left, 16 SlightLeft, 32 SlightRight,
+     * 64 Right, 128 SharpRight, 256 Reverse (U-turn), 512 MergeToLeft, 1024 MergeToRight.
+     */
+    internal fun decodeValhallaTurnLaneMask(mask: Int): List<LaneDirection> {
         val list = mutableListOf<LaneDirection>()
         if ((mask and 4) != 0) list.add(LaneDirection.SHARP_LEFT)
         if ((mask and 8) != 0) list.add(LaneDirection.LEFT)
@@ -452,6 +930,13 @@ object ValhallaResponseParser {
         if ((mask and 64) != 0) list.add(LaneDirection.RIGHT)
         if ((mask and 128) != 0) list.add(LaneDirection.SHARP_RIGHT)
         if ((mask and 256) != 0) list.add(LaneDirection.U_TURN_LEFT)
+        if ((mask and 512) != 0) list.add(LaneDirection.MERGE_LEFT)
+        if ((mask and 1024) != 0) list.add(LaneDirection.MERGE_RIGHT)
+        // Valhalla bit 1 = kNone (unmarked OSM lane, e.g. `turn:lanes=left|none|right`):
+        // if no directional bits are set, represent it as a through lane so the physical lane box is not dropped.
+        if (list.isEmpty() && (mask and 1) != 0) {
+            list.add(LaneDirection.THROUGH)
+        }
         return list
     }
 
@@ -546,6 +1031,34 @@ object ValhallaResponseParser {
             points.add(LatLon(lat / 1e6, lon / 1e6))
         }
         return points
+    }
+
+    /**
+     * Encodes a list of [LatLon] coordinates into Valhalla's standard polyline6 string format.
+     */
+    fun encodePolyline6(points: List<LatLon>): String {
+        if (points.isEmpty()) return ""
+        val sb = StringBuilder(points.size * 4)
+        var prevLat = 0L
+        var prevLon = 0L
+        for (pt in points) {
+            val latE6 = Math.round(pt.lat * 1e6)
+            val lonE6 = Math.round(pt.lon * 1e6)
+            encodeSignedVarint(latE6 - prevLat, sb)
+            encodeSignedVarint(lonE6 - prevLon, sb)
+            prevLat = latE6
+            prevLon = lonE6
+        }
+        return sb.toString()
+    }
+
+    private fun encodeSignedVarint(value: Long, out: StringBuilder) {
+        var v = if (value < 0L) (value shl 1).inv() else (value shl 1)
+        while (v >= 0x20L) {
+            out.append(((0x20L or (v and 0x1fL)) + 63L).toInt().toChar())
+            v = v ushr 5
+        }
+        out.append((v + 63L).toInt().toChar())
     }
 
     private fun detectSharpCurves(shape: List<LatLon>): List<AheadAlert> {

@@ -608,7 +608,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             remainingTimeSeconds = newRoute.durationSeconds,
             snappedLocation = startLoc,
             currentSpeedLimitMph = initialManeuver?.speedLimitMph,
-            showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true,
+            showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true &&
+                (initialManeuver.lengthMeters <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)),
+            lanePulseManeuverIndex = -1,
             dismissedJunctionManeuverIndex = -1
         )
 
@@ -659,7 +661,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             currentSpeedLimitMph = initialManeuver?.speedLimitMph,
             isSimulatingDrive = s.simulateDriveEnabled,
             showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true &&
-                initialDist <= NavigationSessionController.LANE_STRIP_WINDOW_METERS
+                initialDist <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)
         )
 
         // Pre-fetch road hazards (railroad crossings, school zones, stop signs, traffic signals) along route

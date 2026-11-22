@@ -26,7 +26,8 @@ data class GpsFix(
     val accuracyMeters: Float,
     val timestampMs: Long,
     val hasBearing: Boolean = false,
-    val bearingTimestampMs: Long = 0L
+    val bearingTimestampMs: Long = 0L,
+    val provider: String = ""
 )
 
 /**
@@ -296,7 +297,8 @@ class LocationTracker(context: Context) {
             accuracyMeters = if (loc.hasAccuracy()) loc.accuracy.coerceAtLeast(0f) else 0f,
             timestampMs = nowWallMs,
             hasBearing = loc.hasBearing(),
-            bearingTimestampMs = bearingTimestampMs
+            bearingTimestampMs = bearingTimestampMs,
+            provider = loc.provider?.takeIf { it.isNotBlank() } ?: if (isGpsFallbackActive) "gps" else "fused"
         )
     }
 

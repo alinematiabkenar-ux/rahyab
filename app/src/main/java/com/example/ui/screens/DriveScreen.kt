@@ -241,8 +241,9 @@ fun DriveScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             if (navState.isNavigating && navState.currentManeuver != null) {
+                val activeManeuver = navState.currentManeuver!!
                 TurnByTurnTopHud(
-                    maneuver = navState.currentManeuver!!,
+                    maneuver = activeManeuver,
                     thenManeuver = navState.thenManeuver,
                     distanceMeters = navState.distanceToNextManeuverMeters,
                     unit = settings.distanceUnit,
@@ -250,7 +251,11 @@ fun DriveScreen(
                     showLaneStrip = navState.showLaneStrip,
                     showJunctionPreview = navState.showJunctionPreview,
                     routeShape = navState.route?.shape.orEmpty(),
-                    onDismissJunctionPreview = { viewModel.dismissJunctionPreview() }
+                    onDismissJunctionPreview = { viewModel.dismissJunctionPreview() },
+                    isNightMode = isNightMode,
+                    lanePulseTriggerKey = if (navState.lanePulseManeuverIndex == activeManeuver.index) {
+                        navState.lanePulseTriggerCount
+                    } else 0
                 )
 
                 // Status strip during active navigation (SIMULATION badge + GPS lost notice)

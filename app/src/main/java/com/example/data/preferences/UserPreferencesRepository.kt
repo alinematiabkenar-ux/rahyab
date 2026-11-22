@@ -45,7 +45,8 @@ data class UserSettings(
     val onboardingCompleted: Boolean = false,
     val devOnlineOregonMode: Boolean = false,
     val simulateDriveEnabled: Boolean = false,
-    val persianTtsNoticeShown: Boolean = false
+    val persianTtsNoticeShown: Boolean = false,
+    val useEnglishVoiceInPersianMode: Boolean = false
 ) {
     /**
      * Effective pack host base URL: uses explicit custom Base URL if entered,
@@ -97,6 +98,7 @@ class UserPreferencesRepository(private val context: Context) {
         val DEV_ONLINE_OREGON = booleanPreferencesKey("dev_online_oregon_mode")
         val SIMULATE_DRIVE = booleanPreferencesKey("simulate_drive_enabled")
         val PERSIAN_TTS_NOTICE_SHOWN = booleanPreferencesKey("persian_tts_notice_shown")
+        val USE_ENGLISH_VOICE_IN_PERSIAN = booleanPreferencesKey("use_english_voice_in_persian_mode")
     }
 
     val settingsFlow: Flow<UserSettings> = context.rahYabDataStore.data.map { prefs ->
@@ -126,7 +128,8 @@ class UserPreferencesRepository(private val context: Context) {
             onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
             devOnlineOregonMode = prefs[Keys.DEV_ONLINE_OREGON] ?: false,
             simulateDriveEnabled = prefs[Keys.SIMULATE_DRIVE] ?: false,
-            persianTtsNoticeShown = prefs[Keys.PERSIAN_TTS_NOTICE_SHOWN] ?: false
+            persianTtsNoticeShown = prefs[Keys.PERSIAN_TTS_NOTICE_SHOWN] ?: false,
+            useEnglishVoiceInPersianMode = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false
         )
     }
 
@@ -228,5 +231,9 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun markPersianTtsNoticeShown() {
         context.rahYabDataStore.edit { it[Keys.PERSIAN_TTS_NOTICE_SHOWN] = true }
+    }
+
+    suspend fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] = enabled }
     }
 }

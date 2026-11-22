@@ -40,6 +40,9 @@ class CompassTracker(context: Context) : SensorEventListener {
     private val _isLowAccuracy = MutableStateFlow(false)
     val isLowAccuracy: StateFlow<Boolean> = _isLowAccuracy.asStateFlow()
 
+    private val _sensorAccuracy = MutableStateFlow(SensorManager.SENSOR_STATUS_NO_CONTACT)
+    val sensorAccuracy: StateFlow<Int> = _sensorAccuracy.asStateFlow()
+
     private var isListening = false
     private var isAppInForeground = true
     private var isNavigating = false
@@ -151,6 +154,7 @@ class CompassTracker(context: Context) : SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
         val type = sensor?.type ?: return
         if (type == Sensor.TYPE_ROTATION_VECTOR || type == Sensor.TYPE_MAGNETIC_FIELD) {
+            _sensorAccuracy.value = accuracy
             _isLowAccuracy.value = (
                 accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE ||
                     accuracy == SensorManager.SENSOR_STATUS_ACCURACY_LOW

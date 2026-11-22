@@ -37,13 +37,27 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
 
     private var activeFocusRequest: AudioFocusRequest? = null
 
+    data class TtsDiagnosticsInfo(
+        val enginePackage: String = "",
+        val engineLabel: String = "",
+        val isInitialized: Boolean = false,
+        val isPersianAvailable: Boolean = false,
+        val isPersianInstalled: Boolean = false,
+        val isEnglishUsAvailable: Boolean = false,
+        val isEnglishUsInstalled: Boolean = false
+    )
+
     private val _isPersianVoiceAvailable = MutableStateFlow(true)
     val isPersianVoiceAvailable: StateFlow<Boolean> = _isPersianVoiceAvailable.asStateFlow()
+
+    private val _ttsDiagnostics = MutableStateFlow(TtsDiagnosticsInfo())
+    val ttsDiagnostics: StateFlow<TtsDiagnosticsInfo> = _ttsDiagnostics.asStateFlow()
 
     private val _lastSpokenText = MutableStateFlow("")
     val lastSpokenText: StateFlow<String> = _lastSpokenText.asStateFlow()
 
     private var currentLanguage: AppLanguage = AppLanguage.ENGLISH
+    private var useEnglishVoiceInPersianMode: Boolean = false
     private var voiceEnabled: Boolean = true
     private var lastSpokenKey: String = ""
     private var lastSpokenTimeMs: Long = 0L
@@ -82,7 +96,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     abandonDuckingFocus()
                 }
             })
-            checkPersianAvailability()
+            refreshTtsDiagnostics()
             applyLanguage(currentLanguage)
         }
     }
@@ -123,20 +137,71 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         }
     }
 
-    fun checkPersianAvailability(): Boolean {
-        val engine = tts ?: return false
+    fun refreshTtsDiagnostics(): TtsDiagnosticsInfo {
+        val engine = tts
+        if (engine == null || !isInitialized) {
+            val empty = TtsDiagnosticsInfo(isInitialized = isInitialized)
+            _ttsDiagnostics.value = empty
+            return empty
+        }
+        val enginePkg = runCatching { engine.defaultEngine.orEmpty() }.getOrDefault("")
+        val engineLabel = runCatching {
+            val matched = engine.engines?.firstOrNull { it.name == enginePkg }
+            matched?.label?.takeIf { it.isNotBlank() }
+                ?: if (enginePkg.isNotBlank()) {
+                    val pm = appContext.packageManager
+                    val ai = pm.getApplicationInfo(enginePkg, 0)
+                    pm.getApplicationLabel(ai).toString()
+                } else ""
+        }.getOrDefault(enginePkg)
+
         val faLocale = Locale.forLanguageTag("fa-IR")
-        val result = engine.isLanguageAvailable(faLocale)
-        val hasVoice = result >= TextToSpeech.LANG_AVAILABLE ||
-            (engine.voices?.any { it.locale.language.equals("fa", ignoreCase = true) } == true)
-        _isPersianVoiceAvailable.value = hasVoice
-        return hasVoice
+        val faStatus = runCatching { engine.isLanguageAvailable(faLocale) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+        val voices = runCatching { engine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
+        val faVoices = voices.filter { it.locale.language.equals("fa", ignoreCase = true) }
+        val faAvailable = faStatus >= TextToSpeech.LANG_AVAILABLE || faVoices.isNotEmpty()
+        val faInstalled = faVoices.any { !it.isNetworkConnectionRequired } ||
+            (faVoices.isEmpty() && faStatus >= TextToSpeech.LANG_AVAILABLE)
+
+        val enStatus = runCatching { engine.isLanguageAvailable(Locale.US) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+        val enVoices = voices.filter {
+            it.locale.language.equals("en", ignoreCase = true) &&
+                it.locale.country.equals("US", ignoreCase = true)
+        }
+        val enAvailable = enStatus >= TextToSpeech.LANG_AVAILABLE || enVoices.isNotEmpty()
+        val enInstalled = enVoices.any { !it.isNetworkConnectionRequired } ||
+            (enVoices.isEmpty() && enStatus >= TextToSpeech.LANG_AVAILABLE)
+
+        _isPersianVoiceAvailable.value = faAvailable && faInstalled
+        val info = TtsDiagnosticsInfo(
+            enginePackage = enginePkg,
+            engineLabel = engineLabel.ifBlank { enginePkg },
+            isInitialized = true,
+            isPersianAvailable = faAvailable,
+            isPersianInstalled = faInstalled,
+            isEnglishUsAvailable = enAvailable,
+            isEnglishUsInstalled = enInstalled
+        )
+        _ttsDiagnostics.value = info
+        return info
+    }
+
+    fun checkPersianAvailability(): Boolean {
+        val info = refreshTtsDiagnostics()
+        return info.isPersianAvailable && info.isPersianInstalled
     }
 
     fun setLanguage(language: AppLanguage) {
         currentLanguage = language
         if (isInitialized) {
-            applyLanguage(language)
+            applyLanguage(resolveEffectiveLanguage(language))
+        }
+    }
+
+    fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
+        useEnglishVoiceInPersianMode = enabled
+        if (isInitialized) {
+            applyLanguage(resolveEffectiveLanguage(currentLanguage))
         }
     }
 
@@ -150,7 +215,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
 
     private fun applyLanguage(language: AppLanguage) {
         val engine = tts ?: return
-        if (language == AppLanguage.PERSIAN && checkPersianAvailability()) {
+        if (language == AppLanguage.PERSIAN && _isPersianVoiceAvailable.value) {
             engine.language = Locale.forLanguageTag("fa-IR")
         } else {
             engine.language = Locale.US
@@ -158,6 +223,9 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     }
 
     private fun resolveEffectiveLanguage(requested: AppLanguage): AppLanguage {
+        if (requested == AppLanguage.PERSIAN && useEnglishVoiceInPersianMode) {
+            return AppLanguage.ENGLISH
+        }
         return if (requested == AppLanguage.PERSIAN && _isPersianVoiceAvailable.value) {
             AppLanguage.PERSIAN
         } else {
@@ -259,6 +327,30 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         }
         _lastSpokenText.value = sample
         speakRaw(sample, effectiveLanguage)
+    }
+
+    /**
+     * Explicitly tests either Persian (`fa-IR`) or American English (`en-US`) voice from the
+     * Diagnostics screen without silently swapping languages.
+     */
+    fun speakExplicitLanguageTest(targetLanguage: AppLanguage): Boolean {
+        val engine = tts ?: return false
+        if (!isInitialized) return false
+        val info = refreshTtsDiagnostics()
+        if (targetLanguage == AppLanguage.PERSIAN && !info.isPersianAvailable) {
+            return false
+        }
+        val locale = if (targetLanguage == AppLanguage.PERSIAN) Locale.forLanguageTag("fa-IR") else Locale.US
+        val sample = if (targetLanguage == AppLanguage.PERSIAN) {
+            "آزمایش صدای فارسی رهیاب. در نیم مایلی، از خط سمت راست به راست بپیچید."
+        } else {
+            "RahYab English voice test. In half a mile, use the right lane to turn right."
+        }
+        engine.language = locale
+        requestDuckingFocus()
+        _lastSpokenText.value = sample
+        engine.speak(sample, TextToSpeech.QUEUE_FLUSH, null, "rahyab_diag_${System.currentTimeMillis()}")
+        return true
     }
 
     fun playOverspeedChime() {
@@ -746,7 +838,11 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
 
         fun buildLaneVoiceClause(lanes: List<LaneInfo>, language: AppLanguage): String? {
             if (lanes.size < 2) return null
-            val activeIndices = lanes.mapIndexedNotNull { idx, lane -> if (lane.isRecommended) idx else null }
+            val activeIndices = lanes.mapIndexedNotNull { idx, lane ->
+                if (lane.highlightTier == LaneHighlightTier.ACTIVE) idx else null
+            }.ifEmpty {
+                lanes.mapIndexedNotNull { idx, lane -> if (lane.isRecommended) idx else null }
+            }
             if (activeIndices.isEmpty()) return null
             if (activeIndices.size == lanes.size) {
                 return if (language == AppLanguage.PERSIAN) "هر خطی" else "any lane"

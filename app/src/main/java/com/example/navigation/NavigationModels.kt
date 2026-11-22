@@ -41,14 +41,35 @@ enum class LaneDirection {
     RIGHT,
     SHARP_RIGHT,
     U_TURN_LEFT,
-    U_TURN_RIGHT
+    U_TURN_RIGHT,
+    MERGE_LEFT,
+    MERGE_RIGHT
+}
+
+enum class LaneHighlightTier {
+    /** Best lane(s) for continuing along the active route without extra lane changes (Valhalla `active` bitmask non-zero). */
+    ACTIVE,
+    /** Allowed lane(s) valid for following the maneuver (Valhalla `valid` bitmask non-zero, `active` zero). */
+    VALID,
+    /** Other / non-recommended lane(s). */
+    INACTIVE
 }
 
 data class LaneInfo(
     val directions: List<LaneDirection>,
     val activeDirections: List<LaneDirection>,
-    val isRecommended: Boolean
-)
+    val isRecommended: Boolean,
+    val isActive: Boolean = isRecommended,
+    val isValid: Boolean = isRecommended,
+    val level: LaneHighlightTier = when {
+        isActive -> LaneHighlightTier.ACTIVE
+        isValid || isRecommended -> LaneHighlightTier.VALID
+        else -> LaneHighlightTier.INACTIVE
+    }
+) {
+    val highlightTier: LaneHighlightTier
+        get() = level
+}
 
 data class HighwaySignpost(
     val exitNumbers: List<String> = emptyList(),
@@ -176,6 +197,8 @@ data class ActiveNavigationState(
     val lastSpokenInstruction: String = "",
     val activeAheadAlert: AheadAlert? = null,
     val showLaneStrip: Boolean = false,
+    val lanePulseManeuverIndex: Int = -1,
+    val lanePulseTriggerCount: Int = 0,
     val showJunctionPreview: Boolean = false,
     val dismissedJunctionManeuverIndex: Int = -1
 ) {

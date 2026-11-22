@@ -232,6 +232,7 @@ class StatePackManager(
 
             val computedStatus = when {
                 pmValid && vhValid && dbValid -> {
+                    ensurePlacesLatLonIndex(db)
                     val manifestEntry = _manifest.value?.states?.find { it.stateCode.equals(code, true) }
                     if (manifestEntry != null && record != null && record.installedVersion.isNotEmpty() && record.installedVersion != manifestEntry.version) {
                         PackInstallStatus.UPDATE_AVAILABLE
@@ -464,6 +465,9 @@ class StatePackManager(
                     throw IllegalStateException(buildMissingFilesNote(pmValid, vhValid, dbValid))
                 }
 
+                // Ensure spatial lat/lon index exists for fast ~50 km nearby FTS5 searches
+                ensurePlacesLatLonIndex(placesDbFile(code))
+
                 // Extract Valhalla tar into unified tile directory for seamless cross-state routing
                 extractTarIntoDirectory(valhallaTarFile(code), unifiedValhallaTileDir)
 
@@ -674,6 +678,7 @@ class StatePackManager(
                             target.delete()
                             return@withContext Result.failure(IllegalArgumentException("Invalid or corrupted FTS5 places SQLite database"))
                         }
+                        ensurePlacesLatLonIndex(target)
                     }
                     else -> {
                         return@withContext Result.failure(
@@ -893,6 +898,42 @@ class StatePackManager(
             false
         }
     }
+
+    /**
+     * Ensures a composite B-tree index on `places(lat, lon)` exists inside the installed places DB
+     * so nearby (~50 km) FTS5 chain searches stay instantaneous.
+     */
+    fun ensurePlacesLatLonIndex(dbFile: File) {
+        if (!dbFile.exists() || dbFile.length() < 1024L) return
+        runCatching {
+            val driver = androidx.sqlite.driver.bundled.BundledSQLiteDriver()
+            val conn = driver.open(dbFile.absolutePath)
+            try {
+                val stmt = conn.prepare("CREATE INDEX IF NOT EXISTS idx_places_lat_lon ON places(lat, lon)")
+                try {
+                    stmt.step()
+                } finally {
+                    stmt.close()
+                }
+            } finally {
+                conn.close()
+            }
+        }
+    }
+
+    data class PackFileSizes(
+        val pmtilesBytes: Long,
+        val valhallaBytes: Long,
+        val placesDbBytes: Long
+    ) {
+        val totalBytes: Long get() = pmtilesBytes + valhallaBytes + placesDbBytes
+    }
+
+    fun getPackFileSizes(stateCode: String): PackFileSizes = PackFileSizes(
+        pmtilesBytes = pmtilesFile(stateCode).takeIf { it.exists() }?.length() ?: 0L,
+        valhallaBytes = valhallaTarFile(stateCode).takeIf { it.exists() }?.length() ?: 0L,
+        placesDbBytes = placesDbFile(stateCode).takeIf { it.exists() }?.length() ?: 0L
+    )
 
     private fun buildMissingFilesNote(pm: Boolean, vh: Boolean, db: Boolean): String {
         val missing = buildList {

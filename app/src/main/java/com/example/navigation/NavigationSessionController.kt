@@ -253,11 +253,27 @@ class NavigationSessionController {
             null
         }
 
-        // 7. Phase 3: Early Sygic-style Lane Strip visibility from ~1 mile on BOTH city streets and highways
+        // 7. Lane guidance visibility from ~1 mile (~1.5 km in metric) on BOTH city streets and highways
         // Strictly hidden if `upcomingManeuver.lanes` is empty — NEVER invented!
+        val laneWindowMeters = laneStripWindowMeters(unit)
         val showLaneStrip = !hasArrived &&
             upcomingManeuver.lanes.isNotEmpty() &&
-            distToNextManeuver <= LANE_STRIP_WINDOW_METERS
+            distToNextManeuver <= laneWindowMeters
+
+        // Gently pulse highlighted lanes ONCE, synchronized with the half-mile (800 m) voice announcement
+        val triggeredHalfMilePulse = maneuverToSpeak != null &&
+            upcomingManeuver.lanes.isNotEmpty() &&
+            (maneuverToSpeak.second == STAGE_HW_HALF_MI || maneuverToSpeak.second == STAGE_CITY_HALF_MI)
+        val nextLanePulseManeuverIndex = if (triggeredHalfMilePulse) {
+            upcomingManeuver.index
+        } else {
+            currentState.lanePulseManeuverIndex
+        }
+        val nextLanePulseTriggerCount = if (triggeredHalfMilePulse) {
+            currentState.lanePulseTriggerCount + 1
+        } else {
+            currentState.lanePulseTriggerCount
+        }
 
         // 8. Phase 3: Enlarged Junction Preview (~0.5 mi / 850 m before highway exits & complex splits)
         val isDismissedForThisManeuver = currentState.dismissedJunctionManeuverIndex == upcomingManeuver.index
@@ -306,6 +322,8 @@ class NavigationSessionController {
             hasArrived = hasArrived,
             activeAheadAlert = activeAheadAlert,
             showLaneStrip = showLaneStrip,
+            lanePulseManeuverIndex = nextLanePulseManeuverIndex,
+            lanePulseTriggerCount = nextLanePulseTriggerCount,
             showJunctionPreview = showJunctionPreview
         )
 
@@ -662,8 +680,12 @@ class NavigationSessionController {
         /** 3 mph in meters per second — below this speed, GPS drift will not trigger rerouting. */
         const val MIN_REROUTE_SPEED_MPS = 1.34112f
 
-        /** Lane strip visibility distance (~1 mile / ~1.6 km) for both city streets and highways. */
-        const val LANE_STRIP_WINDOW_METERS = 1750.0
+        /** Lane strip visibility distance (~1 mile Imperial, ~1.5 km Metric) for both city streets and highways. */
+        const val LANE_STRIP_WINDOW_METERS = 1780.0
+        const val LANE_STRIP_WINDOW_METERS_METRIC = 1650.0
+
+        fun laneStripWindowMeters(unit: DistanceUnit): Double =
+            if (unit == DistanceUnit.METRIC) LANE_STRIP_WINDOW_METERS_METRIC else LANE_STRIP_WINDOW_METERS
 
         /** Minimum gap before announcing a different maneuver's early/advance prompt. */
         const val INTER_MANEUVER_COOLDOWN_MS = 3_000L

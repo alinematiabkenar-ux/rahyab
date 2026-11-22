@@ -63,9 +63,11 @@ class NavigationForegroundService : Service() {
         }
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
+            startForegroundInvocations++
         } catch (_: SecurityException) {
             runCatching {
                 ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
+                startForegroundInvocations++
             }
         }
 
@@ -74,7 +76,7 @@ class NavigationForegroundService : Service() {
             shouldRemainRunning = false
             isServiceCreatedAndRunning = false
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelfResult(startId)
+            stopSelf(startId)
             return START_NOT_STICKY
         }
 
@@ -85,7 +87,7 @@ class NavigationForegroundService : Service() {
             resetThrottleState()
             sendBroadcast(Intent(BROADCAST_NAVIGATION_STOPPED).setPackage(packageName))
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelfResult(startId)
+            stopSelf(startId)
             return START_NOT_STICKY
         }
 
@@ -95,7 +97,7 @@ class NavigationForegroundService : Service() {
             isServiceCreatedAndRunning = false
             resetThrottleState()
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelfResult(startId)
+            stopSelf(startId)
             return START_NOT_STICKY
         }
 

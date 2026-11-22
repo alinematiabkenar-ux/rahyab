@@ -83,8 +83,6 @@ import com.example.i18n.LocalAppLanguage
 import com.example.i18n.LocalAppStrings
 import com.example.navigation.AheadAlert
 import com.example.navigation.HighwaySignpost
-import com.example.navigation.LaneDirection
-import com.example.navigation.LaneInfo
 import com.example.navigation.LatLon
 import com.example.navigation.ManeuverType
 import com.example.navigation.RoadAlertKind
@@ -118,9 +116,9 @@ fun maneuverIconFor(type: ManeuverType): ImageVector = when (type) {
 }
 
 /**
- * Top turn-by-turn banner with authentic US highway green signpost pill, secondary "Then ..." strip,
- * Sygic-style lane strip (strictly hidden when no real OSM/Valhalla lane data exists),
- * and tap-to-close real-geometry enlarged junction preview.
+ * Top turn-by-turn banner with authentic US highway green signpost pill, integrated Waze/Apple Maps-style
+ * lane guidance row directly inside the banner (strictly hidden when no real OSM/Valhalla lane data exists),
+ * secondary "Then ..." strip, and tap-to-close real-geometry enlarged junction preview.
  */
 @Composable
 fun TurnByTurnTopHud(
@@ -133,13 +131,28 @@ fun TurnByTurnTopHud(
     showJunctionPreview: Boolean,
     routeShape: List<LatLon>,
     onDismissJunctionPreview: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isNightMode: Boolean = false,
+    lanePulseTriggerKey: Int = 0
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
     val distText = BilingualFormatter.formatDistance(distanceMeters, unit, language)
     val signpost = maneuver.signpost
     val useHighwayGreen = signpost != null || maneuver.isHighwayExitOrSplit
+
+    val bannerBg = when {
+        useHighwayGreen && isNightMode -> Color(0xFF004B3B)
+        useHighwayGreen -> HighwaySignGreen
+        isNightMode -> CockpitMidnight
+        else -> Color(0xFF0D1B3E)
+    }
+    val bannerBorder = when {
+        useHighwayGreen && isNightMode -> HighwaySignBorder.copy(alpha = 0.85f)
+        useHighwayGreen -> HighwaySignBorder
+        isNightMode -> CyanBeacon.copy(alpha = 0.55f)
+        else -> CyanBeacon.copy(alpha = 0.65f)
+    }
 
     Column(
         modifier = modifier
@@ -149,10 +162,10 @@ fun TurnByTurnTopHud(
     ) {
         Surface(
             shape = RoundedCornerShape(22.dp),
-            color = if (useHighwayGreen) HighwaySignGreen else CockpitMidnight,
+            color = bannerBg,
             border = BorderStroke(
-                width = if (useHighwayGreen) 2.dp else 1.dp,
-                color = if (useHighwayGreen) HighwaySignBorder else CyanBeacon.copy(alpha = 0.45f)
+                width = if (useHighwayGreen) 2.dp else 1.25.dp,
+                color = bannerBorder
             ),
             shadowElevation = 10.dp,
             modifier = Modifier.fillMaxWidth()
@@ -204,14 +217,14 @@ fun TurnByTurnTopHud(
                     }
                 }
 
-                // Strictly show lane guidance strip ONLY when real OSM/Valhalla turn:lanes exist
+                // Integrated lane guidance directly inside the top maneuver banner (hidden if no real lane data)
                 if (showLaneStrip && maneuver.lanes.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    LaneGuidanceStrip(
+                    LaneGuidanceBannerRow(
                         lanes = maneuver.lanes,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("lane_guidance_strip")
+                        isNightMode = isNightMode,
+                        useHighwayGreen = useHighwayGreen,
+                        pulseTriggerKey = lanePulseTriggerKey
                     )
                 }
             }
@@ -315,163 +328,7 @@ private fun HighwaySignpostHeader(signpost: HighwaySignpost) {
     }
 }
 
-/**
- * Sygic-style custom Canvas lane strip rendering arrows for EVERY physical lane
- * parsed from Valhalla / OSM `turn:lanes`. Recommended lanes glow crisp cyan-white;
- * non-recommended lanes stay subdued. Strictly hidden when `lanes` is empty.
- */
-@Composable
-fun LaneGuidanceStrip(
-    lanes: List<LaneInfo>,
-    modifier: Modifier = Modifier
-) {
-    if (lanes.isEmpty()) return
 
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.Black.copy(alpha = 0.36f))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            lanes.forEachIndexed { index, lane ->
-                Box(
-                    modifier = Modifier
-                        .size(width = 42.dp, height = 46.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            if (lane.isRecommended) CyanBeacon.copy(alpha = 0.24f)
-                            else Color.Transparent
-                        )
-                        .border(
-                            width = if (lane.isRecommended) 1.5.dp else 0.dp,
-                            color = if (lane.isRecommended) CyanBeacon else Color.Transparent,
-                            shape = RoundedCornerShape(10.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(modifier = Modifier.size(34.dp)) {
-                        val inactive = lane.directions.filterNot { it in lane.activeDirections }
-                        for (dir in inactive) {
-                            drawLaneArrow(dir, Color.White.copy(alpha = 0.30f), strokeWidth = 3.5f)
-                        }
-                        val active = if (lane.isRecommended) {
-                            lane.activeDirections.ifEmpty { lane.directions }
-                        } else emptyList()
-                        for (dir in active) {
-                            drawLaneArrow(dir, Color.White, strokeWidth = 5.2f)
-                        }
-                    }
-                }
-                if (index < lanes.lastIndex) {
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .height(30.dp)
-                            .background(Color.White.copy(alpha = 0.25f))
-                    )
-                }
-            }
-        }
-    }
-}
-
-private fun DrawScope.drawLaneArrow(
-    direction: LaneDirection,
-    color: Color,
-    strokeWidth: Float
-) {
-    val cx = size.width * 0.5f
-    val bottom = size.height * 0.88f
-    val midY = size.height * 0.52f
-    val topY = size.height * 0.16f
-
-    val path = Path()
-    when (direction) {
-        LaneDirection.THROUGH -> {
-            path.moveTo(cx, bottom)
-            path.lineTo(cx, topY)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(cx, topY), Offset(cx, bottom), color, strokeWidth)
-        }
-        LaneDirection.LEFT -> {
-            path.moveTo(cx + size.width * 0.12f, bottom)
-            path.lineTo(cx + size.width * 0.12f, midY)
-            path.lineTo(size.width * 0.18f, midY)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(size.width * 0.18f, midY), Offset(cx, midY), color, strokeWidth)
-        }
-        LaneDirection.RIGHT -> {
-            path.moveTo(cx - size.width * 0.12f, bottom)
-            path.lineTo(cx - size.width * 0.12f, midY)
-            path.lineTo(size.width * 0.82f, midY)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(size.width * 0.82f, midY), Offset(cx, midY), color, strokeWidth)
-        }
-        LaneDirection.SLIGHT_LEFT -> {
-            path.moveTo(cx + size.width * 0.10f, bottom)
-            path.lineTo(cx + size.width * 0.10f, midY + 4f)
-            path.lineTo(size.width * 0.22f, topY + 4f)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(size.width * 0.22f, topY + 4f), Offset(cx + size.width * 0.10f, midY + 4f), color, strokeWidth)
-        }
-        LaneDirection.SLIGHT_RIGHT -> {
-            path.moveTo(cx - size.width * 0.10f, bottom)
-            path.lineTo(cx - size.width * 0.10f, midY + 4f)
-            path.lineTo(size.width * 0.78f, topY + 4f)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(size.width * 0.78f, topY + 4f), Offset(cx - size.width * 0.10f, midY + 4f), color, strokeWidth)
-        }
-        LaneDirection.SHARP_LEFT -> {
-            path.moveTo(cx + size.width * 0.15f, bottom)
-            path.lineTo(cx + size.width * 0.15f, midY - 6f)
-            path.lineTo(size.width * 0.20f, bottom * 0.82f)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(size.width * 0.20f, bottom * 0.82f), Offset(cx + size.width * 0.15f, midY - 6f), color, strokeWidth)
-        }
-        LaneDirection.SHARP_RIGHT -> {
-            path.moveTo(cx - size.width * 0.15f, bottom)
-            path.lineTo(cx - size.width * 0.15f, midY - 6f)
-            path.lineTo(size.width * 0.80f, bottom * 0.82f)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(size.width * 0.80f, bottom * 0.82f), Offset(cx - size.width * 0.15f, midY - 6f), color, strokeWidth)
-        }
-        LaneDirection.U_TURN_LEFT, LaneDirection.U_TURN_RIGHT -> {
-            val dirSign = if (direction == LaneDirection.U_TURN_LEFT) -1f else 1f
-            val startX = cx - dirSign * size.width * 0.16f
-            val endX = cx + dirSign * size.width * 0.16f
-            path.moveTo(startX, bottom)
-            path.lineTo(startX, topY + 10f)
-            path.quadraticTo(cx, topY - 4f, endX, topY + 10f)
-            path.lineTo(endX, midY + 8f)
-            drawPath(path, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawArrowHead(Offset(endX, midY + 8f), Offset(endX, topY + 10f), color, strokeWidth)
-        }
-    }
-}
-
-private fun DrawScope.drawArrowHead(tip: Offset, from: Offset, color: Color, strokeWidth: Float) {
-    val angle = kotlin.math.atan2((tip.y - from.y).toDouble(), (tip.x - from.x).toDouble())
-    val headLen = size.minDimension * 0.24f
-    val leftAngle = angle + Math.toRadians(145.0)
-    val rightAngle = angle - Math.toRadians(145.0)
-    val headPath = Path().apply {
-        moveTo(
-            tip.x + (headLen * cos(leftAngle)).toFloat(),
-            tip.y + (headLen * sin(leftAngle)).toFloat()
-        )
-        lineTo(tip.x, tip.y)
-        lineTo(
-            tip.x + (headLen * cos(rightAngle)).toFloat(),
-            tip.y + (headLen * sin(rightAngle)).toFloat()
-        )
-    }
-    drawPath(headPath, color, style = Stroke(strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round))
-}
 
 /**
  * Enlarged Junction Preview drawn from the actual Valhalla route geometry around the

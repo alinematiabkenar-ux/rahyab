@@ -17,9 +17,12 @@ import java.util.Locale
 object CrashLogManager {
 
     private const val CRASH_LOG_FILE_NAME = "rahyab_last_crash.txt"
+    private const val ERROR_LOG_FILE_NAME = "rahyab_error_log.txt"
+    private const val MAX_STORED_ERROR_LINES = 200
 
     @Volatile
     private var installed = false
+    private val logLock = Any()
 
     fun install(context: Context) {
         if (installed) return
@@ -30,6 +33,11 @@ object CrashLogManager {
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                 runCatching {
                     writeCrashLog(appContext, thread.name, throwable)
+                    logError(
+                        context = appContext,
+                        tag = "Uncaught/${thread.name}",
+                        message = "${throwable.javaClass.simpleName}: ${throwable.message.orEmpty()}"
+                    )
                 }
                 previousHandler?.uncaughtException(thread, throwable)
             }
@@ -48,6 +56,59 @@ object CrashLogManager {
         file.parentFile?.mkdirs()
         file.writeText(report, Charsets.UTF_8)
         return file
+    }
+
+    fun logError(
+        context: Context,
+        tag: String,
+        message: String,
+        throwable: Throwable? = null,
+        timestampMs: Long = System.currentTimeMillis()
+    ) {
+        runCatching {
+            val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+            val ts = formatter.format(Date(timestampMs))
+            val detail = if (throwable != null) {
+                val errMsg = throwable.message?.take(160).orEmpty()
+                " (${throwable.javaClass.simpleName}: $errMsg)"
+            } else {
+                ""
+            }
+            val cleanMsg = message.replace('\n', ' ').replace('\r', ' ').trim()
+            val line = "[$ts] [$tag] $cleanMsg$detail"
+            synchronized(logLock) {
+                val file = errorLogFile(context)
+                file.parentFile?.mkdirs()
+                val existing = if (file.exists()) {
+                    file.readLines(Charsets.UTF_8).filter { it.isNotBlank() }
+                } else {
+                    emptyList()
+                }
+                val updated = (existing + line).takeLast(MAX_STORED_ERROR_LINES)
+                file.writeText(updated.joinToString("\n") + "\n", Charsets.UTF_8)
+            }
+        }
+    }
+
+    fun readLastErrorLines(context: Context, maxLines: Int = 20): List<String> {
+        return runCatching {
+            synchronized(logLock) {
+                val file = errorLogFile(context)
+                if (!file.exists() || file.length() == 0L) return@runCatching emptyList()
+                file.readLines(Charsets.UTF_8)
+                    .filter { it.isNotBlank() }
+                    .takeLast(maxLines.coerceAtLeast(1))
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun clearErrorLog(context: Context) {
+        runCatching {
+            synchronized(logLock) {
+                val file = errorLogFile(context)
+                if (file.exists()) file.delete()
+            }
+        }
     }
 
     fun formatCrashReport(
@@ -96,4 +157,7 @@ object CrashLogManager {
 
     internal fun crashLogFile(context: Context): File =
         File(context.applicationContext.filesDir, CRASH_LOG_FILE_NAME)
+
+    internal fun errorLogFile(context: Context): File =
+        File(context.applicationContext.filesDir, ERROR_LOG_FILE_NAME)
 }

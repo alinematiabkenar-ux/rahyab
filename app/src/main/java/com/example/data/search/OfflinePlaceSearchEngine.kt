@@ -1,6 +1,7 @@
 package com.example.data.search
 
 import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.SQLiteDriver
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import com.example.data.local.SavedPlaceDao
 import com.example.data.local.SavedPlaceEntity
@@ -52,9 +53,9 @@ data class RoadHazardPoint(
  */
 class OfflinePlaceSearchEngine(
     private val packManager: StatePackManager,
-    private val savedPlaceDao: SavedPlaceDao
+    private val savedPlaceDao: SavedPlaceDao,
+    private val sqliteDriver: SQLiteDriver = BundledSQLiteDriver()
 ) {
-    private val sqliteDriver = BundledSQLiteDriver()
 
     suspend fun search(
         query: String,
@@ -207,11 +208,78 @@ class OfflinePlaceSearchEngine(
         val results = linkedMapOf<Long, PlaceSearchResult>()
         val conn = sqliteDriver.open(dbFile.absolutePath)
         try {
-            // A. FTS5 prefix & BM25 ranked search
+            // A. FTS5 search: FIRST run a ~50 km nearby query ordered by distance (LIMIT 100)
+            // so chains with hundreds of statewide branches (Starbucks, Shell, Walmart, Safeway)
+            // never miss the nearest local branch, THEN run the statewide BM25 query for the rest.
+            val nearbyLatDelta = NEARBY_SEARCH_RADIUS_KM / 111.32
+            val cosLat = cos(Math.toRadians(userLat)).coerceAtLeast(0.15)
+            val nearbyLonDelta = NEARBY_SEARCH_RADIUS_KM / (111.32 * cosLat)
+            val cosLatSq = cosLat * cosLat
+
             for (latinQuery in expanded.normalizedLatinQueries) {
                 val ftsMatch = buildFts5MatchExpression(latinQuery)
                 if (ftsMatch.isNotEmpty()) {
-                    val sql = """
+                    // A1. Nearby (~50 km bounding box) FTS5 match ordered by distance, up to 100 results
+                    val nearbySql = """
+                        SELECT p.id, p.name, COALESCE(p.brand, ''), COALESCE(p.category, ''),
+                               COALESCE(p.address, ''), COALESCE(p.city, ''), COALESCE(p.state, ?),
+                               COALESCE(p.postcode, ''), p.lat, p.lon, COALESCE(p.source, 'overture'),
+                               COALESCE(p.popularity, 1.0), bm25(places_fts, 10.0, 12.0, 4.0, 5.0, 3.0, 2.0) AS rank_score
+                        FROM places_fts
+                        JOIN places p ON p.id = places_fts.rowid
+                        WHERE places_fts MATCH ?
+                          AND p.lat BETWEEN ? AND ?
+                          AND p.lon BETWEEN ? AND ?
+                        ORDER BY ((p.lat - ?) * (p.lat - ?) + (p.lon - ?) * (p.lon - ?) * ?) ASC
+                        LIMIT ?
+                    """.trimIndent()
+                    val nearStmt = conn.prepare(nearbySql)
+                    try {
+                        nearStmt.bindText(1, stateCode.uppercase())
+                        nearStmt.bindText(2, ftsMatch)
+                        nearStmt.bindDouble(3, userLat - nearbyLatDelta)
+                        nearStmt.bindDouble(4, userLat + nearbyLatDelta)
+                        nearStmt.bindDouble(5, userLon - nearbyLonDelta)
+                        nearStmt.bindDouble(6, userLon + nearbyLonDelta)
+                        nearStmt.bindDouble(7, userLat)
+                        nearStmt.bindDouble(8, userLat)
+                        nearStmt.bindDouble(9, userLon)
+                        nearStmt.bindDouble(10, userLon)
+                        nearStmt.bindDouble(11, cosLatSq)
+                        nearStmt.bindLong(12, NEARBY_SEARCH_LIMIT.toLong())
+                        while (nearStmt.step()) {
+                            val rowId = nearStmt.getLong(0)
+                            val place = readRowAndScore(
+                                stateCode = stateCode,
+                                id = rowId,
+                                name = nearStmt.getText(1),
+                                brand = nearStmt.getText(2),
+                                category = nearStmt.getText(3),
+                                address = nearStmt.getText(4),
+                                city = nearStmt.getText(5),
+                                state = nearStmt.getText(6),
+                                postcode = nearStmt.getText(7),
+                                lat = nearStmt.getDouble(8),
+                                lon = nearStmt.getDouble(9),
+                                source = nearStmt.getText(10),
+                                popularity = nearStmt.getDouble(11),
+                                bm25 = nearStmt.getDouble(12),
+                                query = latinQuery,
+                                categoryTags = expanded.matchedCategoryTags,
+                                userLat = userLat,
+                                userLon = userLon
+                            )
+                            val existing = results[rowId]
+                            if (existing == null || place.relevanceScore > existing.relevanceScore) {
+                                results[rowId] = place
+                            }
+                        }
+                    } finally {
+                        nearStmt.close()
+                    }
+
+                    // A2. Statewide BM25 query for distant destinations & remaining matches
+                    val statewideSql = """
                         SELECT p.id, p.name, COALESCE(p.brand, ''), COALESCE(p.category, ''),
                                COALESCE(p.address, ''), COALESCE(p.city, ''), COALESCE(p.state, ?),
                                COALESCE(p.postcode, ''), p.lat, p.lon, COALESCE(p.source, 'overture'),
@@ -222,7 +290,7 @@ class OfflinePlaceSearchEngine(
                         ORDER BY rank_score ASC
                         LIMIT ?
                     """.trimIndent()
-                    val stmt = conn.prepare(sql)
+                    val stmt = conn.prepare(statewideSql)
                     try {
                         stmt.bindText(1, stateCode.uppercase())
                         stmt.bindText(2, ftsMatch)
@@ -546,6 +614,9 @@ class OfflinePlaceSearchEngine(
     }
 
     companion object {
+        const val NEARBY_SEARCH_RADIUS_KM = 50.0
+        const val NEARBY_SEARCH_LIMIT = 100
+
         fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
             val r = 6371000.0
             val dLat = Math.toRadians(lat2 - lat1)
