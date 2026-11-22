@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.i18n.AppLanguage
@@ -46,7 +47,15 @@ data class UserSettings(
     val devOnlineOregonMode: Boolean = false,
     val simulateDriveEnabled: Boolean = false,
     val persianTtsNoticeShown: Boolean = false,
-    val useEnglishVoiceInPersianMode: Boolean = false
+    val useEnglishVoiceInPersianMode: Boolean = false,
+    // Offline-first, online-when-available controls
+    val onlineFeaturesEnabled: Boolean = true,
+    val onlineWeatherAlertsEnabled: Boolean = true,
+    val onlineSearchFallbackEnabled: Boolean = true,
+    val autoCheckMapUpdatesEnabled: Boolean = true,
+    val wifiOnlyLargeDownloads: Boolean = true,
+    val autoUpdateMapsOnWifi: Boolean = false,
+    val lastManifestCheckEpochMs: Long = 0L
 ) {
     /**
      * Effective pack host base URL: uses explicit custom Base URL if entered,
@@ -99,6 +108,13 @@ class UserPreferencesRepository(private val context: Context) {
         val SIMULATE_DRIVE = booleanPreferencesKey("simulate_drive_enabled")
         val PERSIAN_TTS_NOTICE_SHOWN = booleanPreferencesKey("persian_tts_notice_shown")
         val USE_ENGLISH_VOICE_IN_PERSIAN = booleanPreferencesKey("use_english_voice_in_persian_mode")
+        val ONLINE_FEATURES_ENABLED = booleanPreferencesKey("online_features_enabled")
+        val ONLINE_WEATHER_ALERTS_ENABLED = booleanPreferencesKey("online_weather_alerts_enabled")
+        val ONLINE_SEARCH_FALLBACK_ENABLED = booleanPreferencesKey("online_search_fallback_enabled")
+        val AUTO_CHECK_MAP_UPDATES_ENABLED = booleanPreferencesKey("auto_check_map_updates_enabled")
+        val WIFI_ONLY_LARGE_DOWNLOADS = booleanPreferencesKey("wifi_only_large_downloads")
+        val AUTO_UPDATE_MAPS_ON_WIFI = booleanPreferencesKey("auto_update_maps_on_wifi")
+        val LAST_MANIFEST_CHECK_EPOCH_MS = longPreferencesKey("last_manifest_check_epoch_ms")
     }
 
     val settingsFlow: Flow<UserSettings> = context.rahYabDataStore.data.map { prefs ->
@@ -129,7 +145,14 @@ class UserPreferencesRepository(private val context: Context) {
             devOnlineOregonMode = prefs[Keys.DEV_ONLINE_OREGON] ?: false,
             simulateDriveEnabled = prefs[Keys.SIMULATE_DRIVE] ?: false,
             persianTtsNoticeShown = prefs[Keys.PERSIAN_TTS_NOTICE_SHOWN] ?: false,
-            useEnglishVoiceInPersianMode = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false
+            useEnglishVoiceInPersianMode = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false,
+            onlineFeaturesEnabled = prefs[Keys.ONLINE_FEATURES_ENABLED] ?: true,
+            onlineWeatherAlertsEnabled = prefs[Keys.ONLINE_WEATHER_ALERTS_ENABLED] ?: true,
+            onlineSearchFallbackEnabled = prefs[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] ?: true,
+            autoCheckMapUpdatesEnabled = prefs[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] ?: true,
+            wifiOnlyLargeDownloads = prefs[Keys.WIFI_ONLY_LARGE_DOWNLOADS] ?: true,
+            autoUpdateMapsOnWifi = prefs[Keys.AUTO_UPDATE_MAPS_ON_WIFI] ?: false,
+            lastManifestCheckEpochMs = prefs[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] ?: 0L
         )
     }
 
@@ -235,5 +258,33 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
         context.rahYabDataStore.edit { it[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] = enabled }
+    }
+
+    suspend fun setOnlineFeaturesEnabled(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.ONLINE_FEATURES_ENABLED] = enabled }
+    }
+
+    suspend fun setOnlineWeatherAlertsEnabled(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.ONLINE_WEATHER_ALERTS_ENABLED] = enabled }
+    }
+
+    suspend fun setOnlineSearchFallbackEnabled(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] = enabled }
+    }
+
+    suspend fun setAutoCheckMapUpdatesEnabled(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] = enabled }
+    }
+
+    suspend fun setWifiOnlyLargeDownloads(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.WIFI_ONLY_LARGE_DOWNLOADS] = enabled }
+    }
+
+    suspend fun setAutoUpdateMapsOnWifi(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.AUTO_UPDATE_MAPS_ON_WIFI] = enabled }
+    }
+
+    suspend fun setLastManifestCheckEpochMs(epochMs: Long) {
+        context.rahYabDataStore.edit { it[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] = epochMs }
     }
 }

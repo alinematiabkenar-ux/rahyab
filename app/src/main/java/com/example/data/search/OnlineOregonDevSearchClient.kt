@@ -1,5 +1,6 @@
 package com.example.data.search
 
+import com.example.data.online.OnlineHttpConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -53,7 +54,7 @@ class OnlineOregonDevSearchClient {
 
             val req = Request.Builder()
                 .url(photonUrl)
-                .header("User-Agent", USER_AGENT)
+                .header("User-Agent", OnlineHttpConfig.userAgent())
                 .get()
                 .build()
 
@@ -81,7 +82,7 @@ class OnlineOregonDevSearchClient {
 
                 val req = Request.Builder()
                     .url(nomUrl)
-                    .header("User-Agent", USER_AGENT)
+                    .header("User-Agent", OnlineHttpConfig.userAgent())
                     .get()
                     .build()
 
@@ -218,7 +219,6 @@ class OnlineOregonDevSearchClient {
     }
 
     companion object {
-        private const val USER_AGENT = "RahYab-Android-Nav/1.0 (offline-us-navigation-dev-test)"
         private const val OR_MIN_LON = -124.5662
         private const val OR_MIN_LAT = 41.9918
         private const val OR_MAX_LON = -116.4635

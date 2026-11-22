@@ -415,7 +415,7 @@ class NavigationSessionController {
         val distToTurn = currentState.distanceToNextManeuverMeters
         val needsSlowdown = upcoming != null && (
             isEarlyWarningManeuverType(upcoming.type) ||
-                upcoming.type == ManeuverType.ROUNDABOUT_ENTER ||
+                upcoming.type == ManeuverType.ROUNDABOUT ||
                 upcoming.type == ManeuverType.ARRIVE ||
                 upcoming.type == ManeuverType.ARRIVE_LEFT ||
                 upcoming.type == ManeuverType.ARRIVE_RIGHT

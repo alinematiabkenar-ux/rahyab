@@ -322,11 +322,17 @@ fun MapLibreMapContainer(
         val map = mapLibreMap ?: return@LaunchedEffect
         val cmd = cameraCommand ?: return@LaunchedEffect
         lastAppliedHeadingBearing = cmd.bearing.toFloat()
+        val topPadding = if (cmd.anchorLowerThird && mapView.height > 0) {
+            (mapView.height * 0.34)
+        } else {
+            0.0
+        }
         val pos = CameraPosition.Builder()
             .target(LatLng(cmd.lat, cmd.lon))
             .zoom(cmd.zoom)
             .tilt(cmd.tilt)
             .bearing(cmd.bearing)
+            .padding(doubleArrayOf(0.0, topPadding, 0.0, 0.0))
             .build()
         runCatching {
             if (cmd.animationDurationMs <= 0) {
@@ -337,19 +343,25 @@ fun MapLibreMapContainer(
         }
     }
 
-    // Smoothly rotate map camera bearing in heading-up mode when browsing or stationary (throttled)
-    LaunchedEffect(mapLibreMap, throttledHeadingDegrees, isHeadingUpMode, isCameraFollowing, activeNavRoute, selectedPlace) {
+    // Smoothly rotate map camera bearing in heading-up mode ONLY when stationary (< 3 mph),
+    // so driving GPS camera animations (~1s) are never interrupted by compass ticks.
+    LaunchedEffect(mapLibreMap, throttledHeadingDegrees, isHeadingUpMode, isCameraFollowing, activeNavRoute, selectedPlace, gpsFix) {
         val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isHeadingUpMode || !isCameraFollowing || activeNavRoute != null || selectedPlace != null) return@LaunchedEffect
+        val speedMps = gpsFix?.speedMps ?: 0f
+        if (!isHeadingUpMode || !isCameraFollowing || activeNavRoute != null || selectedPlace != null || speedMps > 1.34f) {
+            return@LaunchedEffect
+        }
         val currentBearing = map.cameraPosition.bearing.toFloat()
         val diff = abs(CompassTracker.shortestAngleDelta(currentBearing, throttledHeadingDegrees))
-        if (lastAppliedHeadingBearing.isNaN() || diff > 2.5f) {
+        if (lastAppliedHeadingBearing.isNaN() || diff > 3.0f) {
             lastAppliedHeadingBearing = throttledHeadingDegrees
+            val topPadding = if (mapView.height > 0) (mapView.height * 0.34) else 0.0
             val updatedPos = CameraPosition.Builder(map.cameraPosition)
                 .bearing(throttledHeadingDegrees.toDouble())
+                .padding(doubleArrayOf(0.0, topPadding, 0.0, 0.0))
                 .build()
             runCatching {
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(updatedPos), 250)
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(updatedPos), 280)
             }
         }
     }
@@ -408,7 +420,12 @@ fun MapLibreMapContainer(
                         false
                     }
 
-                    // Detect manual user pan to pause camera follow until Recenter is tapped
+                    // Detect ANY user finger pan, pinch-zoom, rotate, or tilt in any mode -> pause camera follow
+                    map.addOnCameraMoveStartedListener { reason ->
+                        if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                            currentOnUserMovedMap()
+                        }
+                    }
                     map.addOnMoveListener(object : MapLibreMap.OnMoveListener {
                         override fun onMoveBegin(detector: MoveGestureDetector) {
                             currentOnUserMovedMap()

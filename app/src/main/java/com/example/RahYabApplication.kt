@@ -3,6 +3,7 @@ package com.example
 import android.app.Application
 import android.content.Context
 import com.example.data.local.RahYabDatabase
+import com.example.data.online.NetworkStatusMonitor
 import com.example.data.packs.StatePackManager
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.search.OfflinePlaceSearchEngine
@@ -47,10 +48,14 @@ class RahYabApplication : Application() {
     private val voiceGuidanceDelegate = lazy { VoiceGuidanceManager(this) }
     val voiceGuidanceManager: VoiceGuidanceManager by voiceGuidanceDelegate
 
+    private val networkStatusDelegate = lazy { NetworkStatusMonitor(this) }
+    val networkStatusMonitor: NetworkStatusMonitor by networkStatusDelegate
+
     val isPackManagerInitialized: Boolean get() = packManagerDelegate.isInitialized()
     val isCompassTrackerInitialized: Boolean get() = compassTrackerDelegate.isInitialized()
     val isVoiceGuidanceInitialized: Boolean get() = voiceGuidanceDelegate.isInitialized()
     val isRoutingEngineInitialized: Boolean get() = routingEngineDelegate.isInitialized()
+    val isNetworkMonitorInitialized: Boolean get() = networkStatusDelegate.isInitialized()
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
@@ -86,5 +91,6 @@ class RahYabApplication : Application() {
         if (compassTrackerDelegate.isInitialized()) compassTracker.stop()
         if (voiceGuidanceDelegate.isInitialized()) voiceGuidanceManager.shutdown()
         if (routingEngineDelegate.isInitialized()) routingEngine.close()
+        if (networkStatusDelegate.isInitialized()) networkStatusMonitor.stop()
     }
 }

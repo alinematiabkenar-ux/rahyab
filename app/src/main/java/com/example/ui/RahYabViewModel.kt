@@ -23,6 +23,7 @@ import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
 import com.example.i18n.stringsFor
 import com.example.navigation.ActiveNavigationState
+import com.example.navigation.CameraFollowController
 import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
 import com.example.navigation.LastRouteDiagnostics
@@ -57,6 +58,7 @@ data class CameraTargetCommand(
     val tilt: Double = 0.0,
     val bearing: Double = 0.0,
     val animationDurationMs: Int = 500,
+    val anchorLowerThird: Boolean = false,
     val nonce: Long = System.currentTimeMillis()
 )
 
@@ -75,6 +77,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val userReportDao = app.database.userReportDao()
     private val installedPackDao = app.database.installedPackDao()
     private val navController = NavigationSessionController()
+    private val cameraFollowController = CameraFollowController()
 
     val settings: StateFlow<UserSettings> = prefs.settingsFlow.stateIn(
         scope = viewModelScope,
@@ -244,6 +247,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private var gpsWatchdogJob: Job? = null
     private var simulationJob: Job? = null
     private var arrivalEndJob: Job? = null
+    private var autoRecenterJob: Job? = null
     private var lastGpsReceivedMs: Long = 0L
     private var simulatedWrongTurnTicksRemaining: Int = 0
     private var simulatedClockMs: Long = 0L
@@ -331,7 +335,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Process live GPS updates during active navigation (completely ignored while simulating)
+        // Process live GPS updates during active navigation AND free-drive (completely ignored while simulating)
         viewModelScope.launch {
             currentGpsFix.collect { fix ->
                 if (_navigationState.value.isSimulatingDrive) return@collect
@@ -341,9 +345,56 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 if (fix != null && _navigationState.value.isNavigating) {
                     lastGpsReceivedMs = System.currentTimeMillis()
                     handleNavigationGpsFix(fix)
+                } else if (fix != null) {
+                    handleFreeDriveGpsFix(fix)
                 }
             }
         }
+    }
+
+    private fun handleFreeDriveGpsFix(fix: GpsFix) {
+        val isPlaceOrPreviewOpen = _selectedPlace.value != null || _candidateRoutes.value.isNotEmpty()
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        var forceImmediate = false
+        if (cameraFollowController.shouldAutoRecenter(
+                isCameraFollowing = _isCameraFollowing.value,
+                isPlaceOrPreviewOpen = isPlaceOrPreviewOpen,
+                speedMps = fix.speedMps,
+                nowMs = nowElapsed
+            )
+        ) {
+            _isCameraFollowing.value = true
+            forceImmediate = true
+        }
+        if (!_isCameraFollowing.value || isPlaceOrPreviewOpen) return
+
+        val heading = if (fix.speedMps > LocationTracker.MIN_BEARING_SPEED_MPS && fix.hasBearing) {
+            fix.bearing
+        } else {
+            _userHeadingDegrees.value
+        }
+        val s = settings.value
+        val update = cameraFollowController.computeFollowCameraUpdate(
+            lat = fix.lat,
+            lon = fix.lon,
+            speedMps = fix.speedMps,
+            headingDegrees = heading,
+            isHeadingUpMode = _isHeadingUpMode.value,
+            is3DView = s.is3DView,
+            isNavigating = false,
+            simulationSpeedMultiplier = 1,
+            forceImmediate = forceImmediate
+        ) ?: return
+
+        _cameraCommand.value = CameraTargetCommand(
+            lat = update.lat,
+            lon = update.lon,
+            zoom = update.zoom,
+            tilt = update.tilt,
+            bearing = update.bearing,
+            animationDurationMs = update.animationDurationMs,
+            anchorLowerThird = update.anchorLowerThird
+        )
     }
 
     fun startLocationTracking() {
@@ -462,7 +513,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _candidateRoutes.value = emptyList()
         _routeError.value = null
         _missingStatesForRoute.value = emptyList()
-        _cameraCommand.value = CameraTargetCommand(lat = lat, lon = lon, zoom = 15.0)
+        autoRecenterJob?.cancel()
+        _isCameraFollowing.value = false
+        _cameraCommand.value = CameraTargetCommand(lat = lat, lon = lon, zoom = 15.0, anchorLowerThird = false)
     }
 
     fun selectPlace(place: PlaceSearchResult) {
@@ -470,10 +523,13 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _candidateRoutes.value = emptyList()
         _routeError.value = null
         _missingStatesForRoute.value = emptyList()
+        autoRecenterJob?.cancel()
+        _isCameraFollowing.value = false
         _cameraCommand.value = CameraTargetCommand(
             lat = place.lat,
             lon = place.lon,
-            zoom = 15.0
+            zoom = 15.0,
+            anchorLowerThird = false
         )
         viewModelScope.launch {
             savedPlaceDao.insert(
@@ -496,6 +552,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _candidateRoutes.value = emptyList()
         _routeError.value = null
         _missingStatesForRoute.value = emptyList()
+        if (!_navigationState.value.isNavigating) {
+            recenterCamera()
+        }
     }
 
     fun savePlaceAs(place: PlaceSearchResult, type: SavedPlaceType) {
@@ -571,10 +630,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             result.onSuccess { routes ->
                 _candidateRoutes.value = routes
                 _selectedRouteIndex.value = 0
+                autoRecenterJob?.cancel()
+                _isCameraFollowing.value = false
                 routes.firstOrNull()?.shape?.let { pts ->
                     if (pts.isNotEmpty()) {
                         val mid = pts[pts.size / 2]
-                        _cameraCommand.value = CameraTargetCommand(mid.lat, mid.lon, zoom = 12.0)
+                        _cameraCommand.value = CameraTargetCommand(mid.lat, mid.lon, zoom = 12.0, anchorLowerThird = false)
                     }
                 }
             }.onFailure { err ->
@@ -1123,27 +1184,50 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
 
-        // Follow driving camera unless user manually panned away
+        // Follow driving camera unless user manually panned/zoomed away (or auto-recenter triggers after 10s > 10 mph)
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        var forceRecenterNow = false
+        if (cameraFollowController.shouldAutoRecenter(
+                isCameraFollowing = _isCameraFollowing.value,
+                isPlaceOrPreviewOpen = false,
+                speedMps = speedMps,
+                nowMs = nowElapsed
+            )
+        ) {
+            _isCameraFollowing.value = true
+            forceRecenterNow = true
+        }
         if (_isCameraFollowing.value) {
             val targetLoc = state.snappedLocation ?: fallbackLoc
             if (targetLoc != null) {
-                val targetBearing = if (_isHeadingUpMode.value) {
-                    if (speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || state.isSimulatingDrive) {
-                        state.snappedBearing.toDouble()
-                    } else {
-                        _userHeadingDegrees.value.toDouble()
-                    }
+                val heading = if (speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || state.isSimulatingDrive) {
+                    state.snappedBearing
                 } else {
-                    0.0
+                    _userHeadingDegrees.value
                 }
-                _cameraCommand.value = CameraTargetCommand(
+                val simMultiplier = if (state.isSimulatingDrive) _simulationSpeedMultiplier.value else 1
+                val update = cameraFollowController.computeFollowCameraUpdate(
                     lat = targetLoc.lat,
                     lon = targetLoc.lon,
-                    zoom = if (speedMps > 22f) 15.8 else 16.8,
-                    tilt = if (s.is3DView) 55.0 else 0.0,
-                    bearing = targetBearing,
-                    animationDurationMs = cameraAnimMs
+                    speedMps = speedMps,
+                    headingDegrees = heading,
+                    isHeadingUpMode = _isHeadingUpMode.value,
+                    is3DView = s.is3DView,
+                    isNavigating = true,
+                    simulationSpeedMultiplier = simMultiplier,
+                    forceImmediate = forceRecenterNow
                 )
+                if (update != null) {
+                    _cameraCommand.value = CameraTargetCommand(
+                        lat = update.lat,
+                        lon = update.lon,
+                        zoom = update.zoom,
+                        tilt = update.tilt,
+                        bearing = update.bearing,
+                        animationDurationMs = if (state.isSimulatingDrive) cameraAnimMs else update.animationDurationMs,
+                        anchorLowerThird = update.anchorLowerThird
+                    )
+                }
             }
         }
 
@@ -1427,75 +1511,86 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- CAMERA ---
     fun pauseCameraFollow() {
-        if (_navigationState.value.isNavigating) {
-            _isCameraFollowing.value = false
+        _isCameraFollowing.value = false
+        val touchMs = android.os.SystemClock.elapsedRealtime()
+        cameraFollowController.recordUserMapGesture(touchMs)
+        scheduleAutoRecenterCheck()
+    }
+
+    private fun scheduleAutoRecenterCheck() {
+        autoRecenterJob?.cancel()
+        autoRecenterJob = viewModelScope.launch {
+            delay(CameraFollowController.AUTO_RECENTER_DELAY_MS)
+            val nav = _navigationState.value
+            val isPlaceOrPreviewOpen = !nav.isNavigating &&
+                (_selectedPlace.value != null || _candidateRoutes.value.isNotEmpty())
+            val speedMps = if (nav.isNavigating) nav.currentSpeedMps else (currentGpsFix.value?.speedMps ?: 0f)
+            if (cameraFollowController.shouldAutoRecenter(
+                    isCameraFollowing = _isCameraFollowing.value,
+                    isPlaceOrPreviewOpen = isPlaceOrPreviewOpen,
+                    speedMps = speedMps,
+                    nowMs = android.os.SystemClock.elapsedRealtime()
+                )
+            ) {
+                recenterCamera()
+            }
         }
     }
 
     fun toggle3DView() {
         val next = !settings.value.is3DView
         viewModelScope.launch { prefs.set3DView(next) }
-        val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
-        _cameraCommand.value = CameraTargetCommand(
-            lat = ref.lat,
-            lon = ref.lon,
-            zoom = if (_navigationState.value.isNavigating) 16.5 else 14.5,
-            tilt = if (next) 55.0 else 0.0,
-            bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
-        )
+        emitImmediateFollowCamera(is3DViewOverride = next)
     }
 
     fun toggleCompassHeadingMode() {
         val nextHeadingUp = !_isHeadingUpMode.value
         _isHeadingUpMode.value = nextHeadingUp
-        val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
-        val s = settings.value
         if (nextHeadingUp) {
+            autoRecenterJob?.cancel()
             _isCameraFollowing.value = true
         }
-        val targetBearing = if (nextHeadingUp) {
-            if (_navigationState.value.isNavigating &&
-                (_navigationState.value.isSimulatingDrive ||
-                    (currentGpsFix.value?.speedMps ?: 0f) > LocationTracker.MIN_BEARING_SPEED_MPS)
-            ) {
-                _navigationState.value.snappedBearing.toDouble()
-            } else {
-                _userHeadingDegrees.value.toDouble()
-            }
-        } else {
-            0.0
-        }
-        _cameraCommand.value = CameraTargetCommand(
-            lat = ref.lat,
-            lon = ref.lon,
-            zoom = if (_navigationState.value.isNavigating) 16.8 else 14.5,
-            tilt = if (s.is3DView && _navigationState.value.isNavigating) 55.0 else 0.0,
-            bearing = targetBearing
-        )
+        emitImmediateFollowCamera()
     }
 
     fun recenterCamera() {
+        autoRecenterJob?.cancel()
         _isCameraFollowing.value = true
-        val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+        emitImmediateFollowCamera()
+    }
+
+    private fun emitImmediateFollowCamera(is3DViewOverride: Boolean? = null) {
+        val nav = _navigationState.value
+        val fix = currentGpsFix.value
+        val ref = nav.snappedLocation ?: getEffectiveReferenceLocation()
         val s = settings.value
-        val targetBearing = if (_isHeadingUpMode.value) {
-            if (_navigationState.value.isNavigating &&
-                (_navigationState.value.isSimulatingDrive ||
-                    (currentGpsFix.value?.speedMps ?: 0f) > LocationTracker.MIN_BEARING_SPEED_MPS)
-            ) {
-                _navigationState.value.snappedBearing.toDouble()
-            } else {
-                _userHeadingDegrees.value.toDouble()
-            }
+        val speedMps = if (nav.isNavigating) nav.currentSpeedMps else (fix?.speedMps ?: 0f)
+        val heading = if (nav.isNavigating && (nav.isSimulatingDrive || speedMps > LocationTracker.MIN_BEARING_SPEED_MPS)) {
+            nav.snappedBearing
+        } else if (!nav.isNavigating && fix != null && fix.speedMps > LocationTracker.MIN_BEARING_SPEED_MPS && fix.hasBearing) {
+            fix.bearing
         } else {
-            0.0
+            _userHeadingDegrees.value
         }
-        _cameraCommand.value = CameraTargetCommand(
+        val update = cameraFollowController.computeFollowCameraUpdate(
             lat = ref.lat,
             lon = ref.lon,
-            zoom = if (_navigationState.value.isNavigating) 16.8 else 14.5,
-            tilt = if (s.is3DView && _navigationState.value.isNavigating) 55.0 else 0.0,
-            bearing = targetBearing
+            speedMps = speedMps,
+            headingDegrees = heading,
+            isHeadingUpMode = _isHeadingUpMode.value,
+            is3DView = is3DViewOverride ?: s.is3DView,
+            isNavigating = nav.isNavigating,
+            simulationSpeedMultiplier = if (nav.isSimulatingDrive) _simulationSpeedMultiplier.value else 1,
+            forceImmediate = true
+        ) ?: return
+        _cameraCommand.value = CameraTargetCommand(
+            lat = update.lat,
+            lon = update.lon,
+            zoom = update.zoom,
+            tilt = update.tilt,
+            bearing = update.bearing,
+            animationDurationMs = update.animationDurationMs,
+            anchorLowerThird = update.anchorLowerThird
         )
     }
 

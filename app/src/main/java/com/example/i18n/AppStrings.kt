@@ -320,6 +320,36 @@ interface AppStrings {
     val simulationSpeedLabel: String
     val simulationNoRouteMessage: String
     val simulationSpeedChangedPrefix: String
+    // Online-when-available connectivity, weather alerts, Photon fallback & auto map updates
+    val sectionOnlineFeatures: String
+    val onlineFeaturesMainSwitch: String
+    val onlineWeatherAlertsSwitch: String
+    val onlineSearchFallbackSwitch: String
+    val autoCheckMapUpdatesSwitch: String
+    val wifiOnlyLargeDownloadsSwitch: String
+    val autoUpdateMapsOnWifiSwitch: String
+    val onlineLocationDisclosureTitle: String
+    val onlineLocationDisclosureBody: String
+    val cloudStatusOnlineWifi: String
+    val cloudStatusOnlineMobile: String
+    val cloudStatusOffline: String
+    val cloudStatusDisabled: String
+    val cloudDialogTitle: String
+    val onlineSourceWeatherName: String
+    val onlineSourceSearchName: String
+    val onlineSourceMapUpdatesName: String
+    val onlineSourceStateWorking: String
+    val onlineSourceStateReady: String
+    val onlineSourceStateOff: String
+    val onlineSourceStateOffline: String
+    val onlineSourceStateUnavailable: String
+    val weatherAlertBannerUntilPrefix: String
+    val weatherAlertRouteSuffix: String
+    val onlineSearchSectionHeader: String
+    val onlineSearchResultBadge: String
+    val mapUpdateNotificationTitle: String
+    val mapUpdateNotificationBody: String
+    val mapUpdateWifiOnlyNotice: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

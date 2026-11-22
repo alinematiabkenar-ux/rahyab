@@ -7,6 +7,7 @@ import com.example.data.local.InstalledPackDao
 import com.example.data.local.InstalledPackEntity
 import com.example.data.local.PackInstallStatus
 import com.example.data.model.UsStatesCatalog
+import com.example.data.online.OnlineHttpConfig
 import com.example.util.CrashLogManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -290,7 +291,7 @@ class StatePackManager(
             val manifestUrl = if (cleaned.endsWith("manifest.json")) cleaned else "$cleaned/manifest.json"
             val request = Request.Builder()
                 .url(manifestUrl)
-                .header("User-Agent", "RahYab-Android-Nav/1.1")
+                .header("User-Agent", OnlineHttpConfig.userAgent())
                 .get()
                 .build()
             okHttpClient.newCall(request).execute().use { response ->
@@ -808,7 +809,7 @@ class StatePackManager(
         val existingLength = if (partFile.exists()) partFile.length() else 0L
         val reqBuilder = Request.Builder()
             .url(url)
-            .header("User-Agent", "RahYab-Android-Nav/1.1")
+            .header("User-Agent", OnlineHttpConfig.userAgent())
             .get()
         if (existingLength > 0L) {
             reqBuilder.header("Range", "bytes=$existingLength-")

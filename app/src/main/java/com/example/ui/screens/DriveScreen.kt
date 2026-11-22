@@ -750,12 +750,12 @@ fun DriveScreen(
                 onClick = { viewModel.toggleCompassHeadingMode() }
             )
 
-            // Recenter GPS (highlighted cyan when user panned map away during navigation)
+            // Recenter GPS (highlighted cyan whenever camera following is paused in any mode)
             SmallCockpitButton(
                 icon = Icons.Filled.MyLocation,
                 contentDescription = strings.recenter,
                 onClick = { viewModel.recenterCamera() },
-                highlight = navState.isNavigating && !isCameraFollowing,
+                highlight = !isCameraFollowing,
                 testTag = "recenter_gps_button"
             )
 

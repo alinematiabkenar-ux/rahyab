@@ -3,6 +3,7 @@ package com.example.navigation
 import android.content.Context
 import com.example.data.model.UsStateInfo
 import com.example.data.model.UsStatesCatalog
+import com.example.data.online.OnlineHttpConfig
 import com.example.data.packs.StatePackManager
 import com.example.util.CrashLogManager
 import com.valhalla.valhalla.Valhalla
@@ -224,7 +225,7 @@ class ValhallaRoutingEngine(
             val mediaType = "application/json; charset=utf-8".toMediaType()
             val req = Request.Builder()
                 .url(DEV_PUBLIC_VALHALLA_TRACE_URL)
-                .header("User-Agent", "RahYab-Android-Nav/1.1")
+                .header("User-Agent", OnlineHttpConfig.userAgent())
                 .post(traceReq.toRequestBody(mediaType))
                 .build()
             httpClient.newCall(req).execute().use { resp ->
@@ -256,7 +257,7 @@ class ValhallaRoutingEngine(
         val mediaType = "application/json; charset=utf-8".toMediaType()
         val req = Request.Builder()
             .url(DEV_PUBLIC_VALHALLA_URL)
-            .header("User-Agent", "RahYab-Android-Nav/1.1")
+            .header("User-Agent", OnlineHttpConfig.userAgent())
             .post(requestJson.toRequestBody(mediaType))
             .build()
 
