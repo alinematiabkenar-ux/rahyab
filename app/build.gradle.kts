@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.rahyab.kqzmxv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 13
-    versionName = "13.0"
+    versionCode = 14
+    versionName = "14.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -136,6 +136,8 @@ dependencies {
   implementation(libs.valhalla.models)
   implementation(libs.valhalla.models.config)
   implementation(libs.androidx.sqlite.bundled)
+  implementation(libs.sherpa.onnx)
+  implementation(libs.commons.compress)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
