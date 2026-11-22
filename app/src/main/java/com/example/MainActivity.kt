@@ -80,6 +80,7 @@ import com.example.i18n.LocalAppStrings
 import com.example.i18n.stringsFor
 import com.example.service.NavigationForegroundService
 import com.example.ui.RahYabViewModel
+import com.example.ui.screens.DiagnosticsScreen
 import com.example.ui.screens.DownloadMapsScreen
 import com.example.ui.screens.DriveScreen
 import com.example.ui.screens.SettingsScreen
@@ -91,6 +92,7 @@ object RahYabRoutes {
     const val ROUTE_DRIVE = "drive"
     const val ROUTE_MAPS = "maps"
     const val ROUTE_SETTINGS = "settings"
+    const val ROUTE_DIAGNOSTICS = "diagnostics"
 }
 
 class MainActivity : ComponentActivity() {
@@ -278,12 +280,16 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                     )
 
                     val navigateTab: (String) -> Unit = { route ->
-                        navController.navigate(route) {
-                            popUpTo(navController.graph.findStartDestination().id) {
-                                saveState = true
+                        if (route == RahYabRoutes.ROUTE_SETTINGS && currentRoute == RahYabRoutes.ROUTE_DIAGNOSTICS) {
+                            navController.popBackStack(RahYabRoutes.ROUTE_SETTINGS, inclusive = false)
+                        } else {
+                            navController.navigate(route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
                             }
-                            launchSingleTop = true
-                            restoreState = true
                         }
                     }
 
@@ -306,8 +312,10 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                             if (!useNavigationRail && !navState.isNavigating) {
                                 NavigationBar {
                                     navDestinations.forEach { (route, label, icon) ->
+                                        val isSelected = currentRoute == route ||
+                                            (route == RahYabRoutes.ROUTE_SETTINGS && currentRoute == RahYabRoutes.ROUTE_DIAGNOSTICS)
                                         NavigationBarItem(
-                                            selected = currentRoute == route,
+                                            selected = isSelected,
                                             onClick = { navigateTab(route) },
                                             icon = { Icon(icon, contentDescription = label) },
                                             label = { Text(label) },
@@ -326,8 +334,10 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                             if (useNavigationRail && !navState.isNavigating) {
                                 NavigationRail {
                                     navDestinations.forEach { (route, label, icon) ->
+                                        val isSelected = currentRoute == route ||
+                                            (route == RahYabRoutes.ROUTE_SETTINGS && currentRoute == RahYabRoutes.ROUTE_DIAGNOSTICS)
                                         NavigationRailItem(
-                                            selected = currentRoute == route,
+                                            selected = isSelected,
                                             onClick = { navigateTab(route) },
                                             icon = { Icon(icon, contentDescription = label) },
                                             label = { Text(label) },
@@ -356,7 +366,21 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                                     DownloadMapsScreen(viewModel = viewModel)
                                 }
                                 composable(RahYabRoutes.ROUTE_SETTINGS) {
-                                    SettingsScreen(viewModel = viewModel)
+                                    SettingsScreen(
+                                        viewModel = viewModel,
+                                        onOpenDiagnostics = {
+                                            navController.navigate(RahYabRoutes.ROUTE_DIAGNOSTICS) {
+                                                launchSingleTop = true
+                                            }
+                                        }
+                                    )
+                                }
+                                composable(RahYabRoutes.ROUTE_DIAGNOSTICS) {
+                                    DiagnosticsScreen(
+                                        viewModel = viewModel,
+                                        hasFineLocationPermission = hasFineLocationPermission,
+                                        onBack = { navController.popBackStack() }
+                                    )
                                 }
                             }
                         }

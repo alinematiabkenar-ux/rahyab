@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
@@ -79,6 +80,7 @@ import com.example.ui.theme.AlertRed
 @Composable
 fun SettingsScreen(
     viewModel: RahYabViewModel,
+    onOpenDiagnostics: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -238,6 +240,15 @@ fun SettingsScreen(
                     testTag = "switch_speed_audio"
                 )
 
+                if (settings.language == AppLanguage.PERSIAN) {
+                    SettingsToggleRow(
+                        label = strings.diagUseEnglishVoiceInPersian,
+                        checked = settings.useEnglishVoiceInPersianMode,
+                        onCheckedChange = { viewModel.setUseEnglishVoiceInPersianMode(it) },
+                        testTag = "switch_english_voice_in_persian"
+                    )
+                }
+
                 if (settings.language == AppLanguage.PERSIAN && !isPersianTtsAvailable) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
@@ -261,7 +272,7 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = strings.persianTtsMissingBody,
+                                text = strings.diagPersianInstallSteps,
                                 style = MaterialTheme.typography.bodySmall
                             )
                             OutlinedButton(
@@ -686,6 +697,31 @@ fun SettingsScreen(
                             modifier = Modifier.testTag("switch_simulate_drive")
                         )
                     }
+                }
+            }
+        }
+
+        // 8b. Diagnostics Screen Entry
+        item {
+            SettingsSectionCard(
+                title = strings.diagnosticsTitle,
+                icon = Icons.Filled.BugReport
+            ) {
+                Text(
+                    text = strings.diagnosticsSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = onOpenDiagnostics,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("open_diagnostics_button")
+                ) {
+                    Icon(Icons.Filled.BugReport, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(strings.openDiagnostics)
                 }
             }
         }

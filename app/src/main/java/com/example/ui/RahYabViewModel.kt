@@ -25,6 +25,7 @@ import com.example.i18n.stringsFor
 import com.example.navigation.ActiveNavigationState
 import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
+import com.example.navigation.LastRouteDiagnostics
 import com.example.navigation.LatLon
 import com.example.navigation.LocationTracker
 import com.example.navigation.MissingStatesException
@@ -33,7 +34,9 @@ import com.example.navigation.OfflineRoute
 import com.example.navigation.RouteOptions
 import com.example.navigation.RoutePreference
 import com.example.navigation.SolarNightCalculator
+import com.example.navigation.VoiceGuidanceManager
 import com.example.service.NavigationForegroundService
+import com.example.util.CrashLogManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -79,8 +82,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     val currentGpsFix: StateFlow<GpsFix?> = locationTracker.currentFix
+    val compassHeadingDegrees: StateFlow<Float?> = compassTracker.headingDegrees
+    val compassSensorAccuracy: StateFlow<Int> = compassTracker.sensorAccuracy
     val isCompassLowAccuracy: StateFlow<Boolean> = compassTracker.isLowAccuracy
     val isPersianTtsAvailable: StateFlow<Boolean> = voiceManager.isPersianVoiceAvailable
+    val ttsDiagnostics: StateFlow<VoiceGuidanceManager.TtsDiagnosticsInfo> = voiceManager.ttsDiagnostics
+    val lastRouteDiagnostics: StateFlow<LastRouteDiagnostics?> = routingEngine.lastRouteDiagnostics
     val isFetchingManifest: StateFlow<Boolean> = packManager.isFetchingManifest
     val manifestError: StateFlow<String?> = packManager.manifestError
     val packsChangedTick: StateFlow<Long> = packManager.packsChangedTick
@@ -250,9 +257,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         // Sync voice language & enabled state with settings + trigger one-time Persian TTS notice
         viewModelScope.launch {
             settings.collect { s ->
+                voiceManager.setUseEnglishVoiceInPersianMode(s.useEnglishVoiceInPersianMode)
                 voiceManager.setLanguage(s.language)
                 voiceManager.setVoiceEnabled(s.voiceGuidanceEnabled)
-                if (s.language == AppLanguage.PERSIAN && !s.persianTtsNoticeShown) {
+                if (s.language == AppLanguage.PERSIAN && !s.persianTtsNoticeShown && !s.useEnglishVoiceInPersianMode) {
                     val available = voiceManager.checkPersianAvailability()
                     if (!available) {
                         _showPersianTtsDialog.value = true
@@ -1377,10 +1385,34 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { prefs.setSimulateDriveEnabled(enabled) }
     }
 
+    fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
+        viewModelScope.launch { prefs.setUseEnglishVoiceInPersianMode(enabled) }
+    }
+
     fun testVoiceGuidance() {
         voiceManager.checkPersianAvailability()
         voiceManager.speakTestSample(settings.value.language)
     }
+
+    fun refreshTtsDiagnostics() {
+        voiceManager.refreshTtsDiagnostics()
+    }
+
+    fun testPersianVoice() {
+        val ok = voiceManager.speakExplicitLanguageTest(AppLanguage.PERSIAN)
+        if (!ok) {
+            _snackbarMessage.value = stringsFor(settings.value.language).diagPersianVoiceUnavailableToast
+        }
+    }
+
+    fun testEnglishVoice() {
+        voiceManager.speakExplicitLanguageTest(AppLanguage.ENGLISH)
+    }
+
+    fun getPackFileSizes(stateCode: String) = packManager.getPackFileSizes(stateCode)
+
+    fun readLastErrorLogLines(maxLines: Int = 20): List<String> =
+        CrashLogManager.readLastErrorLines(app, maxLines)
 
     fun showSnackbar(message: String) {
         _snackbarMessage.value = message
