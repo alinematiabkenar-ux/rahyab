@@ -94,6 +94,8 @@ object BackupAndTransferManager {
             put("alertRailroadEnabled", settings.alertRailroadEnabled)
             put("alertSchoolZoneEnabled", settings.alertSchoolZoneEnabled)
             put("alertStopSignEnabled", settings.alertStopSignEnabled)
+            put("alertSpeedCameraEnabled", settings.alertSpeedCameraEnabled)
+            put("alertRedLightCameraEnabled", settings.alertRedLightCameraEnabled)
             put("is3DView", settings.is3DView)
             put("routePreference", settings.routePreference.code)
             put("avoidTolls", settings.avoidTolls)
@@ -146,6 +148,8 @@ object BackupAndTransferManager {
                 alertRailroadEnabled = s.optBoolean("alertRailroadEnabled", true),
                 alertSchoolZoneEnabled = s.optBoolean("alertSchoolZoneEnabled", true),
                 alertStopSignEnabled = s.optBoolean("alertStopSignEnabled", false),
+                alertSpeedCameraEnabled = s.optBoolean("alertSpeedCameraEnabled", true),
+                alertRedLightCameraEnabled = s.optBoolean("alertRedLightCameraEnabled", true),
                 is3DView = s.optBoolean("is3DView", true),
                 routePreference = RoutePreference.entries.find { it.code == s.optString("routePreference") }
                     ?: RoutePreference.FASTEST,

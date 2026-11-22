@@ -43,7 +43,9 @@ data class RoadHazardPoint(
     val lat: Double,
     val lon: Double,
     val label: String,
-    val speedLimitMph: Int? = null
+    val speedLimitMph: Int? = null,
+    val directionDegrees: Float? = null,
+    val osmId: String? = null
 )
 
 /**
@@ -144,19 +146,70 @@ class OfflinePlaceSearchEngine(
         minLon: Double,
         maxLon: Double
     ): List<RoadHazardPoint> = withContext(Dispatchers.IO) {
+        queryRoadHazardsInFiles(
+            dbFiles = packManager.getInstalledPlacesDatabases().map { it.second },
+            minLat = minLat,
+            maxLat = maxLat,
+            minLon = minLon,
+            maxLon = maxLon,
+            camerasOnly = false,
+            limit = 400
+        )
+    }
+
+    suspend fun queryCamerasInBounds(
+        minLat: Double,
+        maxLat: Double,
+        minLon: Double,
+        maxLon: Double
+    ): List<RoadHazardPoint> = withContext(Dispatchers.IO) {
+        queryRoadHazardsInFiles(
+            dbFiles = packManager.getInstalledPlacesDatabases().map { it.second },
+            minLat = minLat,
+            maxLat = maxLat,
+            minLon = minLon,
+            maxLon = maxLon,
+            camerasOnly = true,
+            limit = 500
+        )
+    }
+
+    /**
+     * Reads hazards/cameras across one or more SQLite places databases while gracefully supporting
+     * older packs whose `road_hazards` table lacks `direction` or `osm_id` columns (or lacks the table).
+     */
+    fun queryRoadHazardsInFiles(
+        dbFiles: List<File>,
+        minLat: Double,
+        maxLat: Double,
+        minLon: Double,
+        maxLon: Double,
+        camerasOnly: Boolean = false,
+        limit: Int = 400
+    ): List<RoadHazardPoint> {
         val hazards = mutableListOf<RoadHazardPoint>()
-        for ((_, dbFile) in packManager.getInstalledPlacesDatabases()) {
+        for (dbFile in dbFiles) {
             runCatching {
                 val conn = sqliteDriver.open(dbFile.absolutePath)
                 try {
-                    val hasTable = hasTable(conn, "road_hazards")
-                    if (!hasTable) return@runCatching
+                    if (!hasTable(conn, "road_hazards")) return@runCatching
+                    val columns = getTableColumns(conn, "road_hazards")
+                    val hasDirection = columns.contains("direction")
+                    val hasOsmId = columns.contains("osm_id")
+                    val dirSelect = if (hasDirection) "direction" else "NULL"
+                    val osmIdSelect = if (hasOsmId) "osm_id" else "NULL"
+                    val typeFilter = if (camerasOnly) {
+                        "AND type IN ('speed_camera', 'red_light_camera')"
+                    } else {
+                        ""
+                    }
                     val stmt = conn.prepare(
                         """
-                        SELECT id, type, lat, lon, COALESCE(label, ''), speed_limit_mph
+                        SELECT id, type, lat, lon, COALESCE(label, ''), speed_limit_mph, $dirSelect, $osmIdSelect
                         FROM road_hazards
                         WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
-                        LIMIT 250
+                        $typeFilter
+                        LIMIT ?
                         """.trimIndent()
                     )
                     try {
@@ -164,6 +217,7 @@ class OfflinePlaceSearchEngine(
                         stmt.bindDouble(2, maxLat)
                         stmt.bindDouble(3, minLon)
                         stmt.bindDouble(4, maxLon)
+                        stmt.bindLong(5, limit.toLong())
                         while (stmt.step()) {
                             hazards.add(
                                 RoadHazardPoint(
@@ -172,7 +226,9 @@ class OfflinePlaceSearchEngine(
                                     lat = stmt.getDouble(2),
                                     lon = stmt.getDouble(3),
                                     label = stmt.getText(4),
-                                    speedLimitMph = if (stmt.isNull(5)) null else stmt.getLong(5).toInt()
+                                    speedLimitMph = if (stmt.isNull(5)) null else stmt.getLong(5).toInt(),
+                                    directionDegrees = if (stmt.isNull(6)) null else stmt.getDouble(6).toFloat(),
+                                    osmId = if (stmt.isNull(7)) null else stmt.getText(7).takeIf { it.isNotBlank() }
                                 )
                             )
                         }
@@ -184,7 +240,20 @@ class OfflinePlaceSearchEngine(
                 }
             }
         }
-        hazards
+        return hazards
+    }
+
+    private fun getTableColumns(conn: SQLiteConnection, tableName: String): Set<String> {
+        val cols = mutableSetOf<String>()
+        val stmt = conn.prepare("PRAGMA table_info($tableName)")
+        try {
+            while (stmt.step()) {
+                cols.add(stmt.getText(1).lowercase())
+            }
+        } finally {
+            stmt.close()
+        }
+        return cols
     }
 
     private fun hasTable(conn: SQLiteConnection, name: String): Boolean {

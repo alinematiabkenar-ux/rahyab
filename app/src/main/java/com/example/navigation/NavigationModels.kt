@@ -115,6 +115,8 @@ enum class RoadAlertKind {
     SCHOOL_ZONE,
     STOP_SIGN,
     TRAFFIC_SIGNAL,
+    SPEED_CAMERA,
+    RED_LIGHT_CAMERA,
     USER_POLICE,
     USER_HAZARD,
     USER_CRASH,

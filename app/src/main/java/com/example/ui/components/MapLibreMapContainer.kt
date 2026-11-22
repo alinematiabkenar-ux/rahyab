@@ -27,6 +27,7 @@ import com.example.data.local.ReportType
 import com.example.data.local.UserReportEntity
 import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.PlaceSearchResult
+import com.example.data.search.RoadHazardPoint
 import com.example.i18n.AppLanguage
 import com.example.map.MapStyleBuilder
 import com.example.map.RouteGeoJsonCache
@@ -87,6 +88,7 @@ fun MapLibreMapContainer(
     activeNavRoute: OfflineRoute?,
     selectedPlace: PlaceSearchResult?,
     userReports: List<UserReportEntity>,
+    cameras: List<RoadHazardPoint> = emptyList(),
     cameraCommand: CameraTargetCommand?,
     onMapLongClick: (Double, Double) -> Unit,
     onRouteTapped: (Int) -> Unit,
@@ -170,6 +172,8 @@ fun MapLibreMapContainer(
             runCatching {
                 style.addImage(MapStyleBuilder.IMAGE_USER_ARROW, createUserArrowBitmap())
                 style.addImage(MapStyleBuilder.IMAGE_HIGHWAY_SHIELD, createHighwayShieldBitmap(isNightMode))
+                style.addImage(MapStyleBuilder.IMAGE_SPEED_CAMERA, createSpeedCameraBitmap())
+                style.addImage(MapStyleBuilder.IMAGE_RED_LIGHT_CAMERA, createRedLightCameraBitmap())
             }
             loadedStyle = style
         }
@@ -275,6 +279,32 @@ fun MapLibreMapContainer(
         if (!style.isFullyLoaded) return@LaunchedEffect
         runCatching {
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_USER_REPORTS)?.setGeoJson(reportsFc)
+        }
+    }
+
+    // 3B. SPEED CAMERAS & RED LIGHT CAMERAS EFFECT (rendered from zoom 13)
+    LaunchedEffect(loadedStyle, cameras) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val camerasFc = withContext(Dispatchers.Default) {
+            FeatureCollection.fromFeatures(
+                cameras.map { cam ->
+                    val iconName = if (cam.type.equals("red_light_camera", ignoreCase = true)) {
+                        MapStyleBuilder.IMAGE_RED_LIGHT_CAMERA
+                    } else {
+                        MapStyleBuilder.IMAGE_SPEED_CAMERA
+                    }
+                    Feature.fromGeometry(Point.fromLngLat(cam.lon, cam.lat)).apply {
+                        addStringProperty("icon", iconName)
+                        addStringProperty("type", cam.type)
+                    }
+                }
+            )
+        }
+        if (!style.isFullyLoaded) return@LaunchedEffect
+        runCatching {
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_CAMERAS)?.setGeoJson(camerasFc)
         }
     }
 
@@ -515,5 +545,79 @@ private fun createHighwayShieldBitmap(isNightMode: Boolean): Bitmap {
 
     canvas.drawRoundRect(rect, 9f, 9f, fillPaint)
     canvas.drawRoundRect(rect, 9f, 9f, borderPaint)
+    return bmp
+}
+
+private fun createSpeedCameraBitmap(): Bitmap {
+    val size = 64
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Red circular badge with crisp white border
+    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.parseColor("#DC2626")
+    }
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        color = AndroidColor.WHITE
+    }
+    canvas.drawCircle(cx, cy, 26f, bgPaint)
+    canvas.drawCircle(cx, cy, 26f, borderPaint)
+
+    // Camera silhouette in white
+    val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.WHITE
+    }
+    canvas.drawRoundRect(RectF(17f, 23f, 47f, 44f), 5f, 5f, whitePaint)
+    canvas.drawRoundRect(RectF(24f, 18f, 36f, 24f), 3f, 3f, whitePaint)
+
+    // Camera lens ring
+    val lensPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.parseColor("#DC2626")
+    }
+    canvas.drawCircle(cx, 33.5f, 7.5f, lensPaint)
+    canvas.drawCircle(cx, 33.5f, 3.8f, whitePaint)
+    return bmp
+}
+
+private fun createRedLightCameraBitmap(): Bitmap {
+    val size = 64
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Dark slate circular badge with amber-red border
+    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.parseColor("#1E293B")
+    }
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        color = AndroidColor.parseColor("#EF4444")
+    }
+    canvas.drawCircle(cx, cy, 26f, bgPaint)
+    canvas.drawCircle(cx, cy, 26f, borderPaint)
+
+    // Traffic signal housing
+    val housingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.parseColor("#0F172A")
+    }
+    canvas.drawRoundRect(RectF(23f, 12f, 41f, 52f), 5f, 5f, housingPaint)
+
+    val redLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.parseColor("#EF4444") }
+    val amberLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.parseColor("#F59E0B") }
+    val greenLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.parseColor("#22C55E") }
+    canvas.drawCircle(cx, 20f, 5.2f, redLight)
+    canvas.drawCircle(cx, 32f, 4.6f, amberLight)
+    canvas.drawCircle(cx, 44f, 4.6f, greenLight)
     return bmp
 }

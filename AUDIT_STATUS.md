@@ -38,7 +38,12 @@
 | 21 | DONE | `NavigationSessionController` snaps to route only within 30 m (`bestDist <= 30.0`); `MapLibreMapContainer` renders light blue accuracy polygon; `DriveScreen` shows `ApproximateLocationBanner` with Settings button. |
 | 22 | DONE | `CompassTracker` uses `TYPE_ROTATION_VECTOR` with `GeomagneticField` true north and screen rotation; used below 3 mph for display only (never sent to routing); `CompassCalibrationBanner` shown on low accuracy. |
 
-## GROUP 5: SPEED CAMERAS AND RED LIGHT CAMERAS — IN PROGRESS
+## GROUP 5: SPEED CAMERAS AND RED LIGHT CAMERAS — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 23 | FIXED | Updated `data-pipeline/build_state_pack.py` to add `direction` & `osm_id` columns to `road_hazards`, extract `highway=speed_camera` nodes and `type=enforcement` (`maxspeed` -> `speed_camera`, `traffic_signals` -> `red_light_camera`) relations with `device` position, `from` travel bearing, `direction` tag, `maxspeed` (mph), deduplication, and printed counts (`.github/workflows/build-map-packs.yml` untouched). |
+| 24 | FIXED | Added zoom >= 13 speed/red-light camera map icons (`SOURCE_CAMERAS`/`LAYER_CAMERAS_SYMBOL`), direction- & lateral-offset-filtered ahead warnings (~315 m city / ~420 m highway, once per camera) in both active navigation/simulation (1x–32x) and free driving, alert chime + EN/FA voice with optional speed limit, two Settings toggles (ON by default) + backup sync, and backward-compatible `PRAGMA table_info` schema probing for older map packs. |
+
 ## GROUP 6: OPEN ADDRESSES FROM OTHER APPS — PENDING
 ## GROUP 7: PERSIAN VOICE ENGINE — PENDING
 ## GROUP 8: ONLINE FEATURES WITHOUT KEYS — PENDING

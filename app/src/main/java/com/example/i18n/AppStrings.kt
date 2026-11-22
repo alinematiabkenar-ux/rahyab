@@ -120,6 +120,10 @@ interface AppStrings {
     val alertToggleRailroad: String
     val alertToggleSchoolZone: String
     val alertToggleStopSign: String
+    val alertToggleSpeedCamera: String
+    val alertToggleRedLightCamera: String
+    val alertSpeedCamera: String
+    val alertRedLightCamera: String
     // Waze-style user reports (8 types + management + export/import)
     val reportButton: String
     val reportSheetTitle: String

@@ -10,6 +10,7 @@ import com.example.i18n.DistanceUnit
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.sin
 
 /**
  * Pure turn-by-turn navigation session calculator covering Phases 2, 3, and 4:
@@ -31,6 +32,7 @@ class NavigationSessionController {
     private var offRouteCount = 0
     private var lastRerouteRequestMs = 0L
     private val lastSpokenAlertIds = mutableSetOf<String>()
+    private val spokenFreeDriveCameraIds = mutableSetOf<String>()
     private val spokenStagesByManeuver = mutableMapOf<Int, MutableSet<String>>()
     private var trackedRouteId: String? = null
     private var lastSpokenManeuverIndex: Int = -1
@@ -40,6 +42,7 @@ class NavigationSessionController {
         offRouteCount = 0
         lastRerouteRequestMs = 0L
         lastSpokenAlertIds.clear()
+        spokenFreeDriveCameraIds.clear()
         spokenStagesByManeuver.clear()
         trackedRouteId = null
         lastSpokenManeuverIndex = -1
@@ -311,7 +314,8 @@ class NavigationSessionController {
             routeAlerts = route.roadAlerts,
             dbHazards = dbHazards,
             userReports = userReports,
-            settings = settings
+            settings = settings,
+            isHighway = isHighway
         )
         val alertToSpeak = if (activeAheadAlert != null &&
             activeAheadAlert.distanceMeters <= 550.0 &&
@@ -544,11 +548,15 @@ class NavigationSessionController {
             if (shouldReroute) break
         }
 
+        val prioritizedAlert = triggeredAlerts.lastOrNull {
+            it.kind == RoadAlertKind.SPEED_CAMERA || it.kind == RoadAlertKind.RED_LIGHT_CAMERA
+        } ?: triggeredAlerts.lastOrNull()
+
         return SimulationStepBatchResult(
             state = state,
             shouldReroute = shouldReroute,
             latestManeuverToSpeak = triggeredManeuvers.lastOrNull(),
-            latestAlertToSpeak = triggeredAlerts.lastOrNull(),
+            latestAlertToSpeak = prioritizedAlert,
             triggerOverspeedChime = triggerChime,
             finalSimClockMs = simClockMs,
             allTriggeredManeuvers = triggeredManeuvers,
@@ -654,16 +662,133 @@ class NavigationSessionController {
         return Triple(shape.lastIndex, last, ValhallaResponseParser.bearingDegrees(prev, last).toFloat())
     }
 
+    /**
+     * Evaluates approaching speed cameras and red light cameras during free driving (no active route).
+     * Returns `(activeBannerAlert, alertToSpeakOnce)`.
+     */
+    fun evaluateFreeDriveCameraAlert(
+        fix: GpsFix,
+        cameras: List<RoadHazardPoint>,
+        settings: UserSettings
+    ): Pair<AheadAlert?, AheadAlert?> {
+        if (cameras.isEmpty()) return null to null
+        if (!settings.alertSpeedCameraEnabled && !settings.alertRedLightCameraEnabled) return null to null
+
+        val isHighway = fix.speedMps >= 20f
+        val maxDist = cameraWarningDistanceMeters(isHighway)
+        val nearbyIds = mutableSetOf<String>()
+        var nearest: AheadAlert? = null
+
+        for (h in cameras) {
+            val alertId = stableCameraAlertId(h)
+            val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, h.lat, h.lon)
+            if (dist <= 1_200.0) {
+                nearbyIds.add(alertId)
+            }
+            val alert = buildCameraAlertIfAhead(
+                fix = fix,
+                hazard = h,
+                distanceMeters = dist,
+                maxDistanceMeters = maxDist,
+                settings = settings
+            ) ?: continue
+            if (nearest == null || alert.distanceMeters < nearest.distanceMeters) {
+                nearest = alert
+            }
+        }
+
+        // Allow a camera to warn again only after the driver has moved > 1.2 km away from it
+        spokenFreeDriveCameraIds.retainAll(nearbyIds)
+
+        val toSpeak = if (nearest != null && spokenFreeDriveCameraIds.add(nearest.id)) {
+            nearest
+        } else {
+            null
+        }
+        return nearest to toSpeak
+    }
+
+    private fun cameraWarningDistanceMeters(isHighway: Boolean): Double =
+        if (isHighway) CAMERA_WARN_HIGHWAY_METERS else CAMERA_WARN_CITY_METERS
+
+    private fun stableCameraAlertId(h: RoadHazardPoint): String =
+        "cam_${h.osmId?.takeIf { it.isNotBlank() } ?: h.id}"
+
+    private fun buildCameraAlertIfAhead(
+        fix: GpsFix,
+        hazard: RoadHazardPoint,
+        distanceMeters: Double,
+        maxDistanceMeters: Double,
+        settings: UserSettings
+    ): AheadAlert? {
+        if (distanceMeters < 10.0 || distanceMeters > maxDistanceMeters) return null
+        val (kind, titleEn, titleFa) = when (hazard.type.lowercase()) {
+            "speed_camera" -> {
+                if (!settings.alertSpeedCameraEnabled) return null
+                Triple(RoadAlertKind.SPEED_CAMERA, "Speed camera ahead", "دوربین سرعت در پیش است")
+            }
+            "red_light_camera" -> {
+                if (!settings.alertRedLightCameraEnabled) return null
+                Triple(RoadAlertKind.RED_LIGHT_CAMERA, "Red light camera ahead", "دوربین چراغ قرمز در پیش است")
+            }
+            else -> return null
+        }
+
+        if (!isCameraAheadInTravelDirection(fix, hazard, distanceMeters)) return null
+
+        return AheadAlert(
+            id = stableCameraAlertId(hazard),
+            kind = kind,
+            lat = hazard.lat,
+            lon = hazard.lon,
+            distanceMeters = distanceMeters,
+            titleEn = titleEn,
+            titleFa = titleFa,
+            detail = hazard.label,
+            newSpeedLimitMph = hazard.speedLimitMph
+        )
+    }
+
+    private fun isCameraAheadInTravelDirection(
+        fix: GpsFix,
+        camera: RoadHazardPoint,
+        distanceMeters: Double
+    ): Boolean {
+        val hasDirection = fix.hasBearing || fix.speedMps >= 2.0f
+        if (!hasDirection) return distanceMeters <= 120.0
+
+        val bearingToCamera = ValhallaResponseParser.bearingDegrees(
+            LatLon(fix.lat, fix.lon),
+            LatLon(camera.lat, camera.lon)
+        )
+        val angleToCamera = ValhallaResponseParser.angleDiffDegrees(fix.bearing.toDouble(), bearingToCamera)
+        if (angleToCamera > 45.0) return false
+
+        // Reject cameras on parallel streets / frontage roads (> 35 m lateral offset)
+        val lateralOffsetMeters = distanceMeters * sin(Math.toRadians(angleToCamera))
+        if (lateralOffsetMeters > 35.0) return false
+
+        // If OSM provides enforcement direction, match direction of travel within 55°
+        val camDir = camera.directionDegrees
+        if (camDir != null && !camDir.isNaN()) {
+            val dirDiff = ValhallaResponseParser.angleDiffDegrees(fix.bearing.toDouble(), camDir.toDouble())
+            if (dirDiff > 55.0) return false
+        }
+        return true
+    }
+
     private fun findNearestAheadAlert(
         fix: GpsFix,
         routeAlerts: List<AheadAlert>,
         dbHazards: List<RoadHazardPoint>,
         userReports: List<UserReportEntity>,
-        settings: UserSettings
+        settings: UserSettings,
+        isHighway: Boolean = fix.speedMps >= 20f
     ): AheadAlert? {
         val candidates = mutableListOf<AheadAlert>()
         val now = System.currentTimeMillis()
         val currentMph = fix.speedMps * 2.23694f
+        val cameraMaxDist = cameraWarningDistanceMeters(isHighway)
 
         // 1. Route-derived alerts (speed drops, speed-aware sharp curves, toll booths)
         for (a in routeAlerts) {
@@ -681,11 +806,22 @@ class NavigationSessionController {
             }
         }
 
-        // 2. Map DB road hazards (railroad crossings, school zones, toll booths, optional stop signs & signals)
+        // 2. Map DB road hazards (cameras, railroad crossings, school zones, toll booths, optional stop signs & signals)
         for (h in dbHazards) {
             val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, h.lat, h.lon)
+            val lowerType = h.type.lowercase()
+            if (lowerType == "speed_camera" || lowerType == "red_light_camera") {
+                buildCameraAlertIfAhead(
+                    fix = fix,
+                    hazard = h,
+                    distanceMeters = dist,
+                    maxDistanceMeters = cameraMaxDist,
+                    settings = settings
+                )?.let { candidates.add(it) }
+                continue
+            }
             if (dist in 20.0..500.0 && isRoughlyAhead(fix, h.lat, h.lon)) {
-                val (kind, titleEn, titleFa) = when (h.type.lowercase()) {
+                val (kind, titleEn, titleFa) = when (lowerType) {
                     "railroad", "railway_crossing" -> {
                         if (!settings.alertRailroadEnabled) continue
                         Triple(RoadAlertKind.RAILROAD_CROSSING, "Railroad crossing ahead", "جلوتر تقاطع راه‌آهن است")
@@ -761,7 +897,11 @@ class NavigationSessionController {
             }
         }
 
-        return candidates.minByOrNull { it.distanceMeters }
+        // Prioritize approaching cameras over generic low-priority signs if both are ahead
+        val nearestCamera = candidates
+            .filter { it.kind == RoadAlertKind.SPEED_CAMERA || it.kind == RoadAlertKind.RED_LIGHT_CAMERA }
+            .minByOrNull { it.distanceMeters }
+        return nearestCamera ?: candidates.minByOrNull { it.distanceMeters }
     }
 
     private fun isRoughlyAhead(fix: GpsFix, targetLat: Double, targetLon: Double): Boolean {
@@ -855,6 +995,10 @@ class NavigationSessionController {
         private const val EARLY_CATCHUP_BUFFER_METERS = 100.0
         private const val NEAR_CATCHUP_BUFFER_METERS = 50.0
         private const val EXTERNAL_PROMPT_MANEUVER_INDEX = -2
+
+        /** Speed & red-light camera warning lead distances: ~1,000 ft city, ~0.25 mi highway. */
+        const val CAMERA_WARN_CITY_METERS = 315.0
+        const val CAMERA_WARN_HIGHWAY_METERS = 420.0
 
         const val STAGE_ARRIVED = "arrived"
         const val STAGE_HW_2MI = "hw_2mi"

@@ -172,6 +172,8 @@ fun DriveScreen(
     val isHeadingUpMode by viewModel.isHeadingUpMode.collectAsStateWithLifecycle()
     val isCompassLowAccuracy by viewModel.isCompassLowAccuracy.collectAsStateWithLifecycle()
     val simulationSpeed by viewModel.simulationSpeedMultiplier.collectAsStateWithLifecycle()
+    val visibleCameras by viewModel.visibleCameras.collectAsStateWithLifecycle()
+    val freeDriveAheadAlert by viewModel.freeDriveAheadAlert.collectAsStateWithLifecycle()
     val isSimulationActive = navState.isSimulatingDrive || settings.simulateDriveEnabled
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
@@ -229,6 +231,7 @@ fun DriveScreen(
             activeNavRoute = if (navState.isNavigating) navState.route else null,
             selectedPlace = selectedPlace,
             userReports = activeReports,
+            cameras = visibleCameras,
             cameraCommand = cameraCmd,
             onMapLongClick = { lat, lon -> viewModel.dropPinOnMap(lat, lon) },
             onRouteTapped = { idx -> viewModel.selectCandidateRoute(idx) },
@@ -544,6 +547,18 @@ fun DriveScreen(
                         closeContentDescription = strings.close,
                         onDismiss = { compassCalibDismissed = true }
                     )
+                }
+
+                // Speed camera / red light camera warning banner during free driving
+                if (!isSearchExpanded) {
+                    freeDriveAheadAlert?.let { alert ->
+                        AheadAlertBanner(
+                            alert = alert,
+                            unit = settings.distanceUnit,
+                            onConfirmReport = { viewModel.confirmUserReport(it) },
+                            onDismissReport = { viewModel.dismissUserReport(it) }
+                        )
+                    }
                 }
 
                 // Graceful prompt when no offline map pack is installed and dev online mode is off

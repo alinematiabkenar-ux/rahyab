@@ -15,6 +15,7 @@ import com.example.data.model.UsStateInfo
 import com.example.data.model.UsStatesCatalog
 import com.example.data.packs.StatePackUiItem
 import com.example.data.preferences.UserSettings
+import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.PlaceSearchResult
 import com.example.data.search.RoadHazardPoint
 import com.example.i18n.AppLanguage
@@ -23,6 +24,7 @@ import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
 import com.example.i18n.stringsFor
 import com.example.navigation.ActiveNavigationState
+import com.example.navigation.AheadAlert
 import com.example.navigation.CameraFollowController
 import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
@@ -32,6 +34,7 @@ import com.example.navigation.LocationTracker
 import com.example.navigation.MissingStatesException
 import com.example.navigation.NavigationSessionController
 import com.example.navigation.OfflineRoute
+import com.example.navigation.RoadAlertKind
 import com.example.navigation.RouteOptions
 import com.example.navigation.RoutePreference
 import com.example.navigation.SolarNightCalculator
@@ -243,11 +246,21 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _simulationSpeedMultiplier = MutableStateFlow(1)
     val simulationSpeedMultiplier: StateFlow<Int> = _simulationSpeedMultiplier.asStateFlow()
 
+    // Visible speed cameras & red light cameras (shown on map from zoom 13 & used for free-drive warnings)
+    private val _visibleCameras = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
+    val visibleCameras: StateFlow<List<RoadHazardPoint>> = _visibleCameras.asStateFlow()
+
+    // Approaching camera alert during free driving (no active route)
+    private val _freeDriveAheadAlert = MutableStateFlow<AheadAlert?>(null)
+    val freeDriveAheadAlert: StateFlow<AheadAlert?> = _freeDriveAheadAlert.asStateFlow()
+
     private var searchJob: Job? = null
     private var gpsWatchdogJob: Job? = null
     private var simulationJob: Job? = null
     private var arrivalEndJob: Job? = null
     private var autoRecenterJob: Job? = null
+    private var cameraFetchJob: Job? = null
+    private var lastCameraFetchLoc: LatLon? = null
     private var lastGpsReceivedMs: Long = 0L
     private var simulatedWrongTurnTicksRemaining: Int = 0
     private var simulatedClockMs: Long = 0L
@@ -258,10 +271,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             packManager.auditInstalledPacks()
         }
 
-        // Track build version alignment across installed packs
+        // Track build version alignment across installed packs and refresh nearby cameras
         viewModelScope.launch {
             packsChangedTick.collect {
                 _mismatchedBuildVersions.value = packManager.getMismatchedBuildVersions()
+                val ref = getEffectiveReferenceLocation()
+                refreshNearbyCameras(ref.lat, ref.lon, force = true)
             }
         }
 
@@ -352,7 +367,69 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun refreshNearbyCameras(lat: Double, lon: Double, force: Boolean = false) {
+        val last = lastCameraFetchLoc
+        if (!force && last != null &&
+            OfflinePlaceSearchEngine.haversineMeters(last.lat, last.lon, lat, lon) < 2_000.0
+        ) {
+            return
+        }
+        lastCameraFetchLoc = LatLon(lat, lon)
+        cameraFetchJob?.cancel()
+        cameraFetchJob = viewModelScope.launch {
+            val nearby = offlineSearch.queryCamerasInBounds(
+                minLat = lat - 0.12,
+                maxLat = lat + 0.12,
+                minLon = lon - 0.14,
+                maxLon = lon + 0.14
+            )
+            val routeCams = if (_navigationState.value.isNavigating) {
+                cachedDbHazards.filter {
+                    it.type.equals("speed_camera", ignoreCase = true) ||
+                        it.type.equals("red_light_camera", ignoreCase = true)
+                }
+            } else {
+                emptyList()
+            }
+            _visibleCameras.value = mergeUniqueCameras(nearby, routeCams)
+        }
+    }
+
+    private fun mergeUniqueCameras(
+        primary: List<RoadHazardPoint>,
+        secondary: List<RoadHazardPoint>
+    ): List<RoadHazardPoint> {
+        if (secondary.isEmpty()) return primary
+        if (primary.isEmpty()) return secondary
+        val seen = HashSet<String>(primary.size + secondary.size)
+        val merged = ArrayList<RoadHazardPoint>(primary.size + secondary.size)
+        for (cam in primary) {
+            val key = cam.osmId?.takeIf { it.isNotBlank() } ?: "${cam.type}_${cam.lat}_${cam.lon}"
+            if (seen.add(key)) merged.add(cam)
+        }
+        for (cam in secondary) {
+            val key = cam.osmId?.takeIf { it.isNotBlank() } ?: "${cam.type}_${cam.lat}_${cam.lon}"
+            if (seen.add(key)) merged.add(cam)
+        }
+        return merged
+    }
+
     private fun handleFreeDriveGpsFix(fix: GpsFix) {
+        val s = settings.value
+        refreshNearbyCameras(fix.lat, fix.lon)
+
+        // Evaluate speed cameras & red light cameras ahead during free driving
+        val (freeDriveAlert, alertToSpeak) = navController.evaluateFreeDriveCameraAlert(
+            fix = fix,
+            cameras = _visibleCameras.value,
+            settings = s
+        )
+        _freeDriveAheadAlert.value = freeDriveAlert
+        if (alertToSpeak != null) {
+            voiceManager.playCameraAlertSound()
+            voiceManager.speakAlert(alertToSpeak, s.language, s.distanceUnit)
+        }
+
         val isPlaceOrPreviewOpen = _selectedPlace.value != null || _candidateRoutes.value.isNotEmpty()
         val nowElapsed = android.os.SystemClock.elapsedRealtime()
         var forceImmediate = false
@@ -373,7 +450,6 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             _userHeadingDegrees.value
         }
-        val s = settings.value
         val update = cameraFollowController.computeFollowCameraUpdate(
             lat = fix.lat,
             lon = fix.lon,
@@ -751,14 +827,24 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 initialDist <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)
         )
 
-        // Pre-fetch road hazards (railroad crossings, school zones, stop signs, traffic signals) along route
+        _freeDriveAheadAlert.value = null
+
+        // Pre-fetch road hazards (cameras, railroad crossings, school zones, stop signs, traffic signals) along route
         viewModelScope.launch {
             if (route.shape.isNotEmpty()) {
                 val minLat = route.shape.minOf { it.lat } - 0.05
                 val maxLat = route.shape.maxOf { it.lat } + 0.05
                 val minLon = route.shape.minOf { it.lon } - 0.05
                 val maxLon = route.shape.maxOf { it.lon } + 0.05
-                cachedDbHazards = offlineSearch.queryRoadHazardsInBounds(minLat, maxLat, minLon, maxLon)
+                val hazards = offlineSearch.queryRoadHazardsInBounds(minLat, maxLat, minLon, maxLon)
+                cachedDbHazards = hazards
+                val routeCams = hazards.filter {
+                    it.type.equals("speed_camera", ignoreCase = true) ||
+                        it.type.equals("red_light_camera", ignoreCase = true)
+                }
+                if (routeCams.isNotEmpty()) {
+                    _visibleCameras.value = mergeUniqueCameras(_visibleCameras.value, routeCams)
+                }
             }
         }
 
@@ -1163,7 +1249,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
             }
             alertToSpeak?.let { alert ->
-                voiceManager.speakAlert(alert, s.language)
+                if (alert.kind == RoadAlertKind.SPEED_CAMERA || alert.kind == RoadAlertKind.RED_LIGHT_CAMERA) {
+                    voiceManager.playCameraAlertSound()
+                }
+                voiceManager.speakAlert(alert, s.language, s.distanceUnit)
             }
         }
 
@@ -1429,6 +1518,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                         prefs.setAlertRailroadEnabled(s.alertRailroadEnabled)
                         prefs.setAlertSchoolZoneEnabled(s.alertSchoolZoneEnabled)
                         prefs.setAlertStopSignEnabled(s.alertStopSignEnabled)
+                        prefs.setAlertSpeedCameraEnabled(s.alertSpeedCameraEnabled)
+                        prefs.setAlertRedLightCameraEnabled(s.alertRedLightCameraEnabled)
                         prefs.set3DView(s.is3DView)
                         prefs.setAvoidTolls(s.avoidTolls)
                         prefs.setAvoidHighways(s.avoidHighways)
@@ -1656,6 +1747,14 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAlertStopSignEnabled(enabled: Boolean) {
         viewModelScope.launch { prefs.setAlertStopSignEnabled(enabled) }
+    }
+
+    fun setAlertSpeedCameraEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertSpeedCameraEnabled(enabled) }
+    }
+
+    fun setAlertRedLightCameraEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAlertRedLightCameraEnabled(enabled) }
     }
 
     fun setAvoidTolls(avoid: Boolean) {

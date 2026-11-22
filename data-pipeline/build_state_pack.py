@@ -626,28 +626,93 @@ def build_places_fts5_db(
 ) -> str:
     import osmium
 
+    import math
+    import re
+
+    CARDINAL_DIRECTIONS = {
+        "N": 0.0, "NNE": 22.5, "NE": 45.0, "ENE": 67.5,
+        "E": 90.0, "ESE": 112.5, "SE": 135.0, "SSE": 157.5,
+        "S": 180.0, "SSW": 202.5, "SW": 225.0, "WSW": 247.5,
+        "W": 270.0, "WNW": 292.5, "NW": 315.0, "NNW": 337.5,
+    }
+
+    def _parse_maxspeed_mph(raw_val: str | None) -> int | None:
+        if not raw_val:
+            return None
+        s = raw_val.strip().lower()
+        m = re.search(r"(\d+(?:\.\d+)?)", s)
+        if not m:
+            return None
+        val = float(m.group(1))
+        if val <= 0:
+            return None
+        if "km" in s or "kph" in s:
+            return max(5, int(round(val * 0.621371)))
+        return max(5, int(round(val)))
+
+    def _parse_direction_degrees(raw_val: str | None) -> float | None:
+        if not raw_val:
+            return None
+        first_token = raw_val.split(";")[0].strip().upper()
+        if first_token in CARDINAL_DIRECTIONS:
+            return CARDINAL_DIRECTIONS[first_token]
+        try:
+            deg = float(first_token)
+            if math.isfinite(deg):
+                return deg % 360.0
+        except ValueError:
+            pass
+        return None
+
+    def _bearing_degrees(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        dlon = math.radians(lon2 - lon1)
+        y = math.sin(dlon) * math.cos(phi2)
+        x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlon)
+        return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+
+    def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        r = 6371000.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
+        a = math.sin(dp / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2.0) ** 2
+        return 2.0 * r * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+
     class OsmPlaceAndHazardHandler(osmium.SimpleHandler):
         def __init__(self, abbr: str, place_batch: list, hazard_batch: list):
             super().__init__()
             self.state_abbr = abbr
             self.places = place_batch
             self.hazards = hazard_batch
+            self.speed_camera_nodes: dict[int, dict] = {}
+            self.enforcement_relations: list[dict] = []
 
-        def _process(self, tags, lat: float, lon: float):
+        def _process(self, tags, lat: float, lon: float, osm_id: str | None = None, node_id: int | None = None):
             if not (bbox[1] <= lat <= bbox[3] and bbox[0] <= lon <= bbox[2]):
                 return
 
-            # Road hazards for Phase 3 alerts
-            if tags.get("railway") in ("level_crossing", "crossing"):
-                self.hazards.append(("railroad", lat, lon, tags.get("name", "Railroad Crossing"), None))
+            # Road hazards for Phase 3 alerts + speed cameras
+            if tags.get("highway") == "speed_camera" and node_id is not None:
+                self.speed_camera_nodes[node_id] = {
+                    "type": "speed_camera",
+                    "lat": lat,
+                    "lon": lon,
+                    "label": tags.get("name", "Speed Camera"),
+                    "speed_limit_mph": _parse_maxspeed_mph(tags.get("maxspeed")),
+                    "direction": _parse_direction_degrees(tags.get("direction")),
+                    "osm_id": f"node/{node_id}",
+                }
+            elif tags.get("railway") in ("level_crossing", "crossing"):
+                self.hazards.append(("railroad", lat, lon, tags.get("name", "Railroad Crossing"), None, None, osm_id))
             elif tags.get("highway") == "stop":
-                self.hazards.append(("stop_sign", lat, lon, tags.get("name", "Stop Sign"), None))
+                self.hazards.append(("stop_sign", lat, lon, tags.get("name", "Stop Sign"), None, None, osm_id))
             elif tags.get("highway") == "traffic_signals":
-                self.hazards.append(("traffic_signal", lat, lon, tags.get("name", "Traffic Signal"), None))
+                self.hazards.append(("traffic_signal", lat, lon, tags.get("name", "Traffic Signal"), None, None, osm_id))
             elif tags.get("barrier") == "toll_booth":
-                self.hazards.append(("toll_booth", lat, lon, tags.get("name", "Toll Booth"), None))
+                self.hazards.append(("toll_booth", lat, lon, tags.get("name", "Toll Booth"), None, None, osm_id))
             elif tags.get("amenity") == "school" or tags.get("zone:traffic") == "US:school":
-                self.hazards.append(("school_zone", lat, lon, tags.get("name", "School Zone"), 20))
+                self.hazards.append(("school_zone", lat, lon, tags.get("name", "School Zone"), 20, None, osm_id))
 
             # OSM POIs, cities, and street addresses
             name = tags.get("name", "").strip()
@@ -690,7 +755,41 @@ def build_places_fts5_db(
 
         def node(self, n):
             if n.location.valid():
-                self._process(n.tags, n.location.lat, n.location.lon)
+                self._process(n.tags, n.location.lat, n.location.lon, osm_id=f"node/{n.id}", node_id=n.id)
+
+        def relation(self, r):
+            if r.tags.get("type") != "enforcement":
+                return
+            enforcement = (r.tags.get("enforcement") or "").strip().lower()
+            if enforcement == "maxspeed":
+                cam_type = "speed_camera"
+            elif enforcement == "traffic_signals":
+                cam_type = "red_light_camera"
+            else:
+                return
+            device_nodes: list[int] = []
+            from_nodes: list[int] = []
+            from_ways: list[int] = []
+            for m in r.members:
+                role = (m.role or "").strip().lower()
+                if role == "device" and m.type == "n":
+                    device_nodes.append(m.ref)
+                elif role == "from" and m.type == "n":
+                    from_nodes.append(m.ref)
+                elif role == "from" and m.type == "w":
+                    from_ways.append(m.ref)
+            if not device_nodes:
+                return
+            self.enforcement_relations.append({
+                "rel_id": r.id,
+                "type": cam_type,
+                "device_node_id": device_nodes[0],
+                "from_node_id": from_nodes[0] if from_nodes else None,
+                "from_way_id": from_ways[0] if from_ways else None,
+                "maxspeed_mph": _parse_maxspeed_mph(r.tags.get("maxspeed")),
+                "direction": _parse_direction_degrees(r.tags.get("direction")),
+                "label": r.tags.get("name") or ("Speed Camera" if cam_type == "speed_camera" else "Red Light Camera"),
+            })
 
         def area(self, a):
             try:
@@ -702,9 +801,34 @@ def build_places_fts5_db(
                             lons.append(node.location.lon)
                     break
                 if lats:
-                    self._process(a.tags, sum(lats) / len(lats), sum(lons) / len(lons))
+                    self._process(a.tags, sum(lats) / len(lats), sum(lons) / len(lons), osm_id=f"area/{a.id}")
             except Exception:
                 pass
+
+    class EnforcementGeometryResolver(osmium.SimpleHandler):
+        def __init__(self, wanted_nodes: set[int], wanted_ways: set[int]):
+            super().__init__()
+            self.wanted_nodes = wanted_nodes
+            self.wanted_ways = wanted_ways
+            self.node_coords: dict[int, tuple[float, float]] = {}
+            self.node_tags: dict[int, dict] = {}
+            self.way_coords: dict[int, tuple[float, float]] = {}
+
+        def node(self, n):
+            if n.id in self.wanted_nodes and n.location.valid():
+                self.node_coords[n.id] = (n.location.lat, n.location.lon)
+                self.node_tags[n.id] = {
+                    "maxspeed": n.tags.get("maxspeed"),
+                    "direction": n.tags.get("direction"),
+                    "name": n.tags.get("name"),
+                }
+
+        def way(self, w):
+            if w.id not in self.wanted_ways:
+                return
+            coords = [(nd.lat, nd.lon) for nd in w.nodes if nd.location.valid()]
+            if coords:
+                self.way_coords[w.id] = coords[0]
 
     if out_db.exists():
         out_db.unlink()
@@ -739,9 +863,12 @@ def build_places_fts5_db(
             lat REAL NOT NULL,
             lon REAL NOT NULL,
             label TEXT DEFAULT '',
-            speed_limit_mph INTEGER
+            speed_limit_mph INTEGER,
+            direction REAL,
+            osm_id TEXT
         );
         CREATE INDEX idx_hazards_lat_lon ON road_hazards(lat, lon);
+        CREATE INDEX idx_hazards_type ON road_hazards(type);
     """)
 
     # 1. Query Overture Maps Places GeoParquet from AWS S3 via DuckDB with schema inspection
@@ -815,7 +942,93 @@ def build_places_fts5_db(
     osm_hazards: list = []
     handler = OsmPlaceAndHazardHandler(base_state_abbr, osm_places, osm_hazards)
     handler.apply_file(str(pbf_path), locations=True)
-    print(f"[osm] Extracted {len(osm_places):,} OSM places/addresses and {len(osm_hazards):,} road hazards", flush=True)
+
+    # 2a. Resolve enforcement relations (speed cameras & red light cameras) and deduplicate cameras
+    camera_records: list[dict] = []
+    consumed_device_nodes: set[int] = set()
+    if handler.enforcement_relations:
+        wanted_nodes: set[int] = set()
+        wanted_ways: set[int] = set()
+        for rel in handler.enforcement_relations:
+            wanted_nodes.add(rel["device_node_id"])
+            if rel["from_node_id"] is not None:
+                wanted_nodes.add(rel["from_node_id"])
+            if rel["from_way_id"] is not None:
+                wanted_ways.add(rel["from_way_id"])
+        resolver = EnforcementGeometryResolver(wanted_nodes, wanted_ways)
+        resolver.apply_file(str(pbf_path), locations=True)
+        for rel in handler.enforcement_relations:
+            dev_id = rel["device_node_id"]
+            dev_coord = resolver.node_coords.get(dev_id)
+            if not dev_coord:
+                continue
+            lat, lon = dev_coord
+            if not (bbox[1] <= lat <= bbox[3] and bbox[0] <= lon <= bbox[2]):
+                continue
+            node_meta = resolver.node_tags.get(dev_id, {})
+            direction = rel["direction"]
+            if direction is None:
+                direction = _parse_direction_degrees(node_meta.get("direction"))
+            if direction is None:
+                from_coord = None
+                if rel["from_node_id"] is not None:
+                    from_coord = resolver.node_coords.get(rel["from_node_id"])
+                elif rel["from_way_id"] is not None:
+                    from_coord = resolver.way_coords.get(rel["from_way_id"])
+                if from_coord and (abs(from_coord[0] - lat) > 1e-6 or abs(from_coord[1] - lon) > 1e-6):
+                    direction = _bearing_degrees(from_coord[0], from_coord[1], lat, lon)
+            maxspeed_mph = rel["maxspeed_mph"]
+            if maxspeed_mph is None:
+                maxspeed_mph = _parse_maxspeed_mph(node_meta.get("maxspeed"))
+            consumed_device_nodes.add(dev_id)
+            camera_records.append({
+                "type": rel["type"],
+                "lat": lat,
+                "lon": lon,
+                "label": rel["label"] or node_meta.get("name") or "",
+                "speed_limit_mph": maxspeed_mph,
+                "direction": direction,
+                "osm_id": f"relation/{rel['rel_id']}",
+            })
+
+    for node_id, cam in handler.speed_camera_nodes.items():
+        if node_id not in consumed_device_nodes:
+            camera_records.append(cam)
+
+    # Deduplicate cameras by osm_id and by proximity (<= 25 m for same camera type)
+    deduped_cameras: list[dict] = []
+    seen_camera_osm_ids: set[str] = set()
+    for cam in camera_records:
+        oid = cam.get("osm_id") or ""
+        if oid and oid in seen_camera_osm_ids:
+            continue
+        is_near_dup = any(
+            existing["type"] == cam["type"]
+            and _haversine_m(existing["lat"], existing["lon"], cam["lat"], cam["lon"]) <= 25.0
+            for existing in deduped_cameras
+        )
+        if is_near_dup:
+            continue
+        if oid:
+            seen_camera_osm_ids.add(oid)
+        deduped_cameras.append(cam)
+        osm_hazards.append((
+            cam["type"],
+            cam["lat"],
+            cam["lon"],
+            cam["label"],
+            cam["speed_limit_mph"],
+            cam["direction"],
+            cam["osm_id"],
+        ))
+
+    speed_cam_count = sum(1 for c in deduped_cameras if c["type"] == "speed_camera")
+    red_light_cam_count = sum(1 for c in deduped_cameras if c["type"] == "red_light_camera")
+    print(
+        f"[osm] Extracted {len(osm_places):,} OSM places/addresses, {len(osm_hazards):,} road hazards "
+        f"(speed_camera={speed_cam_count:,}, red_light_camera={red_light_cam_count:,}) for {pack_code.upper()}",
+        flush=True,
+    )
 
     # 2b. Cross-source deduplication: same normalized name within 50 m -> keep richer address
     dedup_overture, dedup_osm, dedup_removed = deduplicate_overture_and_osm_places(
@@ -840,7 +1053,7 @@ def build_places_fts5_db(
         dedup_osm,
     )
     cur.executemany(
-        "INSERT INTO road_hazards (type, lat, lon, label, speed_limit_mph) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO road_hazards (type, lat, lon, label, speed_limit_mph, direction, osm_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         osm_hazards,
     )
     conn.commit()

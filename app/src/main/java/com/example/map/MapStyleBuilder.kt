@@ -33,6 +33,7 @@ object MapStyleBuilder {
     const val SOURCE_PRIMARY_ROUTE = "rahyab_primary_route"
     const val SOURCE_DESTINATION = "rahyab_destination"
     const val SOURCE_USER_REPORTS = "rahyab_user_reports"
+    const val SOURCE_CAMERAS = "rahyab_cameras"
     const val SOURCE_GPS_ACCURACY = "rahyab_gps_accuracy"
     const val SOURCE_GPS_PUCK = "rahyab_gps_puck"
 
@@ -44,6 +45,7 @@ object MapStyleBuilder {
     const val LAYER_PRIMARY_ROUTE = "rahyab_primary_route_line"
     const val LAYER_DESTINATION_CIRCLE = "rahyab_destination_circle"
     const val LAYER_USER_REPORTS_CIRCLE = "rahyab_user_reports_circle"
+    const val LAYER_CAMERAS_SYMBOL = "rahyab_cameras_symbol"
     const val LAYER_GPS_ACCURACY = "rahyab_gps_accuracy_fill"
     const val LAYER_GPS_ACCURACY_OUTLINE = "rahyab_gps_accuracy_outline"
     const val LAYER_GPS_PUCK = "rahyab_gps_puck_circle"
@@ -51,6 +53,8 @@ object MapStyleBuilder {
 
     const val IMAGE_USER_ARROW = "rahyab_user_heading_arrow"
     const val IMAGE_HIGHWAY_SHIELD = "rahyab_highway_shield_bg"
+    const val IMAGE_SPEED_CAMERA = "rahyab_speed_camera_icon"
+    const val IMAGE_RED_LIGHT_CAMERA = "rahyab_red_light_camera_icon"
 
     const val ROUTE_COLOR_0 = "#00A8E8" // Cyan-Blue (Fastest / Route 1)
     const val ROUTE_COLOR_1 = "#10B981" // Emerald (Shortest / Alt 1)
@@ -132,6 +136,7 @@ object MapStyleBuilder {
             SOURCE_PRIMARY_ROUTE,
             SOURCE_DESTINATION,
             SOURCE_USER_REPORTS,
+            SOURCE_CAMERAS,
             SOURCE_GPS_ACCURACY,
             SOURCE_GPS_PUCK
         )).forEach { id ->
@@ -214,6 +219,20 @@ object MapStyleBuilder {
                 )
                 put("circle-stroke-width", 2.5)
                 put("circle-stroke-color", "#FFFFFF")
+            })
+        })
+
+        // Speed cameras & red light cameras (visible from zoom 13)
+        layers.put(JSONObject().apply {
+            put("id", LAYER_CAMERAS_SYMBOL)
+            put("type", "symbol")
+            put("source", SOURCE_CAMERAS)
+            put("minzoom", 13)
+            put("layout", JSONObject().apply {
+                put("icon-image", JSONArray().put("get").put("icon"))
+                put("icon-size", 0.85)
+                put("icon-allow-overlap", true)
+                put("icon-ignore-placement", false)
             })
         })
 

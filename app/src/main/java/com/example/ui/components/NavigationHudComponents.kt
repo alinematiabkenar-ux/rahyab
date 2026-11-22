@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CarCrash
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
@@ -623,12 +624,15 @@ fun AheadAlertBanner(
 
     val accentColor = when (alert.kind) {
         RoadAlertKind.USER_POLICE, RoadAlertKind.USER_SPEED_TRAP -> AlertPoliceBlue
+        RoadAlertKind.SPEED_CAMERA, RoadAlertKind.RED_LIGHT_CAMERA,
         RoadAlertKind.USER_CRASH, RoadAlertKind.USER_ROAD_CLOSURE, RoadAlertKind.STOP_SIGN -> AlertRed
         RoadAlertKind.USER_CONSTRUCTION -> Color(0xFFF97316)
         else -> AlertAmber
     }
 
     val icon = when (alert.kind) {
+        RoadAlertKind.SPEED_CAMERA -> Icons.Filled.CameraAlt
+        RoadAlertKind.RED_LIGHT_CAMERA -> Icons.Filled.Traffic
         RoadAlertKind.USER_POLICE -> Icons.Filled.LocalPolice
         RoadAlertKind.USER_CRASH -> Icons.Filled.CarCrash
         RoadAlertKind.USER_ROAD_CLOSURE -> Icons.Filled.Block
@@ -685,6 +689,36 @@ fun AheadAlertBanner(
                         style = MaterialTheme.typography.bodyMedium,
                         color = accentColor
                     )
+                }
+
+                if (alert.newSpeedLimitMph != null && alert.newSpeedLimitMph > 0) {
+                    val shownSpeed = BilingualFormatter.convertMphToUnit(alert.newSpeedLimitMph, unit)
+                    val unitLabel = if (unit == DistanceUnit.IMPERIAL) strings.speedUnitMph else strings.speedUnitKmh
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.White,
+                        border = BorderStroke(2.dp, accentColor)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = BilingualFormatter.formatNumber(shownSpeed, language),
+                                color = Color(0xFF0F172A),
+                                fontWeight = FontWeight.Black,
+                                fontSize = 18.sp,
+                                lineHeight = 18.sp
+                            )
+                            Text(
+                                text = unitLabel,
+                                color = Color(0xFF334155),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.sp,
+                                lineHeight = 10.sp
+                            )
+                        }
+                    }
                 }
             }
 

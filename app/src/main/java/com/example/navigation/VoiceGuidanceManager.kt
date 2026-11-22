@@ -64,6 +64,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private var lastSpokenKey: String = ""
     private var lastSpokenTimeMs: Long = 0L
     private var lastOverspeedBeepMs: Long = 0L
+    private var lastCameraChimeMs: Long = 0L
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { }
 
@@ -326,9 +327,13 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         speakRaw(text, effectiveLanguage)
     }
 
-    fun speakAlert(alert: AheadAlert, language: AppLanguage): String {
+    fun speakAlert(
+        alert: AheadAlert,
+        language: AppLanguage,
+        unit: DistanceUnit = DistanceUnit.IMPERIAL
+    ): String {
         val effectiveLanguage = resolveEffectiveLanguage(language)
-        val text = formatAlertAnnouncement(alert, effectiveLanguage)
+        val text = formatAlertAnnouncement(alert, effectiveLanguage, unit)
         if (voiceEnabled && isInitialized) {
             speakRaw(text, effectiveLanguage)
         }
@@ -381,6 +386,17 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         }
     }
 
+    fun playCameraAlertSound() {
+        if (!voiceEnabled) return
+        val now = System.currentTimeMillis()
+        if (now - lastCameraChimeMs < 2000L) return
+        lastCameraChimeMs = now
+        runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 90)
+            tone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
+        }
+    }
+
     private fun speakRaw(text: String, effectiveLanguage: AppLanguage) {
         val engine = tts ?: return
         applyLanguage(effectiveLanguage)
@@ -406,7 +422,32 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         fun formatReroutingPrompt(language: AppLanguage): String =
             if (language == AppLanguage.PERSIAN) "در حال مسیریابی مجدد." else "Rerouting."
 
-        fun formatAlertAnnouncement(alert: AheadAlert, language: AppLanguage): String {
+        fun formatAlertAnnouncement(
+            alert: AheadAlert,
+            language: AppLanguage,
+            unit: DistanceUnit = DistanceUnit.IMPERIAL
+        ): String {
+            if (alert.kind == RoadAlertKind.SPEED_CAMERA) {
+                val limitMph = alert.newSpeedLimitMph
+                if (limitMph != null && limitMph > 0) {
+                    val shownLimit = if (unit == DistanceUnit.METRIC) {
+                        (limitMph * 1.60934).roundToInt()
+                    } else {
+                        limitMph
+                    }
+                    return if (language == AppLanguage.PERSIAN) {
+                        val unitText = if (unit == DistanceUnit.METRIC) "کیلومتر" else "مایل"
+                        "دوربین سرعت در پیش است، سرعت مجاز $shownLimit $unitText بر ساعت."
+                    } else {
+                        val unitText = if (unit == DistanceUnit.METRIC) "kilometers" else "miles"
+                        "Speed camera ahead, speed limit $shownLimit $unitText per hour."
+                    }
+                }
+                return if (language == AppLanguage.PERSIAN) "دوربین سرعت در پیش است." else "Speed camera ahead."
+            }
+            if (alert.kind == RoadAlertKind.RED_LIGHT_CAMERA) {
+                return if (language == AppLanguage.PERSIAN) "دوربین چراغ قرمز در پیش است." else "Red light camera ahead."
+            }
             return if (language == AppLanguage.PERSIAN) {
                 alert.titleFa.ifBlank { alert.titleEn }
             } else {

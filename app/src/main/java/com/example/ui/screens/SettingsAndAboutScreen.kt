@@ -372,6 +372,18 @@ fun SettingsScreen(
                     testTag = "switch_alert_school_zone"
                 )
                 SettingsToggleRow(
+                    label = strings.alertToggleSpeedCamera,
+                    checked = settings.alertSpeedCameraEnabled,
+                    onCheckedChange = { viewModel.setAlertSpeedCameraEnabled(it) },
+                    testTag = "switch_alert_speed_camera"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleRedLightCamera,
+                    checked = settings.alertRedLightCameraEnabled,
+                    onCheckedChange = { viewModel.setAlertRedLightCameraEnabled(it) },
+                    testTag = "switch_alert_red_light_camera"
+                )
+                SettingsToggleRow(
                     label = strings.alertToggleStopSign,
                     checked = settings.alertStopSignEnabled,
                     onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },
