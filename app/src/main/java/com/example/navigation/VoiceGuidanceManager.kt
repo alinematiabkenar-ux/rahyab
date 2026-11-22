@@ -535,6 +535,43 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         return text
     }
 
+    /**
+     * Speaks a lower-priority alert (such as a speed bump) WITHOUT interrupting an active
+     * turn or lane instruction: appends segments to the queue if TTS is currently speaking.
+     */
+    fun speakQueuedAlert(
+        alert: AheadAlert,
+        language: AppLanguage,
+        unit: DistanceUnit = DistanceUnit.IMPERIAL
+    ): String {
+        val effectiveLanguage = resolveEffectiveLanguage(language)
+        val text = formatAlertAnnouncement(alert, effectiveLanguage, unit)
+        if (!voiceEnabled || !isInitialized || text.isBlank()) return text
+        val segments = if (effectiveLanguage == AppLanguage.PERSIAN) {
+            splitPersianAndEnglishSegments(text)
+        } else {
+            listOf(SpeechSegment(text = text, isEnglish = true))
+        }
+        if (segments.isEmpty()) return text
+        val isBusy = runCatching {
+            (tts?.isSpeaking == true) ||
+                (activeEnglishEngine()?.isSpeaking == true) ||
+                (activePersianEngine()?.isSpeaking == true)
+        }.getOrDefault(false)
+        val queuedBehindActive = synchronized(sequenceLock) {
+            if (isBusy || pendingSegments.isNotEmpty()) {
+                segments.forEach { pendingSegments.addLast(it) }
+                true
+            } else {
+                false
+            }
+        }
+        if (!queuedBehindActive) {
+            speakRaw(text, effectiveLanguage)
+        }
+        return text
+    }
+
     fun speakWeatherAlert(title: String, language: AppLanguage): String {
         val effectiveLanguage = resolveEffectiveLanguage(language)
         val text = if (effectiveLanguage == AppLanguage.PERSIAN) {

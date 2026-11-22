@@ -371,6 +371,12 @@ interface AppStrings {
     val positionMarkerStyleLabel: String
     val positionMarkerArrow: String
     val positionMarkerCar: String
+    // F1: Offline house-number address search & Overture attribution
+    val addressApproximateBadge: String
+    val overtureAddressesAttributionFull: String
+    val overtureAttributionLinkLabel: String
+    // F2: Speed bump alerts
+    val alertToggleSpeedBump: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

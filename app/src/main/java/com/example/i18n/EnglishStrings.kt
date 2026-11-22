@@ -324,4 +324,8 @@ object EnglishStrings : AppStrings {
     override val positionMarkerStyleLabel = "Position marker"
     override val positionMarkerArrow = "3D Arrow"
     override val positionMarkerCar = "Car"
+    override val addressApproximateBadge = "Approximate"
+    override val overtureAddressesAttributionFull = "Address data includes Overture Maps Addresses (OpenAddresses and the US National Address Database)."
+    override val overtureAttributionLinkLabel = "Overture Maps Attribution (docs.overturemaps.org)"
+    override val alertToggleSpeedBump = "Speed bump alerts"
 }

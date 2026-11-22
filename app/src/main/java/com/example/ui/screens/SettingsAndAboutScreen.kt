@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -428,6 +429,12 @@ fun SettingsScreen(
                     checked = settings.alertStopSignEnabled,
                     onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },
                     testTag = "switch_alert_stop_sign"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleSpeedBump,
+                    checked = settings.alertSpeedBumpEnabled,
+                    onCheckedChange = { viewModel.setAlertSpeedBumpEnabled(it) },
+                    testTag = "switch_alert_speed_bump"
                 )
             }
         }
@@ -871,6 +878,25 @@ fun SettingsScreen(
                 HorizontalDivider()
                 Text(strings.osmAttributionFull, style = MaterialTheme.typography.bodyMedium)
                 Text(strings.overtureAttributionFull, style = MaterialTheme.typography.bodyMedium)
+                Text(strings.overtureAddressesAttributionFull, style = MaterialTheme.typography.bodyMedium)
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://docs.overturemaps.org/attribution/")
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("overture_attribution_link_button")
+                ) {
+                    Text(strings.overtureAttributionLinkLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Text(
                     text = strings.openSourceLicensesBody,
                     style = MaterialTheme.typography.bodySmall,

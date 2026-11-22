@@ -35,6 +35,7 @@ data class UserSettings(
     val alertStopSignEnabled: Boolean = false, // Optional — OFF by default
     val alertSpeedCameraEnabled: Boolean = true,
     val alertRedLightCameraEnabled: Boolean = true,
+    val alertSpeedBumpEnabled: Boolean = true,
     val showTrafficLights: Boolean = true,
     val show3DBuildings: Boolean = true,
     val positionMarkerStyle: String = "arrow", // "arrow" or "car"
@@ -102,6 +103,7 @@ class UserPreferencesRepository(private val context: Context) {
         val ALERT_STOP_SIGN = booleanPreferencesKey("alert_stop_sign")
         val ALERT_SPEED_CAMERA = booleanPreferencesKey("alert_speed_camera")
         val ALERT_RED_LIGHT_CAMERA = booleanPreferencesKey("alert_red_light_camera")
+        val ALERT_SPEED_BUMP = booleanPreferencesKey("alert_speed_bump")
         val SHOW_TRAFFIC_LIGHTS = booleanPreferencesKey("show_traffic_lights")
         val SHOW_3D_BUILDINGS = booleanPreferencesKey("show_3d_buildings")
         val POSITION_MARKER_STYLE = stringPreferencesKey("position_marker_style")
@@ -144,6 +146,7 @@ class UserPreferencesRepository(private val context: Context) {
             alertStopSignEnabled = prefs[Keys.ALERT_STOP_SIGN] ?: false,
             alertSpeedCameraEnabled = prefs[Keys.ALERT_SPEED_CAMERA] ?: true,
             alertRedLightCameraEnabled = prefs[Keys.ALERT_RED_LIGHT_CAMERA] ?: true,
+            alertSpeedBumpEnabled = prefs[Keys.ALERT_SPEED_BUMP] ?: true,
             showTrafficLights = prefs[Keys.SHOW_TRAFFIC_LIGHTS] ?: true,
             show3DBuildings = prefs[Keys.SHOW_3D_BUILDINGS] ?: true,
             positionMarkerStyle = prefs[Keys.POSITION_MARKER_STYLE]?.takeIf { it == "car" || it == "arrow" } ?: "arrow",
@@ -229,6 +232,10 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setAlertRedLightCameraEnabled(enabled: Boolean) {
         context.rahYabDataStore.edit { it[Keys.ALERT_RED_LIGHT_CAMERA] = enabled }
+    }
+
+    suspend fun setAlertSpeedBumpEnabled(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_BUMP] = enabled }
     }
 
     suspend fun setShowTrafficLights(enabled: Boolean) {

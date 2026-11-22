@@ -42,12 +42,14 @@ import androidx.compose.ui.unit.dp
 import com.example.data.local.SavedPlaceEntity
 import com.example.data.local.SavedPlaceType
 import com.example.data.online.PhotonSearchClient
+import com.example.data.search.OfflineAddressSearchEngine
 import com.example.data.search.PlaceSearchResult
 import com.example.i18n.AppLanguage
 import com.example.i18n.BilingualFormatter
 import com.example.i18n.DistanceUnit
 import com.example.i18n.LocalAppLanguage
 import com.example.i18n.LocalAppStrings
+import com.example.ui.theme.AlertAmber
 import com.example.ui.theme.CyanBeacon
 
 @Composable
@@ -259,6 +261,8 @@ internal fun SearchResultPlaceRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
+                val strings = LocalAppStrings.current
+                val isApproxAddress = place.source == OfflineAddressSearchEngine.SOURCE_APPROX_ADDRESS
                 if (isOnlineResult) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
@@ -268,6 +272,19 @@ internal fun SearchResultPlaceRow(
                             text = onlineBadgeLabel,
                             style = MaterialTheme.typography.labelSmall,
                             color = CyanBeacon,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                } else if (isApproxAddress) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = AlertAmber.copy(alpha = 0.2f)
+                    ) {
+                        Text(
+                            text = strings.addressApproximateBadge,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AlertAmber,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                         )

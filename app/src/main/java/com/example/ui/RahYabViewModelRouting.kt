@@ -143,6 +143,7 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
 
     stopInternalNavJobsImpl()
     navController.reset()
+    speedBumpEvaluator.reset()
     voiceManager.resetDeduplication()
     locationTracker.setNavigationMode(true)
     compassTracker.setNavigationMode(true)
@@ -235,8 +236,10 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
     )
 
     if (shouldSimulate) {
+        seedSimulationSpeedBumpsImpl(route.shape)
         startSimulatedDriveLoopImpl()
     } else {
+        clearSimulationSpeedBumpsImpl()
         startGpsLossWatchdogImpl()
     }
 }

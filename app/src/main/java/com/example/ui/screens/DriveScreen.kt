@@ -73,6 +73,7 @@ fun DriveScreen(
     val simulationSpeed by viewModel.simulationSpeedMultiplier.collectAsStateWithLifecycle()
     val visibleCameras by viewModel.visibleCameras.collectAsStateWithLifecycle()
     val visibleTrafficLights by viewModel.visibleTrafficLights.collectAsStateWithLifecycle()
+    val visibleSpeedBumps by viewModel.visibleSpeedBumps.collectAsStateWithLifecycle()
     val aheadTrafficLightMeters by viewModel.aheadTrafficLightMeters.collectAsStateWithLifecycle()
     val freeDriveAheadAlert by viewModel.freeDriveAheadAlert.collectAsStateWithLifecycle()
     val externalMatchChoices by viewModel.externalLinkMatchChoices.collectAsStateWithLifecycle()
@@ -142,6 +143,7 @@ fun DriveScreen(
             userReports = activeReports,
             cameras = visibleCameras,
             trafficLights = if (settings.showTrafficLights) visibleTrafficLights else emptyList(),
+            speedBumps = visibleSpeedBumps,
             show3DBuildings = settings.show3DBuildings,
             positionMarkerStyle = settings.positionMarkerStyle,
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),

@@ -41,6 +41,7 @@ internal fun RahYabViewModel.initializeViewModel() {
             val ref = getEffectiveReferenceLocation()
             refreshNearbyCamerasImpl(ref.lat, ref.lon, force = true)
             refreshNearbyTrafficLightsImpl(ref.lat, ref.lon, force = true)
+            refreshNearbySpeedBumpsImpl(ref.lat, ref.lon, force = true)
         }
     }
 
@@ -242,6 +243,7 @@ internal fun RahYabViewModel.handleFreeDriveGpsFixImpl(fix: GpsFix) {
         voiceManager.playCameraAlertSound()
         voiceManager.speakAlert(alertToSpeak, s.language, s.distanceUnit)
     }
+    evaluateSpeedBumpForFreeDriveImpl(fix)
 
     val isPlaceOrPreviewOpen = _selectedPlace.value != null || _candidateRoutes.value.isNotEmpty()
     val nowElapsed = SystemClock.elapsedRealtime()

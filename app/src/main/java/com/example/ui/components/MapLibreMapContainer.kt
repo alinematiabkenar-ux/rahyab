@@ -97,6 +97,8 @@ fun MapLibreMapContainer(
     userReports: List<UserReportEntity>,
     cameras: List<RoadHazardPoint> = emptyList(),
     trafficLights: List<RoadHazardPoint> = emptyList(),
+    speedBumps: List<RoadHazardPoint> = emptyList(),
+    parkedCarLocation: LatLon? = null,
     show3DBuildings: Boolean = true,
     positionMarkerStyle: String = "arrow",
     isGpsPoor: Boolean = false,
@@ -195,6 +197,7 @@ fun MapLibreMapContainer(
                 createVectorDrawableBitmap(context, R.drawable.ic_traffic_light_map, 36, 54)?.let {
                     style.addImage(MapStyleBuilder.IMAGE_TRAFFIC_LIGHT, it)
                 }
+                com.example.map.MapExtraLayersHelper.registerExtraOverlayLayers(context, style)
             }
             loadedStyle = style
         }
@@ -430,6 +433,16 @@ fun MapLibreMapContainer(
         runCatching {
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_TRAFFIC_LIGHTS)?.setGeoJson(lightsFc)
         }
+    }
+
+    // 3D. SPEED BUMPS (zoom 15+) & PARKED CAR BLUE "P" MARKER
+    LaunchedEffect(loadedStyle, speedBumps) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        com.example.map.MapExtraLayersHelper.updateSpeedBumps(style, speedBumps)
+    }
+    LaunchedEffect(loadedStyle, parkedCarLocation) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        com.example.map.MapExtraLayersHelper.updateParkedCar(style, parkedCarLocation)
     }
 
     // 4. POSITION ARROW & ACCURACY CIRCLE EFFECT — runs ONLY when position or throttled heading changes

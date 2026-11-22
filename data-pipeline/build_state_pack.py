@@ -42,6 +42,12 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+from address_utils import (
+    ADDRESS_DEDUP_MAX_DISTANCE_M,
+    deduplicate_addresses,
+    normalize_house_number,
+    normalize_street,
+)
 from states import ALL_PACK_CATALOG, US_STATES, resolve_pack_targets
 
 GEOFABRIK_INDEX_URL = "https://download.geofabrik.de/index-v1-nogeom.json"
@@ -504,10 +510,93 @@ def build_overture_places_sql(
     """
 
 
+def build_overture_addresses_sql(
+    columns: dict[str, str],
+    overture_s3: str,
+    bbox: tuple[float, float, float, float],
+) -> str:
+    """
+    Build a schema-resilient DuckDB SQL query for Overture Addresses from DESCRIBE output.
+    Filters strictly by buffered bbox and country = 'US' (no region name filters).
+    """
+    cols = {k.lower(): (v or "") for k, v in columns.items()}
+    if "number" not in cols or "street" not in cols or "geometry" not in cols:
+        raise ValueError("Overture addresses schema is missing required number/street/geometry columns")
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    if "bbox" in cols:
+        bbox_cond = (
+            f"(bbox.xmin >= {min_lon} AND bbox.xmax <= {max_lon} "
+            f"AND bbox.ymin >= {min_lat} AND bbox.ymax <= {max_lat})"
+        )
+    else:
+        bbox_cond = (
+            f"(ST_X(geometry) BETWEEN {min_lon} AND {max_lon} "
+            f"AND ST_Y(geometry) BETWEEN {min_lat} AND {max_lat})"
+        )
+
+    unit_expr = "COALESCE(CAST(unit AS VARCHAR), '')" if "unit" in cols else "''"
+    postcode_expr = "COALESCE(CAST(postcode AS VARCHAR), '')" if "postcode" in cols else "''"
+    postal_city_expr = "COALESCE(CAST(postal_city AS VARCHAR), '')" if "postal_city" in cols else "''"
+    levels_expr = "address_levels" if "address_levels" in cols else "NULL"
+
+    where_clauses = [
+        bbox_cond,
+        "number IS NOT NULL AND TRIM(CAST(number AS VARCHAR)) != ''",
+        "street IS NOT NULL AND TRIM(CAST(street AS VARCHAR)) != ''",
+    ]
+    if "country" in cols:
+        where_clauses.append("country = 'US'")
+
+    where_sql = "\n          AND ".join(where_clauses)
+    return f"""
+        SELECT
+            TRIM(CAST(number AS VARCHAR)) AS number,
+            TRIM(CAST(street AS VARCHAR)) AS street,
+            {unit_expr} AS unit,
+            {postcode_expr} AS postcode,
+            {postal_city_expr} AS postal_city,
+            {levels_expr} AS address_levels,
+            ST_Y(geometry) AS lat,
+            ST_X(geometry) AS lon
+        FROM read_parquet('{overture_s3}', filename=false, hive_partitioning=1)
+        WHERE {where_sql}
+    """
+
+
+def _extract_city_and_state_from_levels(
+    postal_city: str | None,
+    address_levels,
+    fallback_state: str,
+) -> tuple[str, str]:
+    city = (postal_city or "").strip()
+    level_values: list[str] = []
+    if isinstance(address_levels, (list, tuple)):
+        for item in address_levels:
+            val = ""
+            if isinstance(item, dict):
+                val = str(item.get("value") or "").strip()
+            elif isinstance(item, (list, tuple)) and item:
+                val = str(item[0] or "").strip()
+            elif item is not None:
+                val = str(item).strip()
+            if val:
+                level_values.append(val)
+    if not city and level_values:
+        city = level_values[-1]
+    state_val = fallback_state
+    for val in level_values:
+        if len(val) == 2 and val.isalpha():
+            state_val = val.upper()
+            break
+    return city, state_val
+
+
 EUGENE_OR_LAT = 44.0521
 EUGENE_OR_LON = -123.0868
 EUGENE_CHECK_RADIUS_M = 15_000.0
 FULL_STATE_MIN_OVERTURE_PLACES = 50_000
+FULL_STATE_MIN_ADDRESSES = 100_000
 DEDUP_MAX_DISTANCE_M = 50.0
 
 
@@ -623,7 +712,7 @@ def build_places_fts5_db(
     pbf_path: Path,
     overture_release: str,
     out_db: Path,
-) -> str:
+) -> tuple[str, int]:
     import osmium
 
     import math
@@ -680,10 +769,11 @@ def build_places_fts5_db(
         return 2.0 * r * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
 
     class OsmPlaceAndHazardHandler(osmium.SimpleHandler):
-        def __init__(self, abbr: str, place_batch: list, hazard_batch: list):
+        def __init__(self, abbr: str, place_batch: list, address_batch: list, hazard_batch: list):
             super().__init__()
             self.state_abbr = abbr
             self.places = place_batch
+            self.addresses = address_batch
             self.hazards = hazard_batch
             self.speed_camera_nodes: dict[int, dict] = {}
             self.enforcement_relations: list[dict] = []
@@ -714,10 +804,15 @@ def build_places_fts5_db(
             elif tags.get("amenity") == "school" or tags.get("zone:traffic") == "US:school":
                 self.hazards.append(("school_zone", lat, lon, tags.get("name", "School Zone"), 20, None, osm_id))
 
+            tc = (tags.get("traffic_calming") or "").strip().lower()
+            if tc in ("bump", "hump", "table", "cushion", "dip", "yes"):
+                self.hazards.append(("speed_bump", lat, lon, tc, None, None, osm_id))
+
             # OSM POIs, cities, and street addresses
             name = tags.get("name", "").strip()
             housenumber = tags.get("addr:housenumber", "").strip()
             street = tags.get("addr:street", "").strip()
+            unit = tags.get("addr:unit", "").strip()
             city = tags.get("addr:city", "").strip()
             postcode = tags.get("addr:postcode", "").strip()
             brand = tags.get("brand", "").strip()
@@ -731,13 +826,17 @@ def build_places_fts5_db(
                 or ""
             ).strip()
 
-            address = f"{housenumber} {street}".strip()
-            if not name and address:
-                name = address
-                category = category or "address"
+            # Move unnamed OSM house addresses (no name and no POI category) into the dedicated addresses table
+            if housenumber and street and not name and not category:
+                self.addresses.append((
+                    housenumber, street, unit, city, self.state_abbr, postcode, lat, lon, "osm",
+                ))
+                return
+
             if not name:
                 return
 
+            address = f"{housenumber} {street}".strip()
             is_poi = bool(category)
             is_address = bool(housenumber and street)
             if is_poi or is_address:
@@ -756,6 +855,40 @@ def build_places_fts5_db(
         def node(self, n):
             if n.location.valid():
                 self._process(n.tags, n.location.lat, n.location.lon, osm_id=f"node/{n.id}", node_id=n.id)
+
+        def way(self, w):
+            # Capture OSM traffic_calming ways using first valid node coordinate
+            tc = (w.tags.get("traffic_calming") or "").strip().lower()
+            if tc in ("bump", "hump", "table", "cushion", "dip", "yes"):
+                for nd in w.nodes:
+                    if nd.location.valid():
+                        w_lat, w_lon = nd.lat, nd.lon
+                        if bbox[1] <= w_lat <= bbox[3] and bbox[0] <= w_lon <= bbox[2]:
+                            self.hazards.append(("speed_bump", w_lat, w_lon, tc, None, None, f"way/{w.id}"))
+                        break
+
+            # Capture unnamed OSM building/way addresses that may not emit an area
+            housenumber = w.tags.get("addr:housenumber", "").strip()
+            street = w.tags.get("addr:street", "").strip()
+            name = w.tags.get("name", "").strip()
+            has_cat = any(w.tags.get(k) for k in ("shop", "amenity", "tourism", "healthcare", "place"))
+            if housenumber and street and not name and not has_cat:
+                coords = [(nd.lat, nd.lon) for nd in w.nodes if nd.location.valid()]
+                if coords:
+                    lat = sum(c[0] for c in coords) / len(coords)
+                    lon = sum(c[1] for c in coords) / len(coords)
+                    if bbox[1] <= lat <= bbox[3] and bbox[0] <= lon <= bbox[2]:
+                        self.addresses.append((
+                            housenumber,
+                            street,
+                            w.tags.get("addr:unit", "").strip(),
+                            w.tags.get("addr:city", "").strip(),
+                            self.state_abbr,
+                            w.tags.get("addr:postcode", "").strip(),
+                            lat,
+                            lon,
+                            "osm",
+                        ))
 
         def relation(self, r):
             if r.tags.get("type") != "enforcement":
@@ -857,6 +990,21 @@ def build_places_fts5_db(
         CREATE INDEX idx_places_lat_lon ON places(lat, lon);
         CREATE INDEX idx_places_state ON places(state);
 
+        CREATE TABLE addresses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            number TEXT NOT NULL,
+            street TEXT NOT NULL,
+            unit TEXT DEFAULT '',
+            city TEXT DEFAULT '',
+            state TEXT DEFAULT '',
+            postcode TEXT DEFAULT '',
+            lat REAL NOT NULL,
+            lon REAL NOT NULL,
+            source TEXT DEFAULT 'overture'
+        );
+        CREATE INDEX idx_addresses_lat_lon ON addresses(lat, lon);
+        CREATE INDEX idx_addresses_street_num ON addresses(street, number);
+
         CREATE TABLE road_hazards (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT NOT NULL,
@@ -936,11 +1084,68 @@ def build_places_fts5_db(
             except Exception:
                 pass
 
+    # 1b. Query Overture Maps Addresses GeoParquet from AWS S3 via DuckDB (with 30-mile buffered bbox)
+    overture_addresses_s3 = f"s3://overturemaps-us-west-2/release/{overture_release}/theme=addresses/type=address/*"
+    overture_address_rows: list[tuple] = []
+    addr_duck = None
+    try:
+        import duckdb
+
+        buffered_addr_bbox = expand_bbox(bbox, BORDER_BUFFER_DEG_LON, BORDER_BUFFER_DEG_LAT)
+        print(f"[overture] Inspecting & querying Overture Addresses ({overture_release}) for {pack_code.upper()} via DuckDB...", flush=True)
+        addr_duck = duckdb.connect()
+        addr_duck.execute("INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;")
+        addr_duck.execute("SET s3_region='us-west-2'; SET s3_access_key_id=''; SET s3_secret_access_key='';")
+
+        addr_describe = addr_duck.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{overture_addresses_s3}', filename=false, hive_partitioning=1)"
+        ).fetchall()
+        addr_cols = {str(r[0]): str(r[1]) for r in addr_describe}
+        print(f"[overture] Discovered {len(addr_cols)} address parquet columns: {', '.join(sorted(addr_cols.keys()))}", flush=True)
+
+        addr_sql = build_overture_addresses_sql(
+            columns=addr_cols,
+            overture_s3=overture_addresses_s3,
+            bbox=buffered_addr_bbox,
+        )
+        raw_addr_rows = addr_duck.execute(addr_sql).fetchall()
+        for row in raw_addr_rows:
+            num, st, unit, postcode, postal_city, levels, lat, lon = row
+            if lat is None or lon is None:
+                continue
+            city_val, state_val = _extract_city_and_state_from_levels(postal_city, levels, base_state_abbr)
+            overture_address_rows.append((
+                str(num).strip(),
+                str(st).strip(),
+                str(unit or "").strip(),
+                city_val,
+                state_val,
+                str(postcode or "").strip(),
+                float(lat),
+                float(lon),
+                "overture",
+            ))
+        print(f"[overture] Loaded {len(overture_address_rows):,} Overture addresses for {pack_code.upper()}", flush=True)
+    except Exception as exc:
+        overture_address_rows = []
+        print(
+            f"RAHYAB WARNING: Overture Addresses query failed for {pack_code.upper()} ({exc}); "
+            "continuing build without Overture addresses.",
+            flush=True,
+        )
+    finally:
+        if addr_duck is not None:
+            try:
+                addr_duck.close()
+            except Exception:
+                pass
+
     # 2. Extract OSM addresses, POIs, and road hazards
     print(f"[osm] Extracting addresses, POIs, and hazards from {pbf_path.name}...", flush=True)
     osm_places: list = []
+    osm_addresses: list = []
     osm_hazards: list = []
-    handler = OsmPlaceAndHazardHandler(base_state_abbr, osm_places, osm_hazards)
+    handler = OsmPlaceAndHazardHandler(base_state_abbr, osm_places, osm_addresses, osm_hazards)
     handler.apply_file(str(pbf_path), locations=True)
 
     # 2a. Resolve enforcement relations (speed cameras & red light cameras) and deduplicate cameras
@@ -1042,6 +1247,18 @@ def build_places_fts5_db(
         flush=True,
     )
 
+    # 2c. Deduplicate Overture + OSM addresses (same normalized number + street within 30 m, prefer Overture)
+    deduped_addresses, addr_dedup_removed = deduplicate_addresses(
+        overture_address_rows,
+        osm_addresses,
+        max_distance_m=ADDRESS_DEDUP_MAX_DISTANCE_M,
+    )
+    print(
+        f"[dedup] Addresses: removed {addr_dedup_removed:,} duplicates within {int(ADDRESS_DEDUP_MAX_DISTANCE_M)}m "
+        f"(keeping {len(deduped_addresses):,} addresses).",
+        flush=True,
+    )
+
     cur.executemany(
         "INSERT INTO places (name, brand, category, category_keywords, address, city, state, postcode, lat, lon, source, popularity) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1053,14 +1270,18 @@ def build_places_fts5_db(
         dedup_osm,
     )
     cur.executemany(
+        "INSERT INTO addresses (number, street, unit, city, state, postcode, lat, lon, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        deduped_addresses,
+    )
+    cur.executemany(
         "INSERT INTO road_hazards (type, lat, lon, label, speed_limit_mph, direction, osm_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         osm_hazards,
     )
     conn.commit()
 
-    # 3. Build SQLite FTS5 index (6 columns matching Android OfflinePlaceSearchEngine bm25 weights;
-    #    category column indexes taxonomy.primary + basic_category + hierarchy + alternates via view)
-    print("[sqlite] Building FTS5 full-text search index...", flush=True)
+    # 3. Build SQLite FTS5 indexes (places_fts + addresses_fts with normalized street/number tokens)
+    print("[sqlite] Building FTS5 full-text search indexes (places_fts + addresses_fts)...", flush=True)
     cur.executescript("""
         CREATE VIEW places_fts_src AS
         SELECT
@@ -1084,18 +1305,58 @@ def build_places_fts5_db(
         );
         INSERT INTO places_fts(places_fts) VALUES('rebuild');
         INSERT INTO places_fts(places_fts) VALUES('optimize');
+
+        CREATE VIRTUAL TABLE addresses_fts USING fts5(
+            number, street, city, postcode,
+            content='addresses', content_rowid='id',
+            tokenize='unicode61 remove_diacritics 2',
+            prefix='1 2 3 4'
+        );
+    """)
+
+    # Populate addresses_fts with normalized number & normalized street while addresses stores original text
+    addr_fts_batch: list[tuple] = []
+    for row_id, num, st, city_val, postcode_val in cur.execute(
+        "SELECT id, number, street, city, postcode FROM addresses"
+    ):
+        addr_fts_batch.append((
+            row_id,
+            normalize_house_number(num),
+            normalize_street(st),
+            (city_val or "").strip(),
+            (postcode_val or "").strip(),
+        ))
+        if len(addr_fts_batch) >= 25_000:
+            cur.executemany(
+                "INSERT INTO addresses_fts(rowid, number, street, city, postcode) VALUES (?, ?, ?, ?, ?)",
+                addr_fts_batch,
+            )
+            addr_fts_batch.clear()
+    if addr_fts_batch:
+        cur.executemany(
+            "INSERT INTO addresses_fts(rowid, number, street, city, postcode) VALUES (?, ?, ?, ?, ?)",
+            addr_fts_batch,
+        )
+    cur.executescript("""
+        INSERT INTO addresses_fts(addresses_fts) VALUES('optimize');
         ANALYZE;
         VACUUM;
     """)
     conn.commit()
 
-    # 4. Post-build verification check: total counts, full-state Overture warning, and Eugene 15 km Best Buy check
+    # 4. Post-build verification check: total counts, full-state warnings, Eugene Best Buy & 24th Ave checks
     total_places = cur.execute("SELECT COUNT(*) FROM places").fetchone()[0]
     overture_count = cur.execute("SELECT COUNT(*) FROM places WHERE source = 'overture'").fetchone()[0]
     osm_count = cur.execute("SELECT COUNT(*) FROM places WHERE source = 'osm'").fetchone()[0]
+    total_addresses = cur.execute("SELECT COUNT(*) FROM addresses").fetchone()[0]
+    overture_addr_count = cur.execute("SELECT COUNT(*) FROM addresses WHERE source = 'overture'").fetchone()[0]
+    osm_addr_count = cur.execute("SELECT COUNT(*) FROM addresses WHERE source = 'osm'").fetchone()[0]
+    speed_bump_count = cur.execute("SELECT COUNT(*) FROM road_hazards WHERE type = 'speed_bump'").fetchone()[0]
     print(
         f"[check] {pack_code.upper()} places DB ready ({places_source}): "
-        f"{total_places:,} total places ({overture_count:,} Overture, {osm_count:,} OSM).",
+        f"{total_places:,} total places ({overture_count:,} Overture, {osm_count:,} OSM); "
+        f"{total_addresses:,} total addresses ({overture_addr_count:,} Overture, {osm_addr_count:,} OSM); "
+        f"road_hazards speed_bump={speed_bump_count:,}.",
         flush=True,
     )
 
@@ -1104,6 +1365,12 @@ def build_places_fts5_db(
         print(
             f"RAHYAB WARNING: Full state {pack_code.upper()} has only {overture_count:,} Overture places "
             f"(expected at least {FULL_STATE_MIN_OVERTURE_PLACES:,}).",
+            flush=True,
+        )
+    if is_full_state and total_addresses < FULL_STATE_MIN_ADDRESSES:
+        print(
+            f"RAHYAB WARNING: Full state {pack_code.upper()} has only {total_addresses:,} addresses "
+            f"(expected at least {FULL_STATE_MIN_ADDRESSES:,}).",
             flush=True,
         )
 
@@ -1139,9 +1406,36 @@ def build_places_fts5_db(
             flush=True,
         )
 
+    # Eugene "24th Ave" address verification
+    eugene_24th_rows = cur.execute(
+        """
+        SELECT a.number, a.street, a.city, a.state, a.postcode, a.lat, a.lon, a.source
+        FROM addresses_fts
+        JOIN addresses a ON a.id = addresses_fts.rowid
+        WHERE addresses_fts MATCH 'street:("24th" "ave")'
+        LIMIT 200
+        """
+    ).fetchall()
+    eugene_24th_matches = [
+        r for r in eugene_24th_rows
+        if _haversine_meters(EUGENE_OR_LAT, EUGENE_OR_LON, r[5], r[6]) <= EUGENE_CHECK_RADIUS_M
+    ]
+    if eugene_24th_matches:
+        sample = eugene_24th_matches[0]
+        print(
+            f"[check] Eugene '24th Ave' address verification: {len(eugene_24th_matches):,} match(es) "
+            f"(e.g. {sample[0]} {sample[1]}, {sample[2]} {sample[3]} {sample[4]} [{sample[7]}]).",
+            flush=True,
+        )
+    else:
+        print(
+            f"[check] Eugene '24th Ave' address verification returned 0 matches in {pack_code.upper()}.",
+            flush=True,
+        )
+
     conn.close()
     print(f"[sqlite] Built {out_db} ({out_db.stat().st_size / (1024 * 1024):.1f} MB)", flush=True)
-    return places_source
+    return places_source, total_addresses
 
 
 def split_file_if_needed(path: Path, base_url: str, max_chunk_bytes: int = GITHUB_ASSET_SPLIT_BYTES) -> dict:
@@ -1211,6 +1505,7 @@ def write_pack_manifest_entry(
     version: str,
     build_version: str,
     places_source: str = "overture+osm",
+    address_count: int = 0,
 ) -> dict:
     meta = ALL_PACK_CATALOG[pack_code]
     pm = output_dir / f"{pack_code}.pmtiles"
@@ -1228,6 +1523,7 @@ def write_pack_manifest_entry(
         "buildVersion": build_version,
         "parentStateCode": meta.get("parent"),
         "placesSource": places_source,
+        "addressCount": address_count,
         "totalSizeBytes": pm_e["sizeBytes"] + vh_e["sizeBytes"] + db_e["sizeBytes"],
         "pmtiles": pm_e,
         "valhalla": vh_e,
@@ -1276,6 +1572,45 @@ def merge_manifests(
     print(f"[manifest] Wrote {output_manifest} with {len(merged['states'])} pack(s).", flush=True)
 
 
+PUBLISHED_MANIFEST_URL = (
+    "https://github.com/alinematiabkenar-ux/rahyab/releases/download/packs-latest/manifest.json"
+)
+
+
+def resolve_published_state_codes(manifest_url: str = PUBLISHED_MANIFEST_URL) -> list[str]:
+    """Fetches the live published manifest.json via stdlib urllib and extracts unique base state codes."""
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            manifest_url,
+            headers={"User-Agent": "RahYab-Pipeline/1.0", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        seen: list[str] = []
+        for entry in payload.get("states", []):
+            raw_code = (
+                entry.get("parentStateCode")
+                or ALL_PACK_CATALOG.get((entry.get("stateCode") or "").strip().lower(), {}).get("parent")
+                or entry.get("stateCode")
+                or ""
+            ).strip().lower()
+            if raw_code and raw_code not in seen:
+                seen.append(raw_code)
+        if seen:
+            print(f"[resolve-matrix] Published base states from manifest: {seen}", file=sys.stderr, flush=True)
+            return seen
+        print("[resolve-matrix] Published manifest had no states; falling back to ['or'].", file=sys.stderr, flush=True)
+    except Exception as exc:
+        print(
+            f"[resolve-matrix] Could not fetch {manifest_url} ({exc}); falling back to ['or'].",
+            file=sys.stderr,
+            flush=True,
+        )
+    return ["or"]
+
+
 def build_pack(
     pack_code: str,
     output_dir: Path,
@@ -1307,12 +1642,21 @@ def build_pack(
             buffered_pbf.unlink(missing_ok=True)
 
     places_source = "overture+osm"
+    address_count = 0
     if not skip_places:
-        places_source = build_places_fts5_db(
+        places_source, address_count = build_places_fts5_db(
             code, meta["abbr"], meta["bbox"], primary_pbf, overture_release, output_dir / f"{code}_places.db"
         )
 
-    return write_pack_manifest_entry(code, output_dir, base_url, version, build_version, places_source=places_source)
+    return write_pack_manifest_entry(
+        code,
+        output_dir,
+        base_url,
+        version,
+        build_version,
+        places_source=places_source,
+        address_count=address_count,
+    )
 
 
 def main():
@@ -1345,7 +1689,13 @@ def main():
     args = parser.parse_args()
 
     if args.resolve_matrix is not None:
-        resolved = resolve_pack_targets(args.resolve_matrix, split_large_states=not args.no_split_large)
+        raw_matrix = args.resolve_matrix.strip()
+        if raw_matrix.lower() == "published":
+            base_codes = resolve_published_state_codes()
+            resolved = resolve_pack_targets(",".join(base_codes), split_large_states=not args.no_split_large)
+            print(f"[resolve-matrix] Resolved published targets: {resolved}", file=sys.stderr, flush=True)
+        else:
+            resolved = resolve_pack_targets(raw_matrix, split_large_states=not args.no_split_large)
         print(json.dumps(resolved))
         return
 

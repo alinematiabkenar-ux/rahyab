@@ -324,4 +324,8 @@ object PersianStrings : AppStrings {
     override val positionMarkerStyleLabel = "نشانگر موقعیت"
     override val positionMarkerArrow = "پیکان سه‌بعدی"
     override val positionMarkerCar = "خودرو"
+    override val addressApproximateBadge = "تقریبی"
+    override val overtureAddressesAttributionFull = "داده‌های آدرس شامل Overture Maps Addresses (پروژه OpenAddresses و پایگاه ملی آدرس آمریکا) است."
+    override val overtureAttributionLinkLabel = "صفحه منابع و حقوق Overture Maps"
+    override val alertToggleSpeedBump = "هشدار سرعت‌گیر"
 }

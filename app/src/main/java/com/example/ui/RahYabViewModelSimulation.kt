@@ -106,6 +106,8 @@ internal fun RahYabViewModel.startSimulationOnActiveRouteImpl() {
     gpsWatchdogJob?.cancel()
     gpsWatchdogJob = null
     navController.reset()
+    speedBumpEvaluator.reset()
+    seedSimulationSpeedBumpsImpl(route.shape)
     voiceManager.resetDeduplication()
     simulatedWrongTurnTicksRemaining = 0
     val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
@@ -151,6 +153,7 @@ internal fun RahYabViewModel.stopSimulationAndReturnToRealGpsImpl() {
     simulationJob = null
     _simulationSpeedMultiplier.value = 1
     simulatedWrongTurnTicksRemaining = 0
+    clearSimulationSpeedBumpsImpl()
     viewModelScope.launch { prefs.setSimulateDriveEnabled(false) }
 
     val realFix = currentGpsFix.value

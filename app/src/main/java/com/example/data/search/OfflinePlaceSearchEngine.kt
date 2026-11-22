@@ -58,6 +58,7 @@ class OfflinePlaceSearchEngine(
     private val savedPlaceDao: SavedPlaceDao,
     private val sqliteDriver: SQLiteDriver = BundledSQLiteDriver()
 ) {
+    private val addressSearchEngine = OfflineAddressSearchEngine(sqliteDriver)
 
     suspend fun search(
         query: String,
@@ -85,9 +86,22 @@ class OfflinePlaceSearchEngine(
         savedPlaces: List<SavedPlaceEntity> = emptyList(),
         limit: Int = 30
     ): List<PlaceSearchResult> {
+        val parsedAddress = AddressNormalizer.parseAddressQuery(query)
+        val addressResults = if (parsedAddress.isAddressLike || parsedAddress.normalizedStreet.isNotBlank()) {
+            addressSearchEngine.searchAcrossDatabases(
+                parsed = parsedAddress,
+                userLat = userLat,
+                userLon = userLon,
+                stateDbFiles = stateDbFiles,
+                limit = minOf(12, limit)
+            )
+        } else {
+            emptyList()
+        }
+
         val expanded = PersianQueryNormalizer.expandQuery(query)
         if (expanded.normalizedLatinQueries.isEmpty() && expanded.matchedCategoryTags.isEmpty()) {
-            return emptyList()
+            return addressResults.take(limit)
         }
 
         val candidates = mutableListOf<PlaceSearchResult>()
@@ -134,10 +148,13 @@ class OfflinePlaceSearchEngine(
             }
         }
 
-        val deduped = deduplicateResults(candidates)
-        return deduped
+        val placeResults = deduplicateResults(candidates)
             .sortedByDescending { it.relevanceScore }
-            .take(limit)
+        return if (parsedAddress.isAddressLike && addressResults.isNotEmpty()) {
+            (addressResults + placeResults).take(limit)
+        } else {
+            (placeResults + addressResults).take(limit)
+        }
     }
 
     suspend fun queryRoadHazardsInBounds(
@@ -192,6 +209,23 @@ class OfflinePlaceSearchEngine(
         mergeNearbyTrafficSignals(raw, mergeRadiusMeters = 15.0)
     }
 
+    suspend fun querySpeedBumpsInBounds(
+        minLat: Double,
+        maxLat: Double,
+        minLon: Double,
+        maxLon: Double
+    ): List<RoadHazardPoint> = withContext(Dispatchers.IO) {
+        queryRoadHazardsInFiles(
+            dbFiles = packManager.getInstalledPlacesDatabases().map { it.second },
+            minLat = minLat,
+            maxLat = maxLat,
+            minLon = minLon,
+            maxLon = maxLon,
+            speedBumpsOnly = true,
+            limit = 600
+        )
+    }
+
     /**
      * Merges traffic signal nodes closer than [mergeRadiusMeters] (default ~15 m) into a single
      * averaged intersection centroid so multi-node intersections never crowd the map.
@@ -243,6 +277,7 @@ class OfflinePlaceSearchEngine(
         maxLon: Double,
         camerasOnly: Boolean = false,
         trafficSignalsOnly: Boolean = false,
+        speedBumpsOnly: Boolean = false,
         limit: Int = 400
     ): List<RoadHazardPoint> {
         val hazards = mutableListOf<RoadHazardPoint>()
@@ -259,6 +294,7 @@ class OfflinePlaceSearchEngine(
                     val typeFilter = when {
                         camerasOnly -> "AND type IN ('speed_camera', 'red_light_camera')"
                         trafficSignalsOnly -> "AND type IN ('traffic_signal', 'traffic_signals')"
+                        speedBumpsOnly -> "AND type = 'speed_bump'"
                         else -> ""
                     }
                     val stmt = conn.prepare(

@@ -159,6 +159,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val visibleCameras: StateFlow<List<RoadHazardPoint>> = _visibleCameras.asStateFlow()
     internal val _visibleTrafficLights = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
     val visibleTrafficLights: StateFlow<List<RoadHazardPoint>> = _visibleTrafficLights.asStateFlow()
+    internal val _visibleSpeedBumps = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
+    val visibleSpeedBumps: StateFlow<List<RoadHazardPoint>> = _visibleSpeedBumps.asStateFlow()
     internal val _aheadTrafficLightMeters = MutableStateFlow<Double?>(null)
     val aheadTrafficLightMeters: StateFlow<Double?> = _aheadTrafficLightMeters.asStateFlow()
     internal val _freeDriveAheadAlert = MutableStateFlow<AheadAlert?>(null)
@@ -189,12 +191,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var autoRecenterJob: Job? = null
     internal var cameraFetchJob: Job? = null
     internal var trafficLightFetchJob: Job? = null
+    internal var speedBumpFetchJob: Job? = null
     internal var lastCameraFetchLoc: LatLon? = null
     internal var lastTrafficLightFetchLoc: LatLon? = null
+    internal var lastSpeedBumpFetchLoc: LatLon? = null
     internal var lastGpsReceivedMs: Long = 0L
     internal var simulatedWrongTurnTicksRemaining: Int = 0
     internal var simulatedClockMs: Long = 0L
     internal var cachedDbHazards: List<RoadHazardPoint> = emptyList()
+    internal var syntheticSimSpeedBumps: List<RoadHazardPoint> = emptyList()
+    internal val speedBumpEvaluator = com.example.navigation.SpeedBumpAlertEvaluator()
 
     init {
         initializeViewModel()
@@ -297,6 +303,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setAlertStopSignEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertStopSignEnabled(enabled) } }
     fun setAlertSpeedCameraEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedCameraEnabled(enabled) } }
     fun setAlertRedLightCameraEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertRedLightCameraEnabled(enabled) } }
+    fun setAlertSpeedBumpEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedBumpEnabled(enabled) } }
     fun setShowTrafficLights(enabled: Boolean) = setShowTrafficLightsImpl(enabled)
     fun setShow3DBuildings(enabled: Boolean) { viewModelScope.launch { prefs.setShow3DBuildings(enabled) } }
     fun setPositionMarkerStyle(style: String) { viewModelScope.launch { prefs.setPositionMarkerStyle(style) } }

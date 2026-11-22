@@ -668,12 +668,20 @@ fun AheadAlertBanner(
                         .background(accentColor.copy(alpha = 0.22f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = alert.titleEn,
-                        tint = accentColor,
-                        modifier = Modifier.size(26.dp)
-                    )
+                    if (alert.kind == RoadAlertKind.SPEED_BUMP) {
+                        androidx.compose.foundation.Image(
+                            painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.ic_speed_bump_map),
+                            contentDescription = alert.titleEn,
+                            modifier = Modifier.size(30.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = alert.titleEn,
+                            tint = accentColor,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
 
                 Column(modifier = Modifier.weight(1f)) {

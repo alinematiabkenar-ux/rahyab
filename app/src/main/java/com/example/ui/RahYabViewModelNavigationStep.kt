@@ -109,6 +109,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
             }
             voiceManager.speakAlert(alert, s.language, s.distanceUnit)
         }
+        evaluateSpeedBumpForNavigationImpl(state, fallbackLoc, speedMps)
     }
 
     // Update persistent foreground notification directly via NotificationManagerCompat.notify()
