@@ -36,6 +36,8 @@ data class UserSettings(
     val alertSpeedCameraEnabled: Boolean = true,
     val alertRedLightCameraEnabled: Boolean = true,
     val showTrafficLights: Boolean = true,
+    val show3DBuildings: Boolean = true,
+    val positionMarkerStyle: String = "arrow", // "arrow" or "car"
     val is3DView: Boolean = true,
     val routePreference: RoutePreference = RoutePreference.FASTEST,
     val avoidTolls: Boolean = false,
@@ -101,6 +103,8 @@ class UserPreferencesRepository(private val context: Context) {
         val ALERT_SPEED_CAMERA = booleanPreferencesKey("alert_speed_camera")
         val ALERT_RED_LIGHT_CAMERA = booleanPreferencesKey("alert_red_light_camera")
         val SHOW_TRAFFIC_LIGHTS = booleanPreferencesKey("show_traffic_lights")
+        val SHOW_3D_BUILDINGS = booleanPreferencesKey("show_3d_buildings")
+        val POSITION_MARKER_STYLE = stringPreferencesKey("position_marker_style")
         val IS_3D_VIEW = booleanPreferencesKey("is_3d_view")
         val ROUTE_PREFERENCE = stringPreferencesKey("route_preference")
         val AVOID_TOLLS = booleanPreferencesKey("avoid_tolls")
@@ -141,6 +145,8 @@ class UserPreferencesRepository(private val context: Context) {
             alertSpeedCameraEnabled = prefs[Keys.ALERT_SPEED_CAMERA] ?: true,
             alertRedLightCameraEnabled = prefs[Keys.ALERT_RED_LIGHT_CAMERA] ?: true,
             showTrafficLights = prefs[Keys.SHOW_TRAFFIC_LIGHTS] ?: true,
+            show3DBuildings = prefs[Keys.SHOW_3D_BUILDINGS] ?: true,
+            positionMarkerStyle = prefs[Keys.POSITION_MARKER_STYLE]?.takeIf { it == "car" || it == "arrow" } ?: "arrow",
             is3DView = prefs[Keys.IS_3D_VIEW] ?: true,
             routePreference = RoutePreference.entries.find { it.code == prefs[Keys.ROUTE_PREFERENCE] }
                 ?: RoutePreference.FASTEST,
@@ -307,5 +313,14 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setLastManifestCheckEpochMs(epochMs: Long) {
         context.rahYabDataStore.edit { it[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] = epochMs }
+    }
+
+    suspend fun setShow3DBuildings(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.SHOW_3D_BUILDINGS] = enabled }
+    }
+
+    suspend fun setPositionMarkerStyle(style: String) {
+        val safe = if (style == "car") "car" else "arrow"
+        context.rahYabDataStore.edit { it[Keys.POSITION_MARKER_STYLE] = safe }
     }
 }

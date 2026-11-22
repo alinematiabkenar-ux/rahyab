@@ -180,7 +180,7 @@ class MapAndRouteStabilityTest {
         // Zoom thresholds
         assertEquals(15, minorRoadLabel!!.getInt("minzoom"))
         assertEquals(13, majorRoadLabel!!.getInt("minzoom"))
-        assertTrue(poiLabel!!.getInt("minzoom") >= 16)
+        assertTrue(poiLabel!!.getInt("minzoom") >= 15)
 
         // Street names & highway shields MUST remain strictly English even in Persian mode
         val minorTextField = minorRoadLabel.getJSONObject("layout").getJSONArray("text-field").toString()

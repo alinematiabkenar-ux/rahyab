@@ -320,4 +320,8 @@ object PersianStrings : AppStrings {
     override val externalLinkLabelDefault = "موقعیت اشتراک‌گذاری‌شده"
     override val showTrafficLightsToggle = "نمایش چراغ‌های راهنمایی"
     override val trafficLightAheadLabel = "چراغ راهنمایی در پیش"
+    override val show3DBuildingsToggle = "نمایش ساختمان‌های سه‌بعدی"
+    override val positionMarkerStyleLabel = "نشانگر موقعیت"
+    override val positionMarkerArrow = "پیکان سه‌بعدی"
+    override val positionMarkerCar = "خودرو"
 }

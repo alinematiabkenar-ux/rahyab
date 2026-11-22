@@ -535,6 +535,19 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         return text
     }
 
+    fun speakWeatherAlert(title: String, language: AppLanguage): String {
+        val effectiveLanguage = resolveEffectiveLanguage(language)
+        val text = if (effectiveLanguage == AppLanguage.PERSIAN) {
+            "هشدار هواشناسی شدید: $title"
+        } else {
+            "Severe weather alert: $title"
+        }
+        if (voiceEnabled && isInitialized) {
+            speakRaw(text, effectiveLanguage)
+        }
+        return text
+    }
+
     fun speakTestSample(language: AppLanguage) {
         if (!isInitialized) return
         val effectiveLanguage = resolveEffectiveLanguage(language)

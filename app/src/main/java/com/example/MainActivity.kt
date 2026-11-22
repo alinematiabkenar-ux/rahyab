@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -282,6 +284,7 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val showPersianTtsDialog by viewModel.showPersianTtsDialog.collectAsStateWithLifecycle()
     val openDriveTabEvent by viewModel.openDriveTabEvent.collectAsStateWithLifecycle()
+    val mapUpdatesCount by viewModel.mapPackUpdatesAvailableCount.collectAsStateWithLifecycle()
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
     val strings = remember(settings.language) { stringsFor(settings.language) }
@@ -465,7 +468,26 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                                         NavigationBarItem(
                                             selected = isSelected,
                                             onClick = { navigateTab(route) },
-                                            icon = { Icon(icon, contentDescription = label) },
+                                            icon = {
+                                                if (route == RahYabRoutes.ROUTE_MAPS && mapUpdatesCount > 0) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            Badge {
+                                                                Text(
+                                                                    com.example.i18n.BilingualFormatter.formatNumber(
+                                                                        mapUpdatesCount,
+                                                                        settings.language
+                                                                    )
+                                                                )
+                                                            }
+                                                        }
+                                                    ) {
+                                                        Icon(icon, contentDescription = label)
+                                                    }
+                                                } else {
+                                                    Icon(icon, contentDescription = label)
+                                                }
+                                            },
                                             label = { Text(label) },
                                             modifier = Modifier.testTag("nav_tab_$route")
                                         )
@@ -487,7 +509,26 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                                         NavigationRailItem(
                                             selected = isSelected,
                                             onClick = { navigateTab(route) },
-                                            icon = { Icon(icon, contentDescription = label) },
+                                            icon = {
+                                                if (route == RahYabRoutes.ROUTE_MAPS && mapUpdatesCount > 0) {
+                                                    BadgedBox(
+                                                        badge = {
+                                                            Badge {
+                                                                Text(
+                                                                    com.example.i18n.BilingualFormatter.formatNumber(
+                                                                        mapUpdatesCount,
+                                                                        settings.language
+                                                                    )
+                                                                )
+                                                            }
+                                                        }
+                                                    ) {
+                                                        Icon(icon, contentDescription = label)
+                                                    }
+                                                } else {
+                                                    Icon(icon, contentDescription = label)
+                                                }
+                                            },
                                             label = { Text(label) },
                                             modifier = Modifier.testTag("nav_rail_$route")
                                         )

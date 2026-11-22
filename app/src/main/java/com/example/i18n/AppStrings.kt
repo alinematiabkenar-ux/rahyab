@@ -366,6 +366,11 @@ interface AppStrings {
     // Traffic lights on map
     val showTrafficLightsToggle: String
     val trafficLightAheadLabel: String
+    // Map graphics (3D buildings, position marker style)
+    val show3DBuildingsToggle: String
+    val positionMarkerStyleLabel: String
+    val positionMarkerArrow: String
+    val positionMarkerCar: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

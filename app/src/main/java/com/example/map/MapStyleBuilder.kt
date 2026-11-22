@@ -31,6 +31,7 @@ object MapStyleBuilder {
     const val SOURCE_ROUTE_2 = "rahyab_route_2"
     const val SOURCE_ROUTE_3 = "rahyab_route_3"
     const val SOURCE_PRIMARY_ROUTE = "rahyab_primary_route"
+    const val SOURCE_DRIVEN_ROUTE = "rahyab_driven_route"
     const val SOURCE_DESTINATION = "rahyab_destination"
     const val SOURCE_USER_REPORTS = "rahyab_user_reports"
     const val SOURCE_CAMERAS = "rahyab_cameras"
@@ -42,8 +43,11 @@ object MapStyleBuilder {
     const val LAYER_ROUTE_1 = "rahyab_route_1_line"
     const val LAYER_ROUTE_2 = "rahyab_route_2_line"
     const val LAYER_ROUTE_3 = "rahyab_route_3_line"
+    const val LAYER_DRIVEN_ROUTE_CASING = "rahyab_driven_route_casing"
+    const val LAYER_DRIVEN_ROUTE = "rahyab_driven_route_line"
     const val LAYER_PRIMARY_ROUTE_CASING = "rahyab_primary_route_casing"
     const val LAYER_PRIMARY_ROUTE = "rahyab_primary_route_line"
+    const val LAYER_ROUTE_CHEVRONS = "rahyab_route_chevrons"
     const val LAYER_DESTINATION_CIRCLE = "rahyab_destination_circle"
     const val LAYER_USER_REPORTS_CIRCLE = "rahyab_user_reports_circle"
     const val LAYER_CAMERAS_SYMBOL = "rahyab_cameras_symbol"
@@ -52,9 +56,27 @@ object MapStyleBuilder {
     const val LAYER_GPS_ACCURACY_OUTLINE = "rahyab_gps_accuracy_outline"
     const val LAYER_GPS_PUCK = "rahyab_gps_puck_circle"
     const val LAYER_GPS_ARROW = "rahyab_gps_arrow_symbol"
+    const val LAYER_BUILDINGS_3D_SUFFIX = "_buildings_3d"
 
     const val IMAGE_USER_ARROW = "rahyab_user_heading_arrow"
+    const val IMAGE_USER_ARROW_GRAY = "rahyab_user_heading_arrow_gray"
+    const val IMAGE_USER_CAR = "rahyab_user_heading_car"
+    const val IMAGE_USER_CAR_GRAY = "rahyab_user_heading_car_gray"
+    const val IMAGE_ROUTE_CHEVRON = "rahyab_route_chevron_icon"
     const val IMAGE_HIGHWAY_SHIELD = "rahyab_highway_shield_bg"
+    const val IMAGE_SHIELD_INTERSTATE = "rahyab_shield_interstate"
+    const val IMAGE_SHIELD_US_ROUTE = "rahyab_shield_us_route"
+    const val IMAGE_SHIELD_STATE = "rahyab_shield_state"
+    const val IMAGE_POI_GAS = "rahyab_poi_gas"
+    const val IMAGE_POI_PARKING = "rahyab_poi_parking"
+    const val IMAGE_POI_RESTAURANT = "rahyab_poi_restaurant"
+    const val IMAGE_POI_CAFE = "rahyab_poi_cafe"
+    const val IMAGE_POI_GROCERY = "rahyab_poi_grocery"
+    const val IMAGE_POI_PHARMACY = "rahyab_poi_pharmacy"
+    const val IMAGE_POI_HOSPITAL = "rahyab_poi_hospital"
+    const val IMAGE_POI_SCHOOL = "rahyab_poi_school"
+    const val IMAGE_POI_BANK = "rahyab_poi_bank"
+    const val IMAGE_POI_EV = "rahyab_poi_ev"
     const val IMAGE_SPEED_CAMERA = "rahyab_speed_camera_icon"
     const val IMAGE_RED_LIGHT_CAMERA = "rahyab_red_light_camera_icon"
     const val IMAGE_TRAFFIC_LIGHT = "rahyab_traffic_light_icon"
@@ -136,6 +158,7 @@ object MapStyleBuilder {
             put("features", JSONArray())
         }
         (ALL_ROUTE_SOURCES + listOf(
+            SOURCE_DRIVEN_ROUTE,
             SOURCE_PRIMARY_ROUTE,
             SOURCE_DESTINATION,
             SOURCE_USER_REPORTS,
@@ -173,7 +196,37 @@ object MapStyleBuilder {
             })
         }
 
-        // Selected / Active route casing & glowing highlighted core on top of all labels & unselected routes
+        // Already-driven portion of active route rendered in muted gray behind the car
+        layers.put(JSONObject().apply {
+            put("id", LAYER_DRIVEN_ROUTE_CASING)
+            put("type", "line")
+            put("source", SOURCE_DRIVEN_ROUTE)
+            put("layout", JSONObject().apply {
+                put("line-cap", "round")
+                put("line-join", "round")
+            })
+            put("paint", JSONObject().apply {
+                put("line-color", if (isNightMode) "#1E293B" else "#475569")
+                put("line-width", 11.5)
+                put("line-opacity", 0.72)
+            })
+        })
+        layers.put(JSONObject().apply {
+            put("id", LAYER_DRIVEN_ROUTE)
+            put("type", "line")
+            put("source", SOURCE_DRIVEN_ROUTE)
+            put("layout", JSONObject().apply {
+                put("line-cap", "round")
+                put("line-join", "round")
+            })
+            put("paint", JSONObject().apply {
+                put("line-color", if (isNightMode) "#64748B" else "#94A3B8")
+                put("line-width", 7.2)
+                put("line-opacity", 0.78)
+            })
+        })
+
+        // Selected / Active route darker casing & glowing highlighted core on top of labels & driven part
         layers.put(JSONObject().apply {
             put("id", LAYER_PRIMARY_ROUTE_CASING)
             put("type", "line")
@@ -183,8 +236,8 @@ object MapStyleBuilder {
                 put("line-join", "round")
             })
             put("paint", JSONObject().apply {
-                put("line-color", if (isNightMode) "#0F172A" else "#0A2540")
-                put("line-width", 12.5)
+                put("line-color", if (isNightMode) "#0B1F3A" else "#0A2540")
+                put("line-width", 13.0)
             })
         })
         layers.put(JSONObject().apply {
@@ -203,7 +256,24 @@ object MapStyleBuilder {
                         .put(JSONArray().put("get").put("color"))
                         .put(if (isNightMode) "#00E5FF" else ROUTE_COLOR_0)
                 )
-                put("line-width", 8.0)
+                put("line-width", 8.2)
+            })
+        })
+        // Direction chevrons along active route at high zoom (zoom >= 15)
+        layers.put(JSONObject().apply {
+            put("id", LAYER_ROUTE_CHEVRONS)
+            put("type", "symbol")
+            put("source", SOURCE_PRIMARY_ROUTE)
+            put("minzoom", 15)
+            put("layout", JSONObject().apply {
+                put("symbol-placement", "line")
+                put("symbol-spacing", 72)
+                put("icon-image", IMAGE_ROUTE_CHEVRON)
+                put("icon-size", 0.72)
+                put("icon-rotation-alignment", "map")
+                put("icon-pitch-alignment", "map")
+                put("icon-allow-overlap", true)
+                put("icon-ignore-placement", true)
             })
         })
 
@@ -293,10 +363,18 @@ object MapStyleBuilder {
             put("type", "circle")
             put("source", SOURCE_GPS_PUCK)
             put("paint", JSONObject().apply {
-                put("circle-radius", 8.5)
-                put("circle-color", "#00D4C8")
-                put("circle-stroke-width", 2.5)
+                put("circle-radius", 16.0)
+                put(
+                    "circle-color",
+                    JSONArray()
+                        .put("coalesce")
+                        .put(JSONArray().put("get").put("haloColor"))
+                        .put("#38BDF8")
+                )
+                put("circle-opacity", 0.22)
+                put("circle-stroke-width", 1.5)
                 put("circle-stroke-color", "#FFFFFF")
+                put("circle-stroke-opacity", 0.55)
             })
         })
         layers.put(JSONObject().apply {
@@ -304,10 +382,17 @@ object MapStyleBuilder {
             put("type", "symbol")
             put("source", SOURCE_GPS_PUCK)
             put("layout", JSONObject().apply {
-                put("icon-image", IMAGE_USER_ARROW)
-                put("icon-size", 0.95)
+                put(
+                    "icon-image",
+                    JSONArray()
+                        .put("coalesce")
+                        .put(JSONArray().put("get").put("icon"))
+                        .put(IMAGE_USER_ARROW)
+                )
+                put("icon-size", 0.92)
                 put("icon-rotate", JSONArray().put("get").put("bearing"))
                 put("icon-rotation-alignment", "map")
+                put("icon-pitch-alignment", "map")
                 put("icon-allow-overlap", true)
                 put("icon-ignore-placement", true)
             })
@@ -435,6 +520,54 @@ object MapStyleBuilder {
                 put("paint", JSONObject().apply {
                     put("fill-color", palette.building)
                     put("fill-opacity", 0.7)
+                })
+            }
+        )
+        // 3D extruded buildings (zoom >= 15, smooth fade-in, placed strictly below labels, routes & arrow;
+        // visibility toggled dynamically when map is tilted and user setting is ON)
+        layers.put(
+            JSONObject().apply {
+                put("id", "${sourceId}${LAYER_BUILDINGS_3D_SUFFIX}")
+                put("type", "fill-extrusion")
+                put("source", sourceId)
+                put("source-layer", "buildings")
+                put("minzoom", 15)
+                put("layout", JSONObject().apply {
+                    put("visibility", "none")
+                })
+                put("paint", JSONObject().apply {
+                    put("fill-extrusion-color", palette.building3d)
+                    put(
+                        "fill-extrusion-height",
+                        JSONArray()
+                            .put("interpolate")
+                            .put(JSONArray().put("linear"))
+                            .put(JSONArray().put("zoom"))
+                            .put(15.0).put(0.0)
+                            .put(15.7).put(
+                                JSONArray()
+                                    .put("coalesce")
+                                    .put(JSONArray().put("to-number").put(JSONArray().put("get").put("height")))
+                                    .put(8.0)
+                            )
+                    )
+                    put(
+                        "fill-extrusion-base",
+                        JSONArray()
+                            .put("coalesce")
+                            .put(JSONArray().put("to-number").put(JSONArray().put("get").put("min_height")))
+                            .put(0.0)
+                    )
+                    put(
+                        "fill-extrusion-opacity",
+                        JSONArray()
+                            .put("interpolate")
+                            .put(JSONArray().put("linear"))
+                            .put(JSONArray().put("zoom"))
+                            .put(15.0).put(0.0)
+                            .put(15.8).put(0.82)
+                    )
+                    put("fill-extrusion-vertical-gradient", true)
                 })
             }
         )
@@ -680,7 +813,62 @@ object MapStyleBuilder {
             })
         })
 
-        // 5. Highway route shields / bold route numbers (I-5, OR-126, US-101 — ALWAYS English)
+        // 5. Highway route shields — distinct Interstate (red/blue), US Route (white shield), and State (white oval)
+        val hasRefOrShield = JSONArray()
+            .put("any")
+            .put(JSONArray().put("has").put("ref"))
+            .put(JSONArray().put("has").put("shield_text"))
+        val isInterstateExpr = JSONArray()
+            .put("any")
+            .put(JSONArray().put("==").put(JSONArray().put("get").put("network")).put("US:I"))
+            .put(JSONArray().put("==").put(JSONArray().put("slice").put(JSONArray().put("to-string").put(highwayRef)).put(0).put(2)).put("I-"))
+            .put(JSONArray().put("==").put(JSONArray().put("slice").put(JSONArray().put("to-string").put(highwayRef)).put(0).put(2)).put("I "))
+        val isUsRouteExpr = JSONArray()
+            .put("any")
+            .put(JSONArray().put("==").put(JSONArray().put("get").put("network")).put("US:US"))
+            .put(JSONArray().put("==").put(JSONArray().put("slice").put(JSONArray().put("to-string").put(highwayRef)).put(0).put(2)).put("US"))
+
+        // 5a. Interstate shields (white bold text on red-and-blue Interstate shield)
+        layers.put(JSONObject().apply {
+            put("id", "${sourceId}_label_highway_shields_interstate")
+            put("type", "symbol")
+            put("source", sourceId)
+            put("source-layer", "roads")
+            put("minzoom", 7)
+            put(
+                "filter",
+                JSONArray()
+                    .put("all")
+                    .put(hasRefOrShield)
+                    .put(kindInFilter("highway", "major_road"))
+                    .put(isInterstateExpr)
+            )
+            put("layout", JSONObject().apply {
+                put("symbol-placement", "line")
+                put("symbol-spacing", 320)
+                put("text-field", highwayRef)
+                put("text-font", JSONArray().put(FONT_MEDIUM))
+                put("text-size", JSONArray()
+                    .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
+                    .put(7).put(9.5)
+                    .put(13).put(11.5)
+                    .put(16).put(12.5)
+                )
+                put("text-rotation-alignment", "viewport")
+                put("icon-image", IMAGE_SHIELD_INTERSTATE)
+                put("icon-text-fit", "both")
+                put("icon-text-fit-padding", JSONArray().put(7).put(8).put(3).put(8))
+                put("icon-rotation-alignment", "viewport")
+                put("text-padding", 6)
+            })
+            put("paint", JSONObject().apply {
+                put("text-color", "#FFFFFF")
+                put("text-halo-color", "#0F172A")
+                put("text-halo-width", 0.5)
+            })
+        })
+
+        // 5b. US Route & State Route shields (dark bold text on white US shield / State oval)
         layers.put(JSONObject().apply {
             put("id", "${sourceId}_label_highway_shields")
             put("type", "symbol")
@@ -691,13 +879,9 @@ object MapStyleBuilder {
                 "filter",
                 JSONArray()
                     .put("all")
-                    .put(
-                        JSONArray()
-                            .put("any")
-                            .put(JSONArray().put("has").put("ref"))
-                            .put(JSONArray().put("has").put("shield_text"))
-                    )
+                    .put(hasRefOrShield)
                     .put(kindInFilter("highway", "major_road"))
+                    .put(JSONArray().put("!").put(isInterstateExpr))
             )
             put("layout", JSONObject().apply {
                 put("symbol-placement", "line")
@@ -706,31 +890,52 @@ object MapStyleBuilder {
                 put("text-font", JSONArray().put(FONT_MEDIUM))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(8).put(10.0)
-                    .put(13).put(11.5)
-                    .put(16).put(12.5)
+                    .put(8).put(9.5)
+                    .put(13).put(11.0)
+                    .put(16).put(12.0)
                 )
                 put("text-rotation-alignment", "viewport")
-                put("icon-image", IMAGE_HIGHWAY_SHIELD)
+                put(
+                    "icon-image",
+                    JSONArray()
+                        .put("case")
+                        .put(isUsRouteExpr).put(IMAGE_SHIELD_US_ROUTE)
+                        .put(IMAGE_SHIELD_STATE)
+                )
                 put("icon-text-fit", "both")
-                put("icon-text-fit-padding", JSONArray().put(2).put(6).put(2).put(6))
+                put("icon-text-fit-padding", JSONArray().put(4).put(8).put(4).put(8))
                 put("icon-rotation-alignment", "viewport")
                 put("text-padding", 6)
             })
             put("paint", JSONObject().apply {
-                put("text-color", palette.shieldText)
-                put("text-halo-color", palette.shieldHalo)
-                put("text-halo-width", 0.6)
+                put("text-color", "#0F172A")
+                put("text-halo-color", "#FFFFFF")
+                put("text-halo-width", 0.4)
             })
         })
 
-        // 6. Important Points of Interest (pois layer — high zoom only so map stays clean)
+        // 6. Common Points of Interest with crisp offline vector icons (zoom >= 15)
+        val poiIconMatchExpr = JSONArray()
+            .put("match")
+            .put(protomapsKindExpr())
+            .put("fuel").put(IMAGE_POI_GAS)
+            .put("charging_station").put(IMAGE_POI_EV)
+            .put("parking").put(IMAGE_POI_PARKING)
+            .put(JSONArray().put("restaurant").put("fast_food")).put(IMAGE_POI_RESTAURANT)
+            .put("cafe").put(IMAGE_POI_CAFE)
+            .put(JSONArray().put("supermarket").put("grocery").put("convenience")).put(IMAGE_POI_GROCERY)
+            .put("pharmacy").put(IMAGE_POI_PHARMACY)
+            .put(JSONArray().put("hospital").put("clinic")).put(IMAGE_POI_HOSPITAL)
+            .put(JSONArray().put("school").put("university").put("college")).put(IMAGE_POI_SCHOOL)
+            .put(JSONArray().put("bank").put("atm")).put(IMAGE_POI_BANK)
+            .put("")
+
         layers.put(JSONObject().apply {
             put("id", "${sourceId}_label_pois")
             put("type", "symbol")
             put("source", sourceId)
             put("source-layer", "pois")
-            put("minzoom", 16)
+            put("minzoom", 15)
             put(
                 "filter",
                 JSONArray()
@@ -739,17 +944,23 @@ object MapStyleBuilder {
                     .put(
                         kindInFilter(
                             "hospital", "clinic", "pharmacy", "fuel", "charging_station",
-                            "supermarket", "grocery", "school", "university", "college",
-                            "library", "airport", "train_station", "bus_station", "parking",
-                            "police", "fire_station", "post_office", "bank", "hotel",
-                            "park", "restaurant", "cafe", "museum", "stadium"
+                            "supermarket", "grocery", "convenience", "school", "university", "college",
+                            "parking", "bank", "atm", "restaurant", "fast_food", "cafe",
+                            "library", "airport", "train_station", "bus_station",
+                            "police", "fire_station", "post_office", "hotel", "museum", "stadium"
                         )
                     )
             )
             put("layout", JSONObject().apply {
+                put("icon-image", poiIconMatchExpr)
+                put("icon-size", 0.65)
+                put("icon-allow-overlap", false)
+                put("icon-padding", 4)
                 put("text-field", localizedName)
                 put("text-font", JSONArray().put(FONT_REGULAR))
                 put("text-size", 11.0)
+                put("text-anchor", "top")
+                put("text-offset", JSONArray().put(0.0).put(0.95))
                 put("text-max-width", 8)
                 put("text-padding", 6)
                 put("text-optional", true)
@@ -914,6 +1125,52 @@ object MapStyleBuilder {
             })
         })
         layers.put(JSONObject().apply {
+            put("id", "dev${LAYER_BUILDINGS_3D_SUFFIX}")
+            put("type", "fill-extrusion")
+            put("source", sourceId)
+            put("source-layer", "building")
+            put("minzoom", 15)
+            put("layout", JSONObject().apply {
+                put("visibility", "none")
+            })
+            put("paint", JSONObject().apply {
+                put("fill-extrusion-color", palette.building3d)
+                put(
+                    "fill-extrusion-height",
+                    JSONArray()
+                        .put("interpolate")
+                        .put(JSONArray().put("linear"))
+                        .put(JSONArray().put("zoom"))
+                        .put(15.0).put(0.0)
+                        .put(15.7).put(
+                            JSONArray()
+                                .put("coalesce")
+                                .put(JSONArray().put("to-number").put(JSONArray().put("get").put("render_height")))
+                                .put(JSONArray().put("to-number").put(JSONArray().put("get").put("height")))
+                                .put(8.0)
+                        )
+                )
+                put(
+                    "fill-extrusion-base",
+                    JSONArray()
+                        .put("coalesce")
+                        .put(JSONArray().put("to-number").put(JSONArray().put("get").put("render_min_height")))
+                        .put(JSONArray().put("to-number").put(JSONArray().put("get").put("min_height")))
+                        .put(0.0)
+                )
+                put(
+                    "fill-extrusion-opacity",
+                    JSONArray()
+                        .put("interpolate")
+                        .put(JSONArray().put("linear"))
+                        .put(JSONArray().put("zoom"))
+                        .put(15.0).put(0.0)
+                        .put(15.8).put(0.82)
+                )
+                put("fill-extrusion-vertical-gradient", true)
+            })
+        })
+        layers.put(JSONObject().apply {
             put("id", "dev_roads_minor")
             put("type", "line")
             put("source", sourceId)
@@ -1056,6 +1313,7 @@ object MapStyleBuilder {
         val park: String,
         val water: String,
         val building: String,
+        val building3d: String,
         val minorRoad: String,
         val majorRoad: String,
         val highway: String,
@@ -1079,6 +1337,7 @@ object MapStyleBuilder {
         park = "#CBE8CD",
         water = "#A8D5F2",
         building = "#DCE2EA",
+        building3d = "#CBD5E1",
         minorRoad = "#FFFFFF",
         majorRoad = "#FFE39E",
         highway = "#FFAE52",
@@ -1102,6 +1361,7 @@ object MapStyleBuilder {
         park = "#112B2A",
         water = "#071E3D",
         building = "#182442",
+        building3d = "#24355B",
         minorRoad = "#223254",
         majorRoad = "#364B75",
         highway = "#D97706",

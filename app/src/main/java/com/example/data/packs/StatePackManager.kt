@@ -70,6 +70,8 @@ class StatePackManager(
         .followRedirects(true)
         .build()
 
+    private val manifestHttpClient = OnlineHttpConfig.createShortTimeoutClient(timeoutSeconds = 5L)
+
     private val moshi = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
         .build()
@@ -294,7 +296,7 @@ class StatePackManager(
                 .header("User-Agent", OnlineHttpConfig.userAgent())
                 .get()
                 .build()
-            okHttpClient.newCall(request).execute().use { response ->
+            manifestHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val msg = "HTTP ${response.code} fetching manifest"
                     _manifestError.value = msg

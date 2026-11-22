@@ -320,4 +320,8 @@ object EnglishStrings : AppStrings {
     override val externalLinkLabelDefault = "Shared Location"
     override val showTrafficLightsToggle = "Show traffic lights"
     override val trafficLightAheadLabel = "Traffic light ahead"
+    override val show3DBuildingsToggle = "Show 3D buildings"
+    override val positionMarkerStyleLabel = "Position marker"
+    override val positionMarkerArrow = "3D Arrow"
+    override val positionMarkerCar = "Car"
 }

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -390,11 +391,115 @@ fun SettingsScreen(
                     testTag = "switch_show_traffic_lights"
                 )
                 SettingsToggleRow(
+                    label = strings.show3DBuildingsToggle,
+                    checked = settings.show3DBuildings,
+                    onCheckedChange = { viewModel.setShow3DBuildings(it) },
+                    testTag = "switch_show_3d_buildings"
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = strings.positionMarkerStyleLabel,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = settings.positionMarkerStyle != "car",
+                            onClick = { viewModel.setPositionMarkerStyle("arrow") },
+                            label = { Text(strings.positionMarkerArrow) },
+                            modifier = Modifier.testTag("chip_marker_arrow")
+                        )
+                        FilterChip(
+                            selected = settings.positionMarkerStyle == "car",
+                            onClick = { viewModel.setPositionMarkerStyle("car") },
+                            label = { Text(strings.positionMarkerCar) },
+                            modifier = Modifier.testTag("chip_marker_car")
+                        )
+                    }
+                }
+                SettingsToggleRow(
                     label = strings.alertToggleStopSign,
                     checked = settings.alertStopSignEnabled,
                     onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },
                     testTag = "switch_alert_stop_sign"
                 )
+            }
+        }
+
+        // 3b. Online features (no API keys, fully optional, safe offline)
+        item {
+            SettingsSectionCard(
+                title = strings.sectionOnlineFeatures,
+                icon = Icons.Filled.Cloud
+            ) {
+                SettingsToggleRow(
+                    label = strings.onlineFeaturesMainSwitch,
+                    checked = settings.onlineFeaturesEnabled,
+                    onCheckedChange = { viewModel.setOnlineFeaturesEnabled(it) },
+                    testTag = "switch_online_features_master"
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (settings.onlineFeaturesEnabled) {
+                    SettingsToggleRow(
+                        label = strings.onlineWeatherAlertsSwitch,
+                        checked = settings.onlineWeatherAlertsEnabled,
+                        onCheckedChange = { viewModel.setOnlineWeatherAlertsEnabled(it) },
+                        testTag = "switch_online_weather_alerts"
+                    )
+                    SettingsToggleRow(
+                        label = strings.onlineSearchFallbackSwitch,
+                        checked = settings.onlineSearchFallbackEnabled,
+                        onCheckedChange = { viewModel.setOnlineSearchFallbackEnabled(it) },
+                        testTag = "switch_online_search_fallback"
+                    )
+                    SettingsToggleRow(
+                        label = strings.autoCheckMapUpdatesSwitch,
+                        checked = settings.autoCheckMapUpdatesEnabled,
+                        onCheckedChange = { viewModel.setAutoCheckMapUpdatesEnabled(it) },
+                        testTag = "switch_auto_check_map_updates"
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+                SettingsToggleRow(
+                    label = strings.wifiOnlyLargeDownloadsSwitch,
+                    checked = settings.wifiOnlyLargeDownloads,
+                    onCheckedChange = { viewModel.setWifiOnlyLargeDownloads(it) },
+                    testTag = "switch_wifi_only_large_downloads"
+                )
+                SettingsToggleRow(
+                    label = strings.autoUpdateMapsOnWifiSwitch,
+                    checked = settings.autoUpdateMapsOnWifi,
+                    onCheckedChange = { viewModel.setAutoUpdateMapsOnWifi(it) },
+                    testTag = "switch_auto_update_maps_on_wifi"
+                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = strings.onlineLocationDisclosureTitle,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = strings.onlineLocationDisclosureBody,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
 

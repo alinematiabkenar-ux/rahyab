@@ -58,8 +58,36 @@
 |---|---|---|
 | 27 | FIXED | Dual-engine `VoiceGuidanceManager` discovers installed TTS engines via `TextToSpeech.getEngines()` (prefers any `"sherpa"` package with `fa`/`fa-IR` for Persian, `com.google.android.tts` for English, no bundled `sherpa-onnx`), splits mixed Persian/English instructions so street names & highway numbers speak on the English engine in exact order via `UtteranceProgressListener.onDone`, and reports both engines in `DiagnosticsScreen`. |
 
-## GROUP 8: ONLINE FEATURES WITHOUT KEYS — IN PROGRESS
-## GROUP 9: SIMULATION — PENDING
-## GROUP 10: DIAGNOSTICS AND REPORTS — PENDING
-## GROUP 11: GRAPHICS — PENDING
-## GROUP 12: SPLIT LARGE FILES — PENDING
+## GROUP 8: ONLINE FEATURES WITHOUT KEYS — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 28 | FIXED | Reused `NetworkStatusMonitor` & `OnlineHttpConfig` (`RahYab/<version> (personal navigation app)` User-Agent, ~5s timeout on `Dispatchers.IO`); added Settings "Online features" card (master switch, per-source switches, Wi-Fi-only downloads ON by default, auto-update on Wi-Fi OFF by default, location disclosure) and map cloud indicator button opening live per-source status dialog. |
+| 29 | FIXED | Added `WeatherAlertsClient` polling `api.weather.gov/alerts/active?point={lat},{lon}` every 15 min & on route calculation (for user position + route samples every ~30 miles, 5s timeout, no API key), filtering severe driving alerts, caching in memory, speaking once per alert ID, and showing a dismissible `SevereWeatherAlertBanner` with title, area, and end time. |
+| 30 | FIXED | Added `PhotonSearchClient` (`photon.komoot.io/api/`, 5s timeout, strict >=1s rate limit, no API key) wired as optional online fallback after 1s typing pause or on Search submit when offline search has no strong match; online results render below offline results with a cloud icon badge and support offline routing & Favorites. |
+| 31 | FIXED | Added daily background `manifest.json` check (5s timeout, once per 24h when online & enabled), Maps tab `BadgedBox` update count badge, Android update notification, Wi-Fi-only guard for large downloads (ON by default), and optional Wi-Fi auto-update (OFF by default). |
+
+## GROUP 9: SIMULATION — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 32 | DONE | Verified `SimulateToggleButton` (red when active), `toggleSimulationFromMap()`, `stopSimulationAndReturnToRealGps()`, Settings sync, no-route prompt, real-GPS ignore guard, and immediate reroute from real GPS on stop. |
+| 33 | DONE | Verified `SimulationSpeedButton` (visible only during simulation; tap cycles 1x/2x/4x/8x/16x/32x, long-press & stop reset to 1x) and `advanceSimulationStep` 1.0s sub-stepping preserving realistic 1x speed, voice/lane/speed/camera alerts, and smooth map frame rate. |
+
+## GROUP 10: DIAGNOSTICS AND REPORTS — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 34 | DONE | Verified `DiagnosticsScreen` with all 6 sections (app/device info, installed packs with build version & places source & sizes, GPS accuracy/provider/fix age & compass accuracy, last route maneuvers/lanes/speed limits, Persian & English TTS engines + voice test buttons, last 20 error lines) and working `Copy all` button. |
+| 35 | DONE | Verified all 8 `ReportType` categories, TTL expiry auto-filtering/purging, ahead voice & banner warnings, JSON export/import in `BackupAndTransferManager`, and active `ROAD_CLOSURE` avoidance via Valhalla `exclude_locations`. |
+
+## GROUP 11: GRAPHICS — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 36 | FIXED | Added 3D extruded buildings (`fill-extrusion`) from Protomaps `buildings` (and dev basemap) starting at zoom 15 with height/min_height, smooth fade-in opacity, vertical gradient, z-ordered strictly below labels/routes/arrow, dynamically enabled only when tilted (`tilt > 5°`) & Settings switch "Show 3D buildings" is ON (default ON), with Choreographer frame-pacing fallback that auto-disables 3D buildings if FPS drops persistently. |
+| 37 | FIXED | Replaced flat position arrow with dual-facet 3D-shaded arrow & modern top-down car bitmaps with soft drop shadow, automatic slate-gray poor-GPS state (`accuracy > 35 m` or GPS lost), and Settings "Position marker" (`3D Arrow` / `Car`) selector. |
+| 38 | FIXED | Added darker active route casing with rounded caps/joins, `SOURCE_DRIVEN_ROUTE` / `LAYER_DRIVEN_ROUTE` splitting the already-driven route segment in muted gray behind the car, and `LAYER_ROUTE_CHEVRONS` rendering crisp white direction chevrons along the remaining route from zoom 15. |
+| 39 | FIXED | Created `MapBitmapIcons` with distinct US Interstate (red crest/blue), US Route (white shield), and State Route (white oval) highway shields wired via `network`/`ref` expressions, plus 10 offline vector POI icons (gas, parking, restaurant, cafe, grocery, pharmacy, hospital, school, bank, EV) rendered from zoom 15 with non-overlapping placement. |
+
+## GROUP 12: SPLIT LARGE FILES — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 40 | FIXED | Split `RahYabViewModel.kt` (2,514 lines) into 9 feature files all <= 400 lines (`RahYabViewModel.kt` 333, `RahYabViewModelCameraAndHazards.kt` 389, `RahYabViewModelSearchAndExternal.kt` 396, `RahYabViewModelRouting.kt` 308, `RahYabViewModelNavigationStep.kt` 242, `RahYabViewModelSimulation.kt` 241, `RahYabViewModelPacksAndOnline.kt` 329, `RahYabViewModelReportsAndBackup.kt` 172, `RahYabViewModelSettings.kt` 126) with zero public API or behavior changes. |
+| 41 | FIXED | Split `DriveScreen.kt` (2,277 lines) into 7 feature files all <= 400 lines (`DriveScreen.kt` 316, `DriveTopOverlay.kt` 387, `DriveStatusBanners.kt` 338, `DriveMapControls.kt` 397, `DriveSearchOverlay.kt` 327, `DrivePlaceAndRouteCard.kt` 345, `DriveBottomBarAndDialogs.kt` 322) with zero visual or behavior changes; bumped `versionCode` once from `17` to `18` (`versionName` `"18.0"`). |

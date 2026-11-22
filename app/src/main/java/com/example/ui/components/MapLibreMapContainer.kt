@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.os.SystemClock
+import android.view.Choreographer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -48,9 +49,12 @@ import org.maplibre.android.gestures.MoveGestureDetector
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import org.maplibre.geojson.Polygon
 import java.io.File
@@ -88,10 +92,14 @@ fun MapLibreMapContainer(
     candidateRoutes: List<OfflineRoute>,
     selectedRouteIndex: Int,
     activeNavRoute: OfflineRoute?,
+    snappedShapeIndex: Int = 0,
     selectedPlace: PlaceSearchResult?,
     userReports: List<UserReportEntity>,
     cameras: List<RoadHazardPoint> = emptyList(),
     trafficLights: List<RoadHazardPoint> = emptyList(),
+    show3DBuildings: Boolean = true,
+    positionMarkerStyle: String = "arrow",
+    isGpsPoor: Boolean = false,
     cameraCommand: CameraTargetCommand?,
     onMapLongClick: (Double, Double) -> Unit,
     onRouteTapped: (Int) -> Unit,
@@ -120,6 +128,8 @@ fun MapLibreMapContainer(
     var mapLibreMap by remember { mutableStateOf<MapLibreMap?>(null) }
     var loadedStyle by remember { mutableStateOf<Style?>(null) }
     var lastAppliedHeadingBearing by remember { mutableFloatStateOf(Float.NaN) }
+    var isMapTilted by remember { mutableStateOf(false) }
+    var autoReduced3DForPerformance by remember { mutableStateOf(false) }
 
     // Throttled heading state for the map (at most 10 Hz and only when heading changes > 2 deg)
     var throttledHeadingDegrees by remember { mutableFloatStateOf(CompassTracker.normalizeAngle(userHeadingDegrees)) }
@@ -173,8 +183,13 @@ fun MapLibreMapContainer(
         loadedStyle = null
         map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
             runCatching {
-                style.addImage(MapStyleBuilder.IMAGE_USER_ARROW, createUserArrowBitmap())
+                style.addImage(MapStyleBuilder.IMAGE_USER_ARROW, createUserArrowBitmap(isPoorGps = false))
+                style.addImage(MapStyleBuilder.IMAGE_USER_ARROW_GRAY, createUserArrowBitmap(isPoorGps = true))
+                style.addImage(MapStyleBuilder.IMAGE_USER_CAR, createUserCarBitmap(isPoorGps = false))
+                style.addImage(MapStyleBuilder.IMAGE_USER_CAR_GRAY, createUserCarBitmap(isPoorGps = true))
+                style.addImage(MapStyleBuilder.IMAGE_ROUTE_CHEVRON, createRouteChevronBitmap())
                 style.addImage(MapStyleBuilder.IMAGE_HIGHWAY_SHIELD, createHighwayShieldBitmap(isNightMode))
+                com.example.map.MapBitmapIcons.registerShieldsAndPoiIcons(style, isNightMode)
                 style.addImage(MapStyleBuilder.IMAGE_SPEED_CAMERA, createSpeedCameraBitmap())
                 style.addImage(MapStyleBuilder.IMAGE_RED_LIGHT_CAMERA, createRedLightCameraBitmap())
                 createVectorDrawableBitmap(context, R.drawable.ic_traffic_light_map, 36, 54)?.let {
@@ -185,9 +200,58 @@ fun MapLibreMapContainer(
         }
     }
 
-    // 1. ROUTE LINES EFFECT — runs ONLY when route candidates, selected index, or active nav route changes.
-    // Converts route shapes off the main thread and caches GeoJSON per route so switching alternatives is instant.
-    LaunchedEffect(loadedStyle, candidateRoutes, selectedRouteIndex, activeNavRoute) {
+    // 0. 3D BUILDINGS VISIBILITY + AUTOMATIC FPS FALLBACK
+    val shouldShow3DBuildings = show3DBuildings && isMapTilted && !autoReduced3DForPerformance
+    LaunchedEffect(loadedStyle, shouldShow3DBuildings) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+        val visValue = if (shouldShow3DBuildings) Property.VISIBLE else Property.NONE
+        runCatching {
+            style.layers.forEach { layer ->
+                if (layer.id.endsWith(MapStyleBuilder.LAYER_BUILDINGS_3D_SUFFIX)) {
+                    layer.setProperties(PropertyFactory.visibility(visValue))
+                }
+            }
+        }
+    }
+
+    // Monitor UI frame intervals while 3D buildings are active; automatically reduce detail if FPS drops persistently (< 18 fps)
+    DisposableEffect(shouldShow3DBuildings) {
+        if (!shouldShow3DBuildings) {
+            onDispose { }
+        } else {
+            val choreographer = Choreographer.getInstance()
+            var lastFrameNs = 0L
+            var consecutiveSlowFrames = 0
+            val frameCallback = object : Choreographer.FrameCallback {
+                override fun doFrame(frameTimeNanos: Long) {
+                    if (lastFrameNs != 0L) {
+                        val deltaMs = (frameTimeNanos - lastFrameNs) / 1_000_000L
+                        if (deltaMs > 58L) {
+                            consecutiveSlowFrames++
+                            if (consecutiveSlowFrames >= 24) {
+                                autoReduced3DForPerformance = true
+                                return
+                            }
+                        } else if (consecutiveSlowFrames > 0) {
+                            consecutiveSlowFrames--
+                        }
+                    }
+                    lastFrameNs = frameTimeNanos
+                    choreographer.postFrameCallback(this)
+                }
+            }
+            choreographer.postFrameCallback(frameCallback)
+            onDispose {
+                choreographer.removeFrameCallback(frameCallback)
+            }
+        }
+    }
+
+    // 1. ROUTE LINES EFFECT — runs when route candidates, selected index, active nav route, or progress changes.
+    // Splits active navigation route into driven (gray) and remaining (highlighted + chevrons) segments off-thread.
+    val routeSplitBucket = if (activeNavRoute != null) snappedShapeIndex else 0
+    LaunchedEffect(loadedStyle, candidateRoutes, selectedRouteIndex, activeNavRoute, routeSplitBucket) {
         val style = loadedStyle ?: return@LaunchedEffect
         if (!style.isFullyLoaded) return@LaunchedEffect
 
@@ -196,14 +260,44 @@ fun MapLibreMapContainer(
         val routeColors = MapStyleBuilder.ALL_ROUTE_COLORS
 
         if (activeNavRoute != null && activeNavRoute.shape.size >= 2) {
-            val primaryFc = routeGeoJsonCache.getOrBuildFeatureCollection(
-                route = activeNavRoute,
-                colorHex = MapStyleBuilder.ROUTE_COLOR_0
-            )
+            val shape = activeNavRoute.shape
+            val splitIdx = routeSplitBucket.coerceIn(0, shape.lastIndex)
+            val (drivenFc, remainingFc) = if (splitIdx <= 0) {
+                emptyFc to routeGeoJsonCache.getOrBuildFeatureCollection(
+                    route = activeNavRoute,
+                    colorHex = MapStyleBuilder.ROUTE_COLOR_0
+                )
+            } else {
+                withContext(Dispatchers.Default) {
+                    val drivenPts = ArrayList<Point>(splitIdx + 1)
+                    for (i in 0..splitIdx) {
+                        drivenPts.add(Point.fromLngLat(shape[i].lon, shape[i].lat))
+                    }
+                    val driven = if (drivenPts.size >= 2) {
+                        FeatureCollection.fromFeature(Feature.fromGeometry(LineString.fromLngLats(drivenPts)))
+                    } else {
+                        emptyFc
+                    }
+                    val remPts = ArrayList<Point>((shape.size - splitIdx).coerceAtLeast(2))
+                    for (i in splitIdx until shape.size) {
+                        remPts.add(Point.fromLngLat(shape[i].lon, shape[i].lat))
+                    }
+                    val rem = if (remPts.size >= 2) {
+                        val feat = Feature.fromGeometry(LineString.fromLngLats(remPts)).apply {
+                            addStringProperty("color", MapStyleBuilder.ROUTE_COLOR_0)
+                        }
+                        FeatureCollection.fromFeature(feat)
+                    } else {
+                        emptyFc
+                    }
+                    driven to rem
+                }
+            }
             if (!style.isFullyLoaded) return@LaunchedEffect
             runCatching {
                 routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
-                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(primaryFc)
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DRIVEN_ROUTE)?.setGeoJson(drivenFc)
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(remainingFc)
             }
         } else if (candidateRoutes.isNotEmpty()) {
             val safeSelectedIdx = selectedRouteIndex.coerceIn(0, candidateRoutes.lastIndex)
@@ -233,11 +327,13 @@ fun MapLibreMapContainer(
                 routeSources.forEachIndexed { idx, srcId ->
                     style.getSourceAs<GeoJsonSource>(srcId)?.setGeoJson(unselectedFcs[idx])
                 }
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DRIVEN_ROUTE)?.setGeoJson(emptyFc)
                 style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(primaryFc)
             }
         } else {
             runCatching {
                 routeSources.forEach { src -> style.getSourceAs<GeoJsonSource>(src)?.setGeoJson(emptyFc) }
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DRIVEN_ROUTE)?.setGeoJson(emptyFc)
                 style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_PRIMARY_ROUTE)?.setGeoJson(emptyFc)
             }
         }
@@ -359,13 +455,23 @@ fun MapLibreMapContainer(
         }
     }
 
-    LaunchedEffect(loadedStyle, displayLoc, throttledHeadingDegrees) {
+    LaunchedEffect(loadedStyle, displayLoc, throttledHeadingDegrees, positionMarkerStyle, isGpsPoor) {
         val style = loadedStyle ?: return@LaunchedEffect
         if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val iconId = when {
+            positionMarkerStyle == "car" && isGpsPoor -> MapStyleBuilder.IMAGE_USER_CAR_GRAY
+            positionMarkerStyle == "car" -> MapStyleBuilder.IMAGE_USER_CAR
+            isGpsPoor -> MapStyleBuilder.IMAGE_USER_ARROW_GRAY
+            else -> MapStyleBuilder.IMAGE_USER_ARROW
+        }
+        val haloHex = if (isGpsPoor) "#94A3B8" else "#38BDF8"
 
         val puckFc = if (displayLoc != null) {
             val feat = Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat)).apply {
                 addNumberProperty("bearing", throttledHeadingDegrees)
+                addStringProperty("icon", iconId)
+                addStringProperty("haloColor", haloHex)
             }
             FeatureCollection.fromFeature(feat)
         } else {
@@ -437,7 +543,12 @@ fun MapLibreMapContainer(
                         .zoom(11.5)
                         .build()
                     map.addOnCameraMoveListener {
-                        currentOnMapBearingChanged(map.cameraPosition.bearing.toFloat())
+                        val cam = map.cameraPosition
+                        currentOnMapBearingChanged(cam.bearing.toFloat())
+                        val tiltedNow = cam.tilt > 5.0
+                        if (tiltedNow != isMapTilted) {
+                            isMapTilted = tiltedNow
+                        }
                     }
 
                     // Long press anywhere on the map to drop a pin -> Directions
@@ -522,35 +633,164 @@ private fun buildAccuracyCirclePolygon(
     return Polygon.fromLngLats(listOf(ring))
 }
 
-private fun createUserArrowBitmap(): Bitmap {
-    val size = 84
+private fun createUserArrowBitmap(isPoorGps: Boolean = false): Bitmap {
+    val size = 112
     val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bmp)
     val cx = size / 2f
     val cy = size / 2f
 
-    // Crisp upward-pointing navigation chevron (north = 0 deg) with white outline & cyan-blue fill
-    val path = Path().apply {
-        moveTo(cx, 6f)
-        lineTo(cx + 22f, size - 16f)
-        lineTo(cx, cy + 10f)
-        lineTo(cx - 22f, size - 16f)
+    // 1. Soft multi-ring drop shadow beneath the 3D navigation arrow
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.argb(65, 15, 23, 42)
+    }
+    val shadowPath = Path().apply {
+        moveTo(cx, 16f)
+        lineTo(cx + 31f, size - 16f)
+        lineTo(cx, cy + 19f)
+        lineTo(cx - 31f, size - 16f)
+        close()
+    }
+    canvas.drawPath(shadowPath, shadowPaint)
+
+    val outerShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = AndroidColor.argb(30, 15, 23, 42)
+    }
+    canvas.drawCircle(cx, cy + 6f, 34f, outerShadow)
+
+    // 2. Left bright facet and right deeper shaded facet for a modern 3D-beveled arrow look
+    val leftWingColor = if (isPoorGps) AndroidColor.parseColor("#94A3B8") else AndroidColor.parseColor("#38BDF8")
+    val rightWingColor = if (isPoorGps) AndroidColor.parseColor("#64748B") else AndroidColor.parseColor("#0284C7")
+    val outlineColor = if (isPoorGps) AndroidColor.parseColor("#E2E8F0") else AndroidColor.WHITE
+
+    val leftFacet = Path().apply {
+        moveTo(cx, 10f)
+        lineTo(cx, cy + 14f)
+        lineTo(cx - 29f, size - 21f)
+        close()
+    }
+    val rightFacet = Path().apply {
+        moveTo(cx, 10f)
+        lineTo(cx + 29f, size - 21f)
+        lineTo(cx, cy + 14f)
+        close()
+    }
+    val fullArrow = Path().apply {
+        moveTo(cx, 10f)
+        lineTo(cx + 29f, size - 21f)
+        lineTo(cx, cy + 14f)
+        lineTo(cx - 29f, size - 21f)
         close()
     }
 
-    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    canvas.drawPath(leftFacet, Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = AndroidColor.parseColor("#0284C7")
-    }
-    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = leftWingColor
+    })
+    canvas.drawPath(rightFacet, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = rightWingColor
+    })
+    // Subtle center spine highlight
+    canvas.drawLine(cx, 14f, cx, cy + 12f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeWidth = 2.2f
+        color = AndroidColor.argb(140, 255, 255, 255)
+    })
+    // Crisp white 3D rim border
+    canvas.drawPath(fullArrow, Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 5f
+        strokeWidth = 5.5f
         strokeJoin = Paint.Join.ROUND
-        color = AndroidColor.WHITE
-    }
+        color = outlineColor
+    })
+    return bmp
+}
 
-    canvas.drawPath(path, fillPaint)
-    canvas.drawPath(path, strokePaint)
+private fun createUserCarBitmap(isPoorGps: Boolean = false): Bitmap {
+    val size = 112
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Soft drop shadow
+    canvas.drawRoundRect(
+        RectF(cx - 25f, 16f, cx + 25f, size - 10f),
+        20f, 20f,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.argb(72, 15, 23, 42) }
+    )
+
+    val bodyMain = if (isPoorGps) AndroidColor.parseColor("#64748B") else AndroidColor.parseColor("#0284C7")
+    val bodyRoof = if (isPoorGps) AndroidColor.parseColor("#94A3B8") else AndroidColor.parseColor("#38BDF8")
+    val glassColor = AndroidColor.parseColor("#0F172A")
+
+    // Main car body (top-down facing north)
+    val bodyRect = RectF(cx - 22f, 12f, cx + 22f, size - 16f)
+    canvas.drawRoundRect(bodyRect, 16f, 16f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bodyMain })
+    canvas.drawRoundRect(bodyRect, 16f, 16f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+        color = AndroidColor.WHITE
+    })
+
+    // Front windshield
+    val frontGlass = Path().apply {
+        moveTo(cx - 14f, 34f)
+        lineTo(cx + 14f, 34f)
+        lineTo(cx + 16f, 48f)
+        lineTo(cx - 16f, 48f)
+        close()
+    }
+    canvas.drawPath(frontGlass, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = glassColor })
+
+    // Roof panel
+    canvas.drawRoundRect(
+        RectF(cx - 14f, 49f, cx + 14f, 74f),
+        6f, 6f,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = bodyRoof }
+    )
+
+    // Rear window
+    canvas.drawRoundRect(
+        RectF(cx - 12f, 75f, cx + 12f, 84f),
+        4f, 4f,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = glassColor }
+    )
+
+    // Headlights (warm white) & taillights (red)
+    val headlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.parseColor("#FEF08A") }
+    canvas.drawRoundRect(RectF(cx - 17f, 14f, cx - 7f, 20f), 3f, 3f, headlightPaint)
+    canvas.drawRoundRect(RectF(cx + 7f, 14f, cx + 17f, 20f), 3f, 3f, headlightPaint)
+
+    val taillightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.parseColor("#EF4444") }
+    canvas.drawRoundRect(RectF(cx - 16f, size - 22f, cx - 7f, size - 17f), 2.5f, 2.5f, taillightPaint)
+    canvas.drawRoundRect(RectF(cx + 7f, size - 22f, cx + 16f, size - 17f), 2.5f, 2.5f, taillightPaint)
+
+    return bmp
+}
+
+private fun createRouteChevronBitmap(): Bitmap {
+    // Points right (+X) so MapLibre's symbol-placement: "line" aligns it with travel direction
+    val size = 28
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    val path = Path().apply {
+        moveTo(8f, 6f)
+        lineTo(20f, size / 2f)
+        lineTo(8f, size - 6f)
+    }
+    canvas.drawPath(
+        path,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4.2f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = AndroidColor.argb(225, 255, 255, 255)
+        }
+    )
     return bmp
 }
 
