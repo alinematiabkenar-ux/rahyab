@@ -273,4 +273,8 @@ object PersianStrings : AppStrings {
     override val diagSensorLow = "کم"
     override val diagSensorUnreliable = "نامعتبر"
     override val diagSensorUnavailable = "بدون خوانش"
+    override val simulateButtonLabel = "شبیه‌سازی رانندگی"
+    override val simulationSpeedLabel = "سرعت شبیه‌سازی"
+    override val simulationNoRouteMessage = "ابتدا مقصدی را برای شروع شبیه‌سازی انتخاب کنید"
+    override val simulationSpeedChangedPrefix = "سرعت شبیه‌سازی"
 }

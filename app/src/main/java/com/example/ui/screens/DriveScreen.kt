@@ -6,8 +6,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GpsOff
@@ -49,6 +52,7 @@ import androidx.compose.material.icons.filled.LocalPharmacy
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Restaurant
@@ -167,6 +171,8 @@ fun DriveScreen(
     val userHeadingDegrees by viewModel.userHeadingDegrees.collectAsStateWithLifecycle()
     val isHeadingUpMode by viewModel.isHeadingUpMode.collectAsStateWithLifecycle()
     val isCompassLowAccuracy by viewModel.isCompassLowAccuracy.collectAsStateWithLifecycle()
+    val simulationSpeed by viewModel.simulationSpeedMultiplier.collectAsStateWithLifecycle()
+    val isSimulationActive = navState.isSimulatingDrive || settings.simulateDriveEnabled
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
     val installedPmtiles = remember(packsTick) { viewModel.getInstalledPmtilesFiles() }
@@ -213,7 +219,7 @@ fun DriveScreen(
             language = language,
             useDevOnlineBasemap = settings.devOnlineOregonMode,
             packsChangedTick = packsTick,
-            gpsFix = gpsFix,
+            gpsFix = if (navState.isSimulatingDrive) null else gpsFix,
             snappedNavLocation = if (navState.isNavigating) navState.snappedLocation else null,
             userHeadingDegrees = userHeadingDegrees,
             isHeadingUpMode = isHeadingUpMode,
@@ -660,7 +666,7 @@ fun DriveScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Simulate Wrong Turn button (only visible when Developer Simulate Drive is active)
+            // Simulate Wrong Turn button (only visible when Simulate Drive is active)
             if (navState.isNavigating && navState.isSimulatingDrive) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
@@ -678,6 +684,24 @@ fun DriveScreen(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                     )
                 }
+            }
+
+            // One-tap Sygic-style Simulate button (red when active)
+            SimulateToggleButton(
+                isSimulating = isSimulationActive,
+                contentDescription = strings.simulateButtonLabel,
+                onClick = { viewModel.toggleSimulationFromMap() }
+            )
+
+            // Simulation Speed button (1x, 2x, 4x, 8x, 16x, 32x) — visible ONLY while simulation is on
+            if (isSimulationActive) {
+                SimulationSpeedButton(
+                    speedMultiplier = simulationSpeed,
+                    language = language,
+                    contentDescription = strings.simulationSpeedLabel,
+                    onTapCycle = { viewModel.cycleSimulationSpeed() },
+                    onLongPressReset = { viewModel.resetSimulationSpeedTo1x() }
+                )
             }
 
             // Repeat last spoken instruction button during navigation
@@ -852,6 +876,86 @@ fun DriveScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun SimulateToggleButton(
+    isSimulating: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = if (isSimulating) AlertRed else MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        border = if (isSimulating) BorderStroke(2.dp, Color.White.copy(alpha = 0.7f)) else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .size(50.dp)
+            .clickable(onClick = onClick)
+            .testTag("simulate_toggle_button")
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Filled.DirectionsCar,
+                contentDescription = contentDescription,
+                tint = if (isSimulating) Color.White else MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .size(22.dp)
+                    .align(Alignment.Center)
+                    .padding(bottom = 2.dp)
+            )
+            Icon(
+                imageVector = Icons.Filled.PlayArrow,
+                contentDescription = null,
+                tint = if (isSimulating) Color.White else MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .size(14.dp)
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 6.dp, bottom = 5.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SimulationSpeedButton(
+    speedMultiplier: Int,
+    language: AppLanguage,
+    contentDescription: String,
+    onTapCycle: () -> Unit,
+    onLongPressReset: () -> Unit
+) {
+    val label = if (language == AppLanguage.PERSIAN) {
+        "${BilingualFormatter.formatNumber(speedMultiplier, AppLanguage.PERSIAN)}x"
+    } else {
+        "${speedMultiplier}x"
+    }
+    Surface(
+        shape = CircleShape,
+        color = AlertRed,
+        border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.65f)),
+        shadowElevation = 6.dp,
+        modifier = Modifier
+            .size(50.dp)
+            .clip(CircleShape)
+            .combinedClickable(
+                onClickLabel = contentDescription,
+                onClick = onTapCycle,
+                onLongClick = onLongPressReset
+            )
+            .testTag("simulate_speed_button")
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = label,
+                color = Color.White,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 14.sp,
+                fontFamily = JetBrainsMonoFamily
+            )
+        }
     }
 }
 

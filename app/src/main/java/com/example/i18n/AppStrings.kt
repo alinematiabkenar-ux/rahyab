@@ -315,6 +315,11 @@ interface AppStrings {
     val diagSensorLow: String
     val diagSensorUnreliable: String
     val diagSensorUnavailable: String
+    // Simulation button & speed controls
+    val simulateButtonLabel: String
+    val simulationSpeedLabel: String
+    val simulationNoRouteMessage: String
+    val simulationSpeedChangedPrefix: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

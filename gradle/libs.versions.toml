@@ -44,8 +44,6 @@ maplibre = "11.13.1"
 valhallaMobile = "0.6.4"
 valhallaModels = "0.5.2"
 sqliteBundled = "2.5.0"
-sherpaOnnx = "v2.0.1"
-commonsCompress = "1.27.1"
 
 
 [libraries]
@@ -105,8 +103,6 @@ valhalla-mobile = { group = "io.github.rallista", name = "valhalla-mobile", vers
 valhalla-models = { group = "io.github.rallista", name = "valhalla-models", version.ref = "valhallaModels" }
 valhalla-models-config = { group = "io.github.rallista", name = "valhalla-models-config", version.ref = "valhallaModels" }
 androidx-sqlite-bundled = { group = "androidx.sqlite", name = "sqlite-bundled", version.ref = "sqliteBundled" }
-sherpa-onnx = { group = "com.github.k2-fsa", name = "sherpa-onnx", version.ref = "sherpaOnnx" }
-commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 
 
 [plugins]

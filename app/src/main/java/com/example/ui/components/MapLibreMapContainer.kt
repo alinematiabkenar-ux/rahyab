@@ -329,7 +329,11 @@ fun MapLibreMapContainer(
             .bearing(cmd.bearing)
             .build()
         runCatching {
-            map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), 500)
+            if (cmd.animationDurationMs <= 0) {
+                map.moveCamera(CameraUpdateFactory.newCameraPosition(pos))
+            } else {
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), cmd.animationDurationMs)
+            }
         }
     }
 

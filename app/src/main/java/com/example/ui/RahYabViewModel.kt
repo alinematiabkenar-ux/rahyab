@@ -56,6 +56,7 @@ data class CameraTargetCommand(
     val zoom: Double = 14.5,
     val tilt: Double = 0.0,
     val bearing: Double = 0.0,
+    val animationDurationMs: Int = 500,
     val nonce: Long = System.currentTimeMillis()
 )
 
@@ -235,12 +236,17 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _showPersianTtsDialog = MutableStateFlow(false)
     val showPersianTtsDialog: StateFlow<Boolean> = _showPersianTtsDialog.asStateFlow()
 
+    // Simulation speed multiplier (1x, 2x, 4x, 8x, 16x, 32x) — always resets to 1x when simulation stops
+    private val _simulationSpeedMultiplier = MutableStateFlow(1)
+    val simulationSpeedMultiplier: StateFlow<Int> = _simulationSpeedMultiplier.asStateFlow()
+
     private var searchJob: Job? = null
     private var gpsWatchdogJob: Job? = null
     private var simulationJob: Job? = null
     private var arrivalEndJob: Job? = null
     private var lastGpsReceivedMs: Long = 0L
     private var simulatedWrongTurnTicksRemaining: Int = 0
+    private var simulatedClockMs: Long = 0L
     private var cachedDbHazards: List<RoadHazardPoint> = emptyList()
 
     init {
@@ -325,13 +331,14 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Process live GPS updates during active navigation (ignored when Simulate Drive is driving)
+        // Process live GPS updates during active navigation (completely ignored while simulating)
         viewModelScope.launch {
             currentGpsFix.collect { fix ->
+                if (_navigationState.value.isSimulatingDrive) return@collect
                 if (fix != null) {
                     compassTracker.updateLocationForDeclination(fix.lat, fix.lon)
                 }
-                if (fix != null && _navigationState.value.isNavigating && !_navigationState.value.isSimulatingDrive) {
+                if (fix != null && _navigationState.value.isNavigating) {
                     lastGpsReceivedMs = System.currentTimeMillis()
                     handleNavigationGpsFix(fix)
                 }
@@ -635,13 +642,14 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun startNavigation() {
+    fun startNavigation(forceSimulate: Boolean? = null) {
         val routes = _candidateRoutes.value
         if (routes.isEmpty()) return
         val safeIdx = _selectedRouteIndex.value.coerceIn(0, routes.lastIndex)
         val route = routes[safeIdx]
         val dest = _selectedPlace.value ?: return
         val s = settings.value
+        val shouldSimulate = forceSimulate ?: s.simulateDriveEnabled
         val wasAlreadyNavigating = _navigationState.value.isNavigating
 
         stopInternalNavJobs()
@@ -652,10 +660,18 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _isCameraFollowing.value = true
         lastGpsReceivedMs = System.currentTimeMillis()
         simulatedWrongTurnTicksRemaining = 0
+        if (!shouldSimulate) {
+            _simulationSpeedMultiplier.value = 1
+        }
 
         val initialManeuver = route.maneuvers.firstOrNull()
         val initialDist = initialManeuver?.lengthMeters ?: route.distanceMeters
         val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
+        val initialBearing = if (route.shape.size >= 2) {
+            com.example.navigation.ValhallaResponseParser.bearingDegrees(route.shape[0], route.shape[1]).toFloat()
+        } else {
+            _userHeadingDegrees.value
+        }
         _navigationState.value = ActiveNavigationState(
             isNavigating = true,
             route = route,
@@ -667,8 +683,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             remainingDistanceMeters = route.distanceMeters,
             remainingTimeSeconds = route.durationSeconds,
             snappedLocation = startLoc,
-            currentSpeedLimitMph = initialManeuver?.speedLimitMph,
-            isSimulatingDrive = s.simulateDriveEnabled,
+            snappedBearing = initialBearing,
+            currentSpeedLimitMph = route.speedLimitsByShapeIndex[0] ?: initialManeuver?.speedLimitMph,
+            isSimulatingDrive = shouldSimulate,
             showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true &&
                 initialDist <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)
         )
@@ -718,7 +735,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
         )
 
-        if (s.simulateDriveEnabled) {
+        if (shouldSimulate) {
             startSimulatedDriveLoop()
         } else {
             startGpsLossWatchdog()
@@ -753,25 +770,217 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startSimulatedDriveLoop() {
         simulationJob?.cancel()
+        simulatedClockMs = System.currentTimeMillis()
         simulationJob = viewModelScope.launch {
-            while (_navigationState.value.isNavigating && !_navigationState.value.hasArrived) {
-                delay(1000L)
+            while (_navigationState.value.isNavigating &&
+                _navigationState.value.isSimulatingDrive &&
+                !_navigationState.value.hasArrived
+            ) {
+                val multiplier = _simulationSpeedMultiplier.value.coerceIn(1, 32)
+                // Adapt map frame rate at high speeds so MapLibre never freezes
+                val wallTickMs = when {
+                    multiplier >= 32 -> 350L
+                    multiplier >= 8 -> 300L
+                    else -> 250L
+                }
+                delay(wallTickMs)
+                if (!_navigationState.value.isNavigating || !_navigationState.value.isSimulatingDrive) break
+
                 val wrongTurnOffset = if (simulatedWrongTurnTicksRemaining > 0) {
                     simulatedWrongTurnTicksRemaining--
                     120.0
                 } else {
                     0.0
                 }
-                val simFix = navController.computeSimulatedFix(
-                    currentState = _navigationState.value,
-                    elapsedSeconds = 2.0,
-                    wrongTurnOffsetMeters = wrongTurnOffset
-                )
-                if (simFix != null) {
-                    handleNavigationGpsFix(simFix)
+                val currentState = _navigationState.value
+                val s = settings.value
+                val reports = activeUserReports.value
+                val hazards = cachedDbHazards
+                val totalSimSec = (wallTickMs / 1000.0) * multiplier
+
+                val batch = withContext(Dispatchers.Default) {
+                    navController.advanceSimulationStep(
+                        currentState = currentState,
+                        totalSimulatedSeconds = totalSimSec,
+                        startingSimClockMs = simulatedClockMs,
+                        wrongTurnOffsetMeters = wrongTurnOffset,
+                        dbHazards = hazards,
+                        userReports = reports,
+                        unit = s.distanceUnit,
+                        language = s.language,
+                        speedAudioEnabled = s.speedWarningAudioEnabled,
+                        settings = s
+                    )
                 }
+                simulatedClockMs = batch.finalSimClockMs
+                applyNavigationStepResult(
+                    state = batch.state,
+                    shouldReroute = batch.shouldReroute,
+                    maneuverToSpeak = batch.latestManeuverToSpeak,
+                    alertToSpeak = batch.latestAlertToSpeak,
+                    triggerOverspeedChime = batch.triggerOverspeedChime,
+                    fallbackLoc = batch.state.snappedLocation,
+                    speedMps = batch.state.currentSpeedMps,
+                    cameraAnimMs = when {
+                        multiplier >= 16 -> 0
+                        multiplier >= 8 -> 140
+                        else -> 220
+                    }
+                )
             }
         }
+    }
+
+    /**
+     * One-tap Simulate button on the main map screen:
+     * - If simulating -> turns simulation off, resets speed to 1x, returns immediately to real GPS,
+     *   and recalculates the active route from real GPS.
+     * - If not simulating and an active route or selected preview route exists -> starts simulating
+     *   from the start of that route and syncs the Settings switch.
+     * - If no route exists -> shows "Choose a destination first to start simulation" in the active language.
+     */
+    fun toggleSimulationFromMap() {
+        val isCurrentlySimulating = _navigationState.value.isSimulatingDrive || settings.value.simulateDriveEnabled
+        if (isCurrentlySimulating) {
+            stopSimulationAndReturnToRealGps()
+            return
+        }
+
+        val hasActiveRoute = _navigationState.value.isNavigating && _navigationState.value.route != null
+        val hasPreviewRoute = _candidateRoutes.value.isNotEmpty() && _selectedPlace.value != null
+        if (!hasActiveRoute && !hasPreviewRoute) {
+            _snackbarMessage.value = stringsFor(settings.value.language).simulationNoRouteMessage
+            return
+        }
+
+        _simulationSpeedMultiplier.value = 1
+        viewModelScope.launch { prefs.setSimulateDriveEnabled(true) }
+        if (hasActiveRoute) {
+            startSimulationOnActiveRoute()
+        } else {
+            startNavigation(forceSimulate = true)
+        }
+    }
+
+    private fun startSimulationOnActiveRoute() {
+        val currentNav = _navigationState.value
+        val route = currentNav.route ?: return
+        val s = settings.value
+        gpsWatchdogJob?.cancel()
+        gpsWatchdogJob = null
+        navController.reset()
+        voiceManager.resetDeduplication()
+        simulatedWrongTurnTicksRemaining = 0
+        val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
+        val initialBearing = if (route.shape.size >= 2) {
+            com.example.navigation.ValhallaResponseParser.bearingDegrees(route.shape[0], route.shape[1]).toFloat()
+        } else {
+            currentNav.snappedBearing
+        }
+        val firstManeuver = route.maneuvers.firstOrNull()
+        val initialDist = firstManeuver?.lengthMeters ?: route.distanceMeters
+        _navigationState.value = currentNav.copy(
+            isSimulatingDrive = true,
+            currentManeuverIndex = 0,
+            snappedShapeIndex = 0,
+            snappedLocation = startLoc,
+            snappedBearing = initialBearing,
+            distanceToNextManeuverMeters = initialDist,
+            timeToNextManeuverSeconds = firstManeuver?.timeSeconds ?: route.durationSeconds,
+            remainingDistanceMeters = route.distanceMeters,
+            remainingTimeSeconds = route.durationSeconds,
+            currentSpeedLimitMph = route.speedLimitsByShapeIndex[0] ?: firstManeuver?.speedLimitMph,
+            isOffRoute = false,
+            isRerouting = false,
+            isGpsSignalLost = false,
+            hasArrived = false,
+            showLaneStrip = firstManeuver?.lanes?.isNotEmpty() == true &&
+                initialDist <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)
+        )
+        _isCameraFollowing.value = true
+        _cameraCommand.value = CameraTargetCommand(
+            lat = startLoc.lat,
+            lon = startLoc.lon,
+            zoom = 16.8,
+            tilt = if (s.is3DView) 55.0 else 0.0,
+            bearing = if (_isHeadingUpMode.value) initialBearing.toDouble() else 0.0,
+            animationDurationMs = 300
+        )
+        startSimulatedDriveLoop()
+    }
+
+    fun stopSimulationAndReturnToRealGps() {
+        simulationJob?.cancel()
+        simulationJob = null
+        _simulationSpeedMultiplier.value = 1
+        simulatedWrongTurnTicksRemaining = 0
+        viewModelScope.launch { prefs.setSimulateDriveEnabled(false) }
+
+        val realFix = currentGpsFix.value
+        val s = settings.value
+        val wasNavigating = _navigationState.value.isNavigating
+        if (wasNavigating) {
+            val realLoc = realFix?.let { LatLon(it.lat, it.lon) } ?: getEffectiveReferenceLocation()
+            _navigationState.value = _navigationState.value.copy(
+                isSimulatingDrive = false,
+                snappedLocation = realLoc,
+                currentSpeedMps = realFix?.speedMps ?: 0f,
+                isGpsSignalLost = false
+            )
+            lastGpsReceivedMs = System.currentTimeMillis()
+            startGpsLossWatchdog()
+            _isCameraFollowing.value = true
+            _cameraCommand.value = CameraTargetCommand(
+                lat = realLoc.lat,
+                lon = realLoc.lon,
+                zoom = 16.5,
+                tilt = if (s.is3DView) 55.0 else 0.0,
+                bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0,
+                animationDurationMs = 400
+            )
+            // Immediately recalculate active route from the user's real GPS position
+            val rerouteFix = realFix ?: GpsFix(
+                lat = realLoc.lat,
+                lon = realLoc.lon,
+                bearing = 0f,
+                speedMps = 0f,
+                accuracyMeters = 10f,
+                timestampMs = System.currentTimeMillis()
+            )
+            triggerAutomaticReroute(rerouteFix)
+        } else {
+            val realLoc = realFix?.let { LatLon(it.lat, it.lon) } ?: getEffectiveReferenceLocation()
+            _cameraCommand.value = CameraTargetCommand(
+                lat = realLoc.lat,
+                lon = realLoc.lon,
+                zoom = 14.5,
+                tilt = 0.0,
+                bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0,
+                animationDurationMs = 400
+            )
+        }
+    }
+
+    fun cycleSimulationSpeed() {
+        val currentIdx = SIMULATION_SPEED_STEPS.indexOf(_simulationSpeedMultiplier.value)
+        val nextSpeed = SIMULATION_SPEED_STEPS[(currentIdx + 1) % SIMULATION_SPEED_STEPS.size]
+        _simulationSpeedMultiplier.value = nextSpeed
+        val s = settings.value
+        val str = stringsFor(s.language)
+        val speedLabel = if (s.language == AppLanguage.PERSIAN) {
+            "${BilingualFormatter.formatNumber(nextSpeed, AppLanguage.PERSIAN)}x"
+        } else {
+            "${nextSpeed}x"
+        }
+        _snackbarMessage.value = "${str.simulationSpeedChangedPrefix}: $speedLabel"
+    }
+
+    fun resetSimulationSpeedTo1x() {
+        _simulationSpeedMultiplier.value = 1
+        val s = settings.value
+        val str = stringsFor(s.language)
+        val speedLabel = if (s.language == AppLanguage.PERSIAN) "۱x" else "1x"
+        _snackbarMessage.value = "${str.simulationSpeedChangedPrefix}: $speedLabel"
     }
 
     fun triggerSimulatedWrongTurn() {
@@ -793,7 +1002,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun stopNavigation() {
+        val wasSimulating = _navigationState.value.isSimulatingDrive
         stopInternalNavJobs()
+        _simulationSpeedMultiplier.value = 1
+        if (wasSimulating) {
+            viewModelScope.launch { prefs.setSimulateDriveEnabled(false) }
+        }
         locationTracker.setNavigationMode(false)
         compassTracker.setNavigationMode(false)
         _navigationState.value = ActiveNavigationState()
@@ -821,7 +1035,6 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun handleNavigationGpsFix(fix: GpsFix) {
         val s = settings.value
-        val wasArrived = _navigationState.value.hasArrived
         val result = navController.processGpsFix(
             currentState = _navigationState.value,
             fix = fix,
@@ -832,16 +1045,42 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             speedAudioEnabled = s.speedWarningAudioEnabled,
             settings = s
         )
-        _navigationState.value = result.state
+        applyNavigationStepResult(
+            state = result.state,
+            shouldReroute = result.shouldReroute,
+            maneuverToSpeak = result.maneuverToSpeak,
+            alertToSpeak = result.alertToSpeak,
+            triggerOverspeedChime = result.triggerOverspeedChime,
+            fallbackLoc = LatLon(fix.lat, fix.lon),
+            speedMps = fix.speedMps,
+            cameraAnimMs = 450,
+            rerouteSourceFix = fix
+        )
+    }
 
-        if (result.triggerOverspeedChime) {
+    private fun applyNavigationStepResult(
+        state: ActiveNavigationState,
+        shouldReroute: Boolean,
+        maneuverToSpeak: Pair<com.example.navigation.RouteManeuver, String>?,
+        alertToSpeak: com.example.navigation.AheadAlert?,
+        triggerOverspeedChime: Boolean,
+        fallbackLoc: LatLon?,
+        speedMps: Float,
+        cameraAnimMs: Int,
+        rerouteSourceFix: GpsFix? = null
+    ) {
+        val s = settings.value
+        val wasArrived = _navigationState.value.hasArrived
+        _navigationState.value = state
+
+        if (triggerOverspeedChime) {
             voiceManager.playOverspeedChime()
         }
 
-        if (result.state.hasArrived && !wasArrived) {
-            val arrivalManeuverType = result.state.route?.maneuvers?.lastOrNull()?.type
+        if (state.hasArrived && !wasArrived) {
+            val arrivalManeuverType = state.route?.maneuvers?.lastOrNull()?.type
                 ?: com.example.navigation.ManeuverType.ARRIVE
-            val spoken = voiceManager.speakArrival(arrivalManeuverType, result.state.destinationName, s.language)
+            val spoken = voiceManager.speakArrival(arrivalManeuverType, state.destinationName, s.language)
             _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
             arrivalEndJob?.cancel()
             arrivalEndJob = viewModelScope.launch {
@@ -851,10 +1090,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         } else {
-            result.maneuverToSpeak?.let { (maneuver, stage) ->
+            maneuverToSpeak?.let { (maneuver, stage) ->
                 val spoken = voiceManager.speakManeuver(
                     maneuver = maneuver,
-                    distanceMeters = result.state.distanceToNextManeuverMeters,
+                    distanceMeters = state.distanceToNextManeuverMeters,
                     unit = s.distanceUnit,
                     language = s.language,
                     announcementStage = stage,
@@ -862,21 +1101,20 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
             }
-            result.alertToSpeak?.let { alert ->
+            alertToSpeak?.let { alert ->
                 voiceManager.speakAlert(alert, s.language)
             }
         }
 
         // Update persistent foreground notification directly via NotificationManagerCompat.notify()
-        // (never calls startForegroundService() again; throttled to >= 2s and only when text changes)
-        val currentManeuver = result.state.currentManeuver
-        if (currentManeuver != null && result.state.isNavigating) {
+        val currentManeuver = state.currentManeuver
+        if (currentManeuver != null && state.isNavigating) {
             val distStr = BilingualFormatter.formatDistance(
-                result.state.distanceToNextManeuverMeters,
+                state.distanceToNextManeuverMeters,
                 s.distanceUnit,
                 s.language
             )
-            val etaStr = BilingualFormatter.formatDuration(result.state.remainingTimeSeconds, s.language)
+            val etaStr = BilingualFormatter.formatDuration(state.remainingTimeSeconds, s.language)
             NavigationForegroundService.updateNotification(
                 context = app,
                 title = "$distStr • $etaStr",
@@ -887,27 +1125,42 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
         // Follow driving camera unless user manually panned away
         if (_isCameraFollowing.value) {
-            val targetLoc = result.state.snappedLocation ?: LatLon(fix.lat, fix.lon)
-            val targetBearing = if (_isHeadingUpMode.value) {
-                if (fix.speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || s.simulateDriveEnabled) {
-                    result.state.snappedBearing.toDouble()
+            val targetLoc = state.snappedLocation ?: fallbackLoc
+            if (targetLoc != null) {
+                val targetBearing = if (_isHeadingUpMode.value) {
+                    if (speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || state.isSimulatingDrive) {
+                        state.snappedBearing.toDouble()
+                    } else {
+                        _userHeadingDegrees.value.toDouble()
+                    }
                 } else {
-                    _userHeadingDegrees.value.toDouble()
+                    0.0
                 }
-            } else {
-                0.0
+                _cameraCommand.value = CameraTargetCommand(
+                    lat = targetLoc.lat,
+                    lon = targetLoc.lon,
+                    zoom = if (speedMps > 22f) 15.8 else 16.8,
+                    tilt = if (s.is3DView) 55.0 else 0.0,
+                    bearing = targetBearing,
+                    animationDurationMs = cameraAnimMs
+                )
             }
-            _cameraCommand.value = CameraTargetCommand(
-                lat = targetLoc.lat,
-                lon = targetLoc.lon,
-                zoom = if (fix.speedMps > 22f) 15.8 else 16.8,
-                tilt = if (s.is3DView) 55.0 else 0.0,
-                bearing = targetBearing
-            )
         }
 
-        if (result.shouldReroute) {
-            triggerAutomaticReroute(fix)
+        if (shouldReroute) {
+            val fixForReroute = rerouteSourceFix ?: state.snappedLocation?.let { loc ->
+                GpsFix(
+                    lat = loc.lat,
+                    lon = loc.lon,
+                    bearing = state.snappedBearing,
+                    speedMps = speedMps,
+                    accuracyMeters = 5f,
+                    timestampMs = System.currentTimeMillis()
+                )
+            }
+            if (fixForReroute != null) {
+                triggerAutomaticReroute(fixForReroute)
+            }
         }
     }
 
@@ -1383,7 +1636,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setSimulateDriveEnabled(enabled: Boolean) {
-        viewModelScope.launch { prefs.setSimulateDriveEnabled(enabled) }
+        if (!enabled) {
+            stopSimulationAndReturnToRealGps()
+            return
+        }
+        viewModelScope.launch { prefs.setSimulateDriveEnabled(true) }
+        if (_navigationState.value.isNavigating && !_navigationState.value.isSimulatingDrive) {
+            startSimulationOnActiveRoute()
+        } else if (!_navigationState.value.isNavigating && _candidateRoutes.value.isNotEmpty() && _selectedPlace.value != null) {
+            startNavigation(forceSimulate = true)
+        }
     }
 
     fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
@@ -1426,5 +1688,6 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     companion object {
         const val EUGENE_OR_LAT = 44.0521
         const val EUGENE_OR_LON = -123.0868
+        val SIMULATION_SPEED_STEPS = listOf(1, 2, 4, 8, 16, 32)
     }
 }

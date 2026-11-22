@@ -71,6 +71,17 @@ class NavigationSessionController {
         val roadBearing: Float
     )
 
+    data class SimulationStepBatchResult(
+        val state: ActiveNavigationState,
+        val shouldReroute: Boolean,
+        val latestManeuverToSpeak: Pair<RouteManeuver, String>? = null,
+        val latestAlertToSpeak: AheadAlert? = null,
+        val triggerOverspeedChime: Boolean = false,
+        val finalSimClockMs: Long = 0L,
+        val allTriggeredManeuvers: List<Pair<RouteManeuver, String>> = emptyList(),
+        val allTriggeredAlerts: List<AheadAlert> = emptyList()
+    )
+
     fun processGpsFix(
         currentState: ActiveNavigationState,
         fix: GpsFix,
@@ -97,8 +108,8 @@ class NavigationSessionController {
             lastSpokenManeuverTimeMs = 0L
         }
 
-        // 1. Orthogonal projection map matching (snap-to-road)
-        val snap = snapToRoute(fix, route.shape)
+        // 1. Orthogonal projection map matching (snap-to-road), using previous shape index as fast hint
+        val snap = snapToRoute(fix, route.shape, hintIndex = currentState.snappedShapeIndex)
         val bestIdx = snap.segmentIndex
         val bestDist = snap.distanceMeters
 
@@ -377,33 +388,76 @@ class NavigationSessionController {
     }
 
     /**
-     * Produces realistic synthetic GPS fixes along the active route for the Developer
-     * "Simulate drive" mode, with optional lateral offset to simulate a wrong turn!
+     * Computes a realistic 1x driving speed (in m/s) for the current road segment:
+     * - Follows the road's real OSM speed limit when present (capped safely at speed limit so
+     *   simulation never triggers false speeding warnings).
+     * - Otherwise uses a realistic default for the road class (65 mph highway, 35 mph multi-lane
+     *   city road, 25 mph residential street).
+     * - Smoothly slows down before upcoming non-straight turns or exits.
+     */
+    fun computeRealistic1xSpeedMps(currentState: ActiveNavigationState): Float {
+        val route = currentState.route ?: return 15.6f
+        val upcoming = currentState.currentManeuver
+        val activeManeuver = route.maneuvers.getOrNull((currentState.currentManeuverIndex - 1).coerceAtLeast(0))
+        val roadLimitMph = route.speedLimitsByShapeIndex[currentState.snappedShapeIndex]
+            ?: activeManeuver?.speedLimitMph
+            ?: upcoming?.speedLimitMph
+
+        val baseSpeedMps = when {
+            roadLimitMph != null -> (roadLimitMph * 0.44704f).coerceIn(8.0f, 33.5f)
+            activeManeuver?.isHighwayRoad == true || upcoming?.isHighwayRoad == true -> 29.05f // ~65 mph
+            (activeManeuver?.laneCount ?: 0) >= 2 || activeManeuver?.isMultiLaneRoad == true ||
+                (upcoming?.laneCount ?: 0) >= 2 || upcoming?.isMultiLaneRoad == true -> 15.65f // ~35 mph
+            else -> 11.18f // ~25 mph residential street
+        }
+
+        // Smooth deceleration approaching turns, exits, or arrival
+        val distToTurn = currentState.distanceToNextManeuverMeters
+        val needsSlowdown = upcoming != null && (
+            isEarlyWarningManeuverType(upcoming.type) ||
+                upcoming.type == ManeuverType.ROUNDABOUT_ENTER ||
+                upcoming.type == ManeuverType.ARRIVE ||
+                upcoming.type == ManeuverType.ARRIVE_LEFT ||
+                upcoming.type == ManeuverType.ARRIVE_RIGHT
+            )
+        if (needsSlowdown && distToTurn in 0.0..140.0) {
+            val turnTargetMps = when {
+                upcoming!!.type == ManeuverType.ARRIVE ||
+                    upcoming.type == ManeuverType.ARRIVE_LEFT ||
+                    upcoming.type == ManeuverType.ARRIVE_RIGHT -> 5.5f
+                upcoming.isHighwayExitOrSplit -> 17.5f // ~39 mph ramp
+                else -> 7.0f // ~16 mph city turn
+            }
+            val factor = (distToTurn / 140.0).coerceIn(0.0, 1.0).toFloat()
+            return (turnTargetMps + (baseSpeedMps - turnTargetMps) * factor).coerceAtMost(baseSpeedMps)
+        }
+        return baseSpeedMps
+    }
+
+    /**
+     * Produces realistic synthetic GPS fixes along the active route for "Simulate drive" mode.
+     * The emitted `GpsFix.speedMps` is ALWAYS the realistic 1x speed (never multiplied), so the
+     * speedometer and speed-limit warnings stay realistic even when time is accelerated up to 32x.
      */
     fun computeSimulatedFix(
         currentState: ActiveNavigationState,
         elapsedSeconds: Double,
-        wrongTurnOffsetMeters: Double = 0.0
+        wrongTurnOffsetMeters: Double = 0.0,
+        timestampMs: Long = System.currentTimeMillis()
     ): GpsFix? {
         val route = currentState.route ?: return null
         if (route.shape.size < 2) return null
 
-        val upcoming = currentState.currentManeuver
-        val targetSpeedMps = when {
-            upcoming?.speedLimitMph != null -> (upcoming.speedLimitMph * 0.44704f).coerceIn(10f, 32f)
-            upcoming?.isHighwayRoad == true -> 29.0f // ~65 mph
-            else -> 15.6f // ~35 mph city street
-        }
+        val realisticSpeedMps = computeRealistic1xSpeedMps(currentState)
 
         val (_, baseLoc, bearing) = advanceAlongShape(
             shape = route.shape,
             startIndex = currentState.snappedShapeIndex,
-            distanceMeters = targetSpeedMps * elapsedSeconds,
+            distanceMeters = realisticSpeedMps * elapsedSeconds,
             currentLocation = currentState.snappedLocation
         )
 
         val finalLoc = if (wrongTurnOffsetMeters > 0.0) {
-            // Shift perpendicularly east/south off the road by wrongTurnOffsetMeters
             val dLat = (wrongTurnOffsetMeters / 111_320.0)
             val dLon = (wrongTurnOffsetMeters / (111_320.0 * cos(Math.toRadians(baseLoc.lat)).coerceAtLeast(0.1)))
             LatLon(baseLoc.lat + dLat * 0.6, baseLoc.lon + dLon * 0.8)
@@ -415,13 +469,94 @@ class NavigationSessionController {
             lat = finalLoc.lat,
             lon = finalLoc.lon,
             bearing = bearing,
-            speedMps = targetSpeedMps,
+            speedMps = realisticSpeedMps,
             accuracyMeters = 4f,
-            timestampMs = System.currentTimeMillis()
+            timestampMs = timestampMs,
+            provider = "simulation"
         )
     }
 
-    fun snapToRoute(fix: GpsFix, shape: List<LatLon>): SnapProjection {
+    /**
+     * Advances simulation by [totalSimulatedSeconds] using small virtual sub-steps (<= 1.0 sim sec
+     * each, max ~29 m per step even at 65 mph) so every announcement distance (2 mi, 1 mi, 0.5 mi,
+     * 0.25 mi, 1,000 ft, NOW, road alerts, and speed/red-light cameras) triggers at the exact right
+     * distance even at 16x or 32x! Only the newest maneuver/alert from this tick is surfaced for
+     * speech so stale prompts never queue up.
+     */
+    fun advanceSimulationStep(
+        currentState: ActiveNavigationState,
+        totalSimulatedSeconds: Double,
+        startingSimClockMs: Long,
+        wrongTurnOffsetMeters: Double,
+        dbHazards: List<RoadHazardPoint>,
+        userReports: List<UserReportEntity>,
+        unit: DistanceUnit,
+        language: AppLanguage,
+        speedAudioEnabled: Boolean,
+        settings: UserSettings
+    ): SimulationStepBatchResult {
+        if (!currentState.isNavigating || currentState.hasArrived || currentState.route == null) {
+            return SimulationStepBatchResult(
+                state = currentState,
+                shouldReroute = false,
+                finalSimClockMs = startingSimClockMs
+            )
+        }
+
+        val maxSubStepSimSec = 1.0
+        var remainingSimSec = totalSimulatedSeconds.coerceAtLeast(0.05)
+        var simClockMs = startingSimClockMs
+        var state = currentState
+        var shouldReroute = false
+        var triggerChime = false
+        val triggeredManeuvers = mutableListOf<Pair<RouteManeuver, String>>()
+        val triggeredAlerts = mutableListOf<AheadAlert>()
+
+        var safetyCounter = 0
+        while (remainingSimSec > 1e-4 && !state.hasArrived && safetyCounter < 120) {
+            safetyCounter++
+            val stepSec = remainingSimSec.coerceAtMost(maxSubStepSimSec)
+            remainingSimSec -= stepSec
+            simClockMs += (stepSec * 1000.0).toLong().coerceAtLeast(1L)
+
+            val simFix = computeSimulatedFix(
+                currentState = state,
+                elapsedSeconds = stepSec,
+                wrongTurnOffsetMeters = wrongTurnOffsetMeters,
+                timestampMs = simClockMs
+            ) ?: break
+
+            val res = processGpsFix(
+                currentState = state,
+                fix = simFix,
+                dbHazards = dbHazards,
+                userReports = userReports,
+                unit = unit,
+                language = language,
+                speedAudioEnabled = speedAudioEnabled,
+                settings = settings
+            )
+            state = res.state
+            if (res.shouldReroute) shouldReroute = true
+            if (res.triggerOverspeedChime) triggerChime = true
+            res.maneuverToSpeak?.let { triggeredManeuvers.add(it) }
+            res.alertToSpeak?.let { triggeredAlerts.add(it) }
+            if (shouldReroute) break
+        }
+
+        return SimulationStepBatchResult(
+            state = state,
+            shouldReroute = shouldReroute,
+            latestManeuverToSpeak = triggeredManeuvers.lastOrNull(),
+            latestAlertToSpeak = triggeredAlerts.lastOrNull(),
+            triggerOverspeedChime = triggerChime,
+            finalSimClockMs = simClockMs,
+            allTriggeredManeuvers = triggeredManeuvers,
+            allTriggeredAlerts = triggeredAlerts
+        )
+    }
+
+    fun snapToRoute(fix: GpsFix, shape: List<LatLon>, hintIndex: Int = -1): SnapProjection {
         if (shape.size == 1) {
             val pt = shape[0]
             return SnapProjection(
@@ -432,44 +567,58 @@ class NavigationSessionController {
             )
         }
         val cosLat = cos(Math.toRadians(fix.lat)).coerceAtLeast(0.1)
-        var bestDist = Double.MAX_VALUE
-        var bestPoint = shape[0]
-        var bestIdx = 0
-        var bestT = 0.0
-        var bestBearing = fix.bearing
 
-        for (i in 0 until shape.lastIndex) {
-            val a = shape[i]
-            val b = shape[i + 1]
-            val ax = a.lon * cosLat
-            val ay = a.lat
-            val bx = b.lon * cosLat
-            val by = b.lat
-            val px = fix.lon * cosLat
-            val py = fix.lat
+        fun searchRange(startIdx: Int, endExclusive: Int): SnapProjection {
+            var bestDist = Double.MAX_VALUE
+            var bestPoint = shape[startIdx.coerceIn(0, shape.lastIndex)]
+            var bestIdx = startIdx.coerceIn(0, (shape.lastIndex - 1).coerceAtLeast(0))
+            var bestT = 0.0
+            var bestBearing = fix.bearing
 
-            val dx = bx - ax
-            val dy = by - ay
-            val lenSq = dx * dx + dy * dy
-            val t = if (lenSq > 1e-15) {
-                (((px - ax) * dx + (py - ay) * dy) / lenSq).coerceIn(0.0, 1.0)
-            } else 0.0
+            for (i in startIdx until endExclusive) {
+                val a = shape[i]
+                val b = shape[i + 1]
+                val ax = a.lon * cosLat
+                val ay = a.lat
+                val bx = b.lon * cosLat
+                val by = b.lat
+                val px = fix.lon * cosLat
+                val py = fix.lat
 
-            val projLat = a.lat + t * (b.lat - a.lat)
-            val projLon = a.lon + t * (b.lon - a.lon)
-            val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, projLat, projLon)
-            val isCloser = dist < bestDist - 0.01
-            // When tied at a shared vertex (end of segment i-1 == start of segment i), prefer the outgoing segment
-            val isForwardVertexTie = abs(dist - bestDist) <= 0.01 && bestT >= 0.999 && t < 0.999
-            if (isCloser || isForwardVertexTie) {
-                bestDist = dist
-                bestPoint = LatLon(projLat, projLon)
-                bestIdx = i
-                bestT = t
-                bestBearing = ValhallaResponseParser.bearingDegrees(a, b).toFloat()
+                val dx = bx - ax
+                val dy = by - ay
+                val lenSq = dx * dx + dy * dy
+                val t = if (lenSq > 1e-15) {
+                    (((px - ax) * dx + (py - ay) * dy) / lenSq).coerceIn(0.0, 1.0)
+                } else 0.0
+
+                val projLat = a.lat + t * (b.lat - a.lat)
+                val projLon = a.lon + t * (b.lon - a.lon)
+                val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, projLat, projLon)
+                val isCloser = dist < bestDist - 0.01
+                // When tied at a shared vertex (end of segment i-1 == start of segment i), prefer the outgoing segment
+                val isForwardVertexTie = abs(dist - bestDist) <= 0.01 && bestT >= 0.999 && t < 0.999
+                if (isCloser || isForwardVertexTie) {
+                    bestDist = dist
+                    bestPoint = LatLon(projLat, projLon)
+                    bestIdx = i
+                    bestT = t
+                    bestBearing = ValhallaResponseParser.bearingDegrees(a, b).toFloat()
+                }
+            }
+            return SnapProjection(bestPoint, bestIdx, bestDist, bestBearing)
+        }
+
+        // Fast local window search around previous segment index for smooth 32x simulation on long routes
+        if (hintIndex in 0 until shape.lastIndex && shape.size > 160) {
+            val winStart = (hintIndex - 8).coerceAtLeast(0)
+            val winEnd = (hintIndex + 120).coerceAtMost(shape.lastIndex)
+            val local = searchRange(winStart, winEnd)
+            if (local.distanceMeters <= 35.0) {
+                return local
             }
         }
-        return SnapProjection(bestPoint, bestIdx, bestDist, bestBearing)
+        return searchRange(0, shape.lastIndex)
     }
 
     private fun advanceAlongShape(

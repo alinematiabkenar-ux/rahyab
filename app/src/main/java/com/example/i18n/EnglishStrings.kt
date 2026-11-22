@@ -273,4 +273,8 @@ object EnglishStrings : AppStrings {
     override val diagSensorLow = "Low"
     override val diagSensorUnreliable = "Unreliable"
     override val diagSensorUnavailable = "No reading yet"
+    override val simulateButtonLabel = "Simulate drive"
+    override val simulationSpeedLabel = "Simulation speed"
+    override val simulationNoRouteMessage = "Choose a destination first to start simulation"
+    override val simulationSpeedChangedPrefix = "Simulation speed"
 }
