@@ -384,6 +384,12 @@ fun SettingsScreen(
                     testTag = "switch_alert_red_light_camera"
                 )
                 SettingsToggleRow(
+                    label = strings.showTrafficLightsToggle,
+                    checked = settings.showTrafficLights,
+                    onCheckedChange = { viewModel.setShowTrafficLights(it) },
+                    testTag = "switch_show_traffic_lights"
+                )
+                SettingsToggleRow(
                     label = strings.alertToggleStopSign,
                     checked = settings.alertStopSignEnabled,
                     onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },

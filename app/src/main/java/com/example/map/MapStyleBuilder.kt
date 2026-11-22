@@ -34,6 +34,7 @@ object MapStyleBuilder {
     const val SOURCE_DESTINATION = "rahyab_destination"
     const val SOURCE_USER_REPORTS = "rahyab_user_reports"
     const val SOURCE_CAMERAS = "rahyab_cameras"
+    const val SOURCE_TRAFFIC_LIGHTS = "rahyab_traffic_lights"
     const val SOURCE_GPS_ACCURACY = "rahyab_gps_accuracy"
     const val SOURCE_GPS_PUCK = "rahyab_gps_puck"
 
@@ -46,6 +47,7 @@ object MapStyleBuilder {
     const val LAYER_DESTINATION_CIRCLE = "rahyab_destination_circle"
     const val LAYER_USER_REPORTS_CIRCLE = "rahyab_user_reports_circle"
     const val LAYER_CAMERAS_SYMBOL = "rahyab_cameras_symbol"
+    const val LAYER_TRAFFIC_LIGHTS_SYMBOL = "rahyab_traffic_lights_symbol"
     const val LAYER_GPS_ACCURACY = "rahyab_gps_accuracy_fill"
     const val LAYER_GPS_ACCURACY_OUTLINE = "rahyab_gps_accuracy_outline"
     const val LAYER_GPS_PUCK = "rahyab_gps_puck_circle"
@@ -55,6 +57,7 @@ object MapStyleBuilder {
     const val IMAGE_HIGHWAY_SHIELD = "rahyab_highway_shield_bg"
     const val IMAGE_SPEED_CAMERA = "rahyab_speed_camera_icon"
     const val IMAGE_RED_LIGHT_CAMERA = "rahyab_red_light_camera_icon"
+    const val IMAGE_TRAFFIC_LIGHT = "rahyab_traffic_light_icon"
 
     const val ROUTE_COLOR_0 = "#00A8E8" // Cyan-Blue (Fastest / Route 1)
     const val ROUTE_COLOR_1 = "#10B981" // Emerald (Shortest / Alt 1)
@@ -137,6 +140,7 @@ object MapStyleBuilder {
             SOURCE_DESTINATION,
             SOURCE_USER_REPORTS,
             SOURCE_CAMERAS,
+            SOURCE_TRAFFIC_LIGHTS,
             SOURCE_GPS_ACCURACY,
             SOURCE_GPS_PUCK
         )).forEach { id ->
@@ -219,6 +223,21 @@ object MapStyleBuilder {
                 )
                 put("circle-stroke-width", 2.5)
                 put("circle-stroke-color", "#FFFFFF")
+            })
+        })
+
+        // Traffic light locations (visible from zoom 15, non-crowding)
+        layers.put(JSONObject().apply {
+            put("id", LAYER_TRAFFIC_LIGHTS_SYMBOL)
+            put("type", "symbol")
+            put("source", SOURCE_TRAFFIC_LIGHTS)
+            put("minzoom", 15)
+            put("layout", JSONObject().apply {
+                put("icon-image", IMAGE_TRAFFIC_LIGHT)
+                put("icon-size", 0.68)
+                put("icon-padding", 4.0)
+                put("icon-allow-overlap", false)
+                put("icon-ignore-placement", false)
             })
         })
 

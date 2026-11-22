@@ -254,6 +254,14 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _visibleCameras = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
     val visibleCameras: StateFlow<List<RoadHazardPoint>> = _visibleCameras.asStateFlow()
 
+    // Visible traffic lights (shown on map from zoom 15, merged within ~15 m)
+    private val _visibleTrafficLights = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
+    val visibleTrafficLights: StateFlow<List<RoadHazardPoint>> = _visibleTrafficLights.asStateFlow()
+
+    // Visual-only distance to approaching traffic light within ~300 ft (navigation + free driving, no voice)
+    private val _aheadTrafficLightMeters = MutableStateFlow<Double?>(null)
+    val aheadTrafficLightMeters: StateFlow<Double?> = _aheadTrafficLightMeters.asStateFlow()
+
     // Approaching camera alert during free driving (no active route)
     private val _freeDriveAheadAlert = MutableStateFlow<AheadAlert?>(null)
     val freeDriveAheadAlert: StateFlow<AheadAlert?> = _freeDriveAheadAlert.asStateFlow()
@@ -273,7 +281,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private var arrivalEndJob: Job? = null
     private var autoRecenterJob: Job? = null
     private var cameraFetchJob: Job? = null
+    private var trafficLightFetchJob: Job? = null
     private var lastCameraFetchLoc: LatLon? = null
+    private var lastTrafficLightFetchLoc: LatLon? = null
     private var lastGpsReceivedMs: Long = 0L
     private var simulatedWrongTurnTicksRemaining: Int = 0
     private var simulatedClockMs: Long = 0L
@@ -290,6 +300,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 _mismatchedBuildVersions.value = packManager.getMismatchedBuildVersions()
                 val ref = getEffectiveReferenceLocation()
                 refreshNearbyCameras(ref.lat, ref.lon, force = true)
+                refreshNearbyTrafficLights(ref.lat, ref.lon, force = true)
             }
         }
 
@@ -427,9 +438,42 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         return merged
     }
 
+    private fun refreshNearbyTrafficLights(lat: Double, lon: Double, force: Boolean = false) {
+        if (!settings.value.showTrafficLights) {
+            if (_visibleTrafficLights.value.isNotEmpty()) _visibleTrafficLights.value = emptyList()
+            _aheadTrafficLightMeters.value = null
+            return
+        }
+        val last = lastTrafficLightFetchLoc
+        if (!force && last != null &&
+            OfflinePlaceSearchEngine.haversineMeters(last.lat, last.lon, lat, lon) < 1_200.0
+        ) {
+            return
+        }
+        lastTrafficLightFetchLoc = LatLon(lat, lon)
+        trafficLightFetchJob?.cancel()
+        trafficLightFetchJob = viewModelScope.launch {
+            val lights = offlineSearch.queryTrafficSignalsInBounds(
+                minLat = lat - 0.045,
+                maxLat = lat + 0.045,
+                minLon = lon - 0.055,
+                maxLon = lon + 0.055
+            )
+            _visibleTrafficLights.value = lights
+        }
+    }
+
     private fun handleFreeDriveGpsFix(fix: GpsFix) {
         val s = settings.value
         refreshNearbyCameras(fix.lat, fix.lon)
+        refreshNearbyTrafficLights(fix.lat, fix.lon)
+
+        // Visual-only approaching traffic light within ~300 ft (no voice)
+        _aheadTrafficLightMeters.value = if (s.showTrafficLights) {
+            navController.findAheadTrafficLightMeters(fix, _visibleTrafficLights.value)
+        } else {
+            null
+        }
 
         // Evaluate speed cameras & red light cameras ahead during free driving
         val (freeDriveAlert, alertToSpeak) = navController.evaluateFreeDriveCameraAlert(
@@ -1420,6 +1464,27 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         val wasArrived = _navigationState.value.hasArrived
         _navigationState.value = state
 
+        // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
+        val navPos = state.snappedLocation ?: fallbackLoc
+        if (navPos != null && s.showTrafficLights && state.isNavigating && !state.hasArrived) {
+            refreshNearbyTrafficLights(navPos.lat, navPos.lon)
+            val evalFix = GpsFix(
+                lat = navPos.lat,
+                lon = navPos.lon,
+                bearing = state.snappedBearing,
+                hasBearing = true,
+                speedMps = speedMps,
+                accuracyMeters = 5f,
+                timestampMs = System.currentTimeMillis()
+            )
+            _aheadTrafficLightMeters.value = navController.findAheadTrafficLightMeters(
+                evalFix,
+                _visibleTrafficLights.value
+            )
+        } else {
+            _aheadTrafficLightMeters.value = null
+        }
+
         if (triggerOverspeedChime) {
             voiceManager.playOverspeedChime()
         }
@@ -1720,6 +1785,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                         prefs.setAlertStopSignEnabled(s.alertStopSignEnabled)
                         prefs.setAlertSpeedCameraEnabled(s.alertSpeedCameraEnabled)
                         prefs.setAlertRedLightCameraEnabled(s.alertRedLightCameraEnabled)
+                        prefs.setShowTrafficLights(s.showTrafficLights)
                         prefs.set3DView(s.is3DView)
                         prefs.setAvoidTolls(s.avoidTolls)
                         prefs.setAvoidHighways(s.avoidHighways)
@@ -1955,6 +2021,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAlertRedLightCameraEnabled(enabled: Boolean) {
         viewModelScope.launch { prefs.setAlertRedLightCameraEnabled(enabled) }
+    }
+
+    fun setShowTrafficLights(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.setShowTrafficLights(enabled)
+            if (!enabled) {
+                _visibleTrafficLights.value = emptyList()
+                _aheadTrafficLightMeters.value = null
+            } else {
+                val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+                refreshNearbyTrafficLights(ref.lat, ref.lon, force = true)
+            }
+        }
     }
 
     fun setAvoidTolls(avoid: Boolean) {

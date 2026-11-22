@@ -103,7 +103,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.R
 import com.example.data.local.SavedPlaceEntity
 import com.example.data.local.SavedPlaceType
 import com.example.data.model.UsStateInfo
@@ -173,6 +176,8 @@ fun DriveScreen(
     val isCompassLowAccuracy by viewModel.isCompassLowAccuracy.collectAsStateWithLifecycle()
     val simulationSpeed by viewModel.simulationSpeedMultiplier.collectAsStateWithLifecycle()
     val visibleCameras by viewModel.visibleCameras.collectAsStateWithLifecycle()
+    val visibleTrafficLights by viewModel.visibleTrafficLights.collectAsStateWithLifecycle()
+    val aheadTrafficLightMeters by viewModel.aheadTrafficLightMeters.collectAsStateWithLifecycle()
     val freeDriveAheadAlert by viewModel.freeDriveAheadAlert.collectAsStateWithLifecycle()
     val externalMatchChoices by viewModel.externalLinkMatchChoices.collectAsStateWithLifecycle()
     val isSimulationActive = navState.isSimulatingDrive || settings.simulateDriveEnabled
@@ -233,6 +238,7 @@ fun DriveScreen(
             selectedPlace = selectedPlace,
             userReports = activeReports,
             cameras = visibleCameras,
+            trafficLights = if (settings.showTrafficLights) visibleTrafficLights else emptyList(),
             cameraCommand = cameraCmd,
             onMapLongClick = { lat, lon -> viewModel.dropPinOnMap(lat, lon) },
             onRouteTapped = { idx -> viewModel.selectCandidateRoute(idx) },
@@ -275,6 +281,15 @@ fun DriveScreen(
                 ) {
                     if (settings.simulateDriveEnabled || navState.isSimulatingDrive) {
                         SimulationModeBadge(label = strings.simulationModeBadge)
+                    }
+
+                    if (settings.showTrafficLights && aheadTrafficLightMeters != null) {
+                        TrafficLightAheadPill(
+                            distanceMeters = aheadTrafficLightMeters!!,
+                            unit = settings.distanceUnit,
+                            language = language,
+                            contentDescription = strings.trafficLightAheadLabel
+                        )
                     }
 
                     if (navState.isGpsSignalLost && !navState.isSimulatingDrive) {
@@ -453,6 +468,15 @@ fun DriveScreen(
                 ) {
                     if (settings.simulateDriveEnabled) {
                         SimulationModeBadge(label = strings.simulationModeBadge)
+                    }
+
+                    if (settings.showTrafficLights && aheadTrafficLightMeters != null && !isSearchExpanded) {
+                        TrafficLightAheadPill(
+                            distanceMeters = aheadTrafficLightMeters!!,
+                            unit = settings.distanceUnit,
+                            language = language,
+                            contentDescription = strings.trafficLightAheadLabel
+                        )
                     }
 
                     if (settings.devOnlineOregonMode && installedPmtiles.isEmpty()) {
@@ -965,6 +989,40 @@ fun DriveScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun TrafficLightAheadPill(
+    distanceMeters: Double,
+    unit: DistanceUnit,
+    language: AppLanguage,
+    contentDescription: String
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = CockpitMidnight.copy(alpha = 0.92f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+        shadowElevation = 4.dp,
+        modifier = Modifier.testTag("traffic_light_ahead_pill")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ic_traffic_light_map),
+                contentDescription = contentDescription,
+                modifier = Modifier.size(width = 14.dp, height = 21.dp)
+            )
+            Text(
+                text = BilingualFormatter.formatDistance(distanceMeters, unit, language),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
+            )
+        }
     }
 }
 

@@ -367,8 +367,12 @@ fun DiagnosticsScreen(
             item {
                 DiagCard(title = strings.diagSectionTts, icon = Icons.Filled.RecordVoiceOver) {
                     DiagKeyValueRow(
-                        label = strings.diagTtsEngine,
-                        value = ttsDiag.engineLabel.ifBlank { ttsDiag.enginePackage.ifBlank { "—" } }
+                        label = strings.diagPersianTtsEngine,
+                        value = ttsDiag.persianEngineLabel.ifBlank { ttsDiag.persianEnginePackage.ifBlank { ttsDiag.engineLabel.ifBlank { "—" } } }
+                    )
+                    DiagKeyValueRow(
+                        label = strings.diagEnglishTtsEngine,
+                        value = ttsDiag.englishEngineLabel.ifBlank { ttsDiag.englishEnginePackage.ifBlank { ttsDiag.engineLabel.ifBlank { "—" } } }
                     )
                     DiagKeyValueRow(
                         label = strings.diagPersianVoiceStatus,
@@ -652,7 +656,8 @@ fun formatDiagnosticsReport(
     }
     appendLine()
     appendLine("[${strings.diagSectionTts}]")
-    appendLine("${strings.diagTtsEngine}: ${ttsInfo.engineLabel.ifBlank { ttsInfo.enginePackage.ifBlank { "—" } }}")
+    appendLine("${strings.diagPersianTtsEngine}: ${ttsInfo.persianEngineLabel.ifBlank { ttsInfo.persianEnginePackage.ifBlank { "—" } }}")
+    appendLine("${strings.diagEnglishTtsEngine}: ${ttsInfo.englishEngineLabel.ifBlank { ttsInfo.englishEnginePackage.ifBlank { "—" } }}")
     appendLine("${strings.diagPersianVoiceStatus}: ${strings.diagAvailableLabel}=${yesNo(ttsInfo.isPersianAvailable, strings)}, ${strings.diagInstalledLabel}=${yesNo(ttsInfo.isPersianInstalled, strings)}")
     appendLine("${strings.diagEnglishVoiceStatus}: ${strings.diagAvailableLabel}=${yesNo(ttsInfo.isEnglishUsAvailable, strings)}, ${strings.diagInstalledLabel}=${yesNo(ttsInfo.isEnglishUsInstalled, strings)}")
     appendLine()

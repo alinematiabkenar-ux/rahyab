@@ -174,6 +174,63 @@ class OfflinePlaceSearchEngine(
         )
     }
 
+    suspend fun queryTrafficSignalsInBounds(
+        minLat: Double,
+        maxLat: Double,
+        minLon: Double,
+        maxLon: Double
+    ): List<RoadHazardPoint> = withContext(Dispatchers.IO) {
+        val raw = queryRoadHazardsInFiles(
+            dbFiles = packManager.getInstalledPlacesDatabases().map { it.second },
+            minLat = minLat,
+            maxLat = maxLat,
+            minLon = minLon,
+            maxLon = maxLon,
+            trafficSignalsOnly = true,
+            limit = 1200
+        )
+        mergeNearbyTrafficSignals(raw, mergeRadiusMeters = 15.0)
+    }
+
+    /**
+     * Merges traffic signal nodes closer than [mergeRadiusMeters] (default ~15 m) into a single
+     * averaged intersection centroid so multi-node intersections never crowd the map.
+     */
+    fun mergeNearbyTrafficSignals(
+        signals: List<RoadHazardPoint>,
+        mergeRadiusMeters: Double = 15.0
+    ): List<RoadHazardPoint> {
+        if (signals.size <= 1) return signals
+        val visited = BooleanArray(signals.size)
+        val merged = ArrayList<RoadHazardPoint>(signals.size)
+        for (i in signals.indices) {
+            if (visited[i]) continue
+            visited[i] = true
+            val seed = signals[i]
+            var sumLat = seed.lat
+            var sumLon = seed.lon
+            var count = 1
+            for (j in i + 1 until signals.size) {
+                if (visited[j]) continue
+                val other = signals[j]
+                // Fast bounding pre-check (~0.0002 deg ≈ 22 m)
+                if (kotlin.math.abs(seed.lat - other.lat) > 0.00025 ||
+                    kotlin.math.abs(seed.lon - other.lon) > 0.00035
+                ) continue
+                if (haversineMeters(seed.lat, seed.lon, other.lat, other.lon) <= mergeRadiusMeters) {
+                    visited[j] = true
+                    sumLat += other.lat
+                    sumLon += other.lon
+                    count++
+                }
+            }
+            merged.add(
+                if (count == 1) seed else seed.copy(lat = sumLat / count, lon = sumLon / count)
+            )
+        }
+        return merged
+    }
+
     /**
      * Reads hazards/cameras across one or more SQLite places databases while gracefully supporting
      * older packs whose `road_hazards` table lacks `direction` or `osm_id` columns (or lacks the table).
@@ -185,6 +242,7 @@ class OfflinePlaceSearchEngine(
         minLon: Double,
         maxLon: Double,
         camerasOnly: Boolean = false,
+        trafficSignalsOnly: Boolean = false,
         limit: Int = 400
     ): List<RoadHazardPoint> {
         val hazards = mutableListOf<RoadHazardPoint>()
@@ -198,10 +256,10 @@ class OfflinePlaceSearchEngine(
                     val hasOsmId = columns.contains("osm_id")
                     val dirSelect = if (hasDirection) "direction" else "NULL"
                     val osmIdSelect = if (hasOsmId) "osm_id" else "NULL"
-                    val typeFilter = if (camerasOnly) {
-                        "AND type IN ('speed_camera', 'red_light_camera')"
-                    } else {
-                        ""
+                    val typeFilter = when {
+                        camerasOnly -> "AND type IN ('speed_camera', 'red_light_camera')"
+                        trafficSignalsOnly -> "AND type IN ('traffic_signal', 'traffic_signals')"
+                        else -> ""
                     }
                     val stmt = conn.prepare(
                         """

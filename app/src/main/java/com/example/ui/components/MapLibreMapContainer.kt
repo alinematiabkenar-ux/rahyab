@@ -23,6 +23,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.data.local.ReportType
 import com.example.data.local.UserReportEntity
 import com.example.data.search.OfflinePlaceSearchEngine
@@ -89,6 +91,7 @@ fun MapLibreMapContainer(
     selectedPlace: PlaceSearchResult?,
     userReports: List<UserReportEntity>,
     cameras: List<RoadHazardPoint> = emptyList(),
+    trafficLights: List<RoadHazardPoint> = emptyList(),
     cameraCommand: CameraTargetCommand?,
     onMapLongClick: (Double, Double) -> Unit,
     onRouteTapped: (Int) -> Unit,
@@ -174,6 +177,9 @@ fun MapLibreMapContainer(
                 style.addImage(MapStyleBuilder.IMAGE_HIGHWAY_SHIELD, createHighwayShieldBitmap(isNightMode))
                 style.addImage(MapStyleBuilder.IMAGE_SPEED_CAMERA, createSpeedCameraBitmap())
                 style.addImage(MapStyleBuilder.IMAGE_RED_LIGHT_CAMERA, createRedLightCameraBitmap())
+                createVectorDrawableBitmap(context, R.drawable.ic_traffic_light_map, 36, 54)?.let {
+                    style.addImage(MapStyleBuilder.IMAGE_TRAFFIC_LIGHT, it)
+                }
             }
             loadedStyle = style
         }
@@ -305,6 +311,28 @@ fun MapLibreMapContainer(
         if (!style.isFullyLoaded) return@LaunchedEffect
         runCatching {
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_CAMERAS)?.setGeoJson(camerasFc)
+        }
+    }
+
+    // 3C. TRAFFIC LIGHTS EFFECT (offline vector icon from zoom 15, merged within 15m)
+    LaunchedEffect(loadedStyle, trafficLights) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+
+        val lightsFc = withContext(Dispatchers.Default) {
+            if (trafficLights.isEmpty()) {
+                RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION
+            } else {
+                FeatureCollection.fromFeatures(
+                    trafficLights.map { sig ->
+                        Feature.fromGeometry(Point.fromLngLat(sig.lon, sig.lat))
+                    }
+                )
+            }
+        }
+        if (!style.isFullyLoaded) return@LaunchedEffect
+        runCatching {
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_TRAFFIC_LIGHTS)?.setGeoJson(lightsFc)
         }
     }
 
@@ -619,5 +647,19 @@ private fun createRedLightCameraBitmap(): Bitmap {
     canvas.drawCircle(cx, 20f, 5.2f, redLight)
     canvas.drawCircle(cx, 32f, 4.6f, amberLight)
     canvas.drawCircle(cx, 44f, 4.6f, greenLight)
+    return bmp
+}
+
+private fun createVectorDrawableBitmap(
+    context: android.content.Context,
+    drawableResId: Int,
+    widthPx: Int,
+    heightPx: Int
+): Bitmap? {
+    val drawable = ContextCompat.getDrawable(context, drawableResId) ?: return null
+    val bmp = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    drawable.setBounds(0, 0, widthPx, heightPx)
+    drawable.draw(canvas)
     return bmp
 }

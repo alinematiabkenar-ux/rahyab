@@ -256,6 +256,8 @@ object PersianStrings : AppStrings {
     override val diagNoRouteYet = "هنوز در این نشست مسیری محاسبه نشده است."
     override val diagSectionTts = "تبدیل متن به گفتار (TTS)"
     override val diagTtsEngine = "موتور صوتی"
+    override val diagPersianTtsEngine = "موتور صدای فارسی"
+    override val diagEnglishTtsEngine = "موتور صدای انگلیسی"
     override val diagPersianVoiceStatus = "صدای فارسی (fa-IR)"
     override val diagEnglishVoiceStatus = "صدای انگلیسی آمریکایی (en-US)"
     override val diagAvailableLabel = "در دسترس"
@@ -316,4 +318,6 @@ object PersianStrings : AppStrings {
     override val externalLinkNoMatch = "نتیجه آفلاینی پیدا نشد برای"
     override val externalLinkOutsideInstalledStates = "این موقعیت خارج از نقشه‌های نصب‌شده شماست."
     override val externalLinkLabelDefault = "موقعیت اشتراک‌گذاری‌شده"
+    override val showTrafficLightsToggle = "نمایش چراغ‌های راهنمایی"
+    override val trafficLightAheadLabel = "چراغ راهنمایی در پیش"
 }

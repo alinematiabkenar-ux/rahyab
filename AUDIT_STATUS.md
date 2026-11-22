@@ -44,13 +44,21 @@
 | 23 | FIXED | Updated `data-pipeline/build_state_pack.py` to add `direction` & `osm_id` columns to `road_hazards`, extract `highway=speed_camera` nodes and `type=enforcement` (`maxspeed` -> `speed_camera`, `traffic_signals` -> `red_light_camera`) relations with `device` position, `from` travel bearing, `direction` tag, `maxspeed` (mph), deduplication, and printed counts (`.github/workflows/build-map-packs.yml` untouched). |
 | 24 | FIXED | Added zoom >= 13 speed/red-light camera map icons (`SOURCE_CAMERAS`/`LAYER_CAMERAS_SYMBOL`), direction- & lateral-offset-filtered ahead warnings (~315 m city / ~420 m highway, once per camera) in both active navigation/simulation (1x–32x) and free driving, alert chime + EN/FA voice with optional speed limit, two Settings toggles (ON by default) + backup sync, and backward-compatible `PRAGMA table_info` schema probing for older map packs. |
 
-## GROUP 6: OPEN ADDRESSES FROM OTHER APPS — IN PROGRESS
+## GROUP 6: OPEN ADDRESSES FROM OTHER APPS — COMPLETE
 | # | Status | Note |
 |---|---|---|
 | 25 | FIXED | Added `VIEW` intent filters on `MainActivity` for `geo:`, `https` hosts `maps.google.com`, `maps.app.goo.gl`, `maps.apple.com`, path-prefixed `www.google.com/maps` and `google.com/maps`, plus `ACTION_SEND` `text/plain` for the Android Share menu. |
+| 26 | FIXED | Added `ExternalMapIntentParser` and `RahYabViewModel.handleExternalMapIntent` supporting `geo:lat,lon`, `q=`, `ll=`, `@lat,lon`, `!3d/!4d`, offline search with best-result Directions or multi-match picker sheet, online `maps.app.goo.gl` HTTP redirect expansion (with offline prompt to share full address), out-of-coverage missing-state Download prompt, and both cold-start (`onCreate`) and warm-start (`onNewIntent`) handling. |
+| 42 | FIXED | Created offline vector drawable `ic_traffic_light_map.xml` (static red/yellow/green lamps in dark housing), added `queryTrafficSignalsInBounds` with ~15 m intersection clustering, rendered from zoom 15 (`LAYER_TRAFFIC_LIGHTS_SYMBOL` with `icon-allow-overlap: false`), added visual-only ahead pill (~300 ft / 95 m on road, no voice) in navigation & free driving, and added Settings switch "Show traffic lights" (ON by default). |
 
-## GROUP 7: PERSIAN VOICE ENGINE — PENDING
-## GROUP 8: ONLINE FEATURES WITHOUT KEYS — PENDING
+
+
+## GROUP 7: PERSIAN VOICE ENGINE — COMPLETE
+| # | Status | Note |
+|---|---|---|
+| 27 | FIXED | Dual-engine `VoiceGuidanceManager` discovers installed TTS engines via `TextToSpeech.getEngines()` (prefers any `"sherpa"` package with `fa`/`fa-IR` for Persian, `com.google.android.tts` for English, no bundled `sherpa-onnx`), splits mixed Persian/English instructions so street names & highway numbers speak on the English engine in exact order via `UtteranceProgressListener.onDone`, and reports both engines in `DiagnosticsScreen`. |
+
+## GROUP 8: ONLINE FEATURES WITHOUT KEYS — IN PROGRESS
 ## GROUP 9: SIMULATION — PENDING
 ## GROUP 10: DIAGNOSTICS AND REPORTS — PENDING
 ## GROUP 11: GRAPHICS — PENDING

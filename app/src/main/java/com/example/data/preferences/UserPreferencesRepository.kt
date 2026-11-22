@@ -35,6 +35,7 @@ data class UserSettings(
     val alertStopSignEnabled: Boolean = false, // Optional — OFF by default
     val alertSpeedCameraEnabled: Boolean = true,
     val alertRedLightCameraEnabled: Boolean = true,
+    val showTrafficLights: Boolean = true,
     val is3DView: Boolean = true,
     val routePreference: RoutePreference = RoutePreference.FASTEST,
     val avoidTolls: Boolean = false,
@@ -99,6 +100,7 @@ class UserPreferencesRepository(private val context: Context) {
         val ALERT_STOP_SIGN = booleanPreferencesKey("alert_stop_sign")
         val ALERT_SPEED_CAMERA = booleanPreferencesKey("alert_speed_camera")
         val ALERT_RED_LIGHT_CAMERA = booleanPreferencesKey("alert_red_light_camera")
+        val SHOW_TRAFFIC_LIGHTS = booleanPreferencesKey("show_traffic_lights")
         val IS_3D_VIEW = booleanPreferencesKey("is_3d_view")
         val ROUTE_PREFERENCE = stringPreferencesKey("route_preference")
         val AVOID_TOLLS = booleanPreferencesKey("avoid_tolls")
@@ -138,6 +140,7 @@ class UserPreferencesRepository(private val context: Context) {
             alertStopSignEnabled = prefs[Keys.ALERT_STOP_SIGN] ?: false,
             alertSpeedCameraEnabled = prefs[Keys.ALERT_SPEED_CAMERA] ?: true,
             alertRedLightCameraEnabled = prefs[Keys.ALERT_RED_LIGHT_CAMERA] ?: true,
+            showTrafficLights = prefs[Keys.SHOW_TRAFFIC_LIGHTS] ?: true,
             is3DView = prefs[Keys.IS_3D_VIEW] ?: true,
             routePreference = RoutePreference.entries.find { it.code == prefs[Keys.ROUTE_PREFERENCE] }
                 ?: RoutePreference.FASTEST,
@@ -220,6 +223,10 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setAlertRedLightCameraEnabled(enabled: Boolean) {
         context.rahYabDataStore.edit { it[Keys.ALERT_RED_LIGHT_CAMERA] = enabled }
+    }
+
+    suspend fun setShowTrafficLights(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.SHOW_TRAFFIC_LIGHTS] = enabled }
     }
 
     suspend fun set3DView(enabled: Boolean) {

@@ -298,6 +298,8 @@ interface AppStrings {
     val diagNoRouteYet: String
     val diagSectionTts: String
     val diagTtsEngine: String
+    val diagPersianTtsEngine: String
+    val diagEnglishTtsEngine: String
     val diagPersianVoiceStatus: String
     val diagEnglishVoiceStatus: String
     val diagAvailableLabel: String
@@ -361,6 +363,9 @@ interface AppStrings {
     val externalLinkNoMatch: String
     val externalLinkOutsideInstalledStates: String
     val externalLinkLabelDefault: String
+    // Traffic lights on map
+    val showTrafficLightsToggle: String
+    val trafficLightAheadLabel: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

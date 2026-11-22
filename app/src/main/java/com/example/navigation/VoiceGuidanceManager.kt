@@ -14,7 +14,9 @@ import com.example.util.CrashLogManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.ArrayDeque
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
 
 /**
@@ -33,15 +35,40 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
 
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    // Default fallback engine (also used for engine enumeration via getEngines())
     private var tts: TextToSpeech? = null
     @Volatile
     private var isInitialized = false
 
+    // Dedicated Persian engine (e.g. external Sherpa TTS app when installed and supports fa/fa-IR)
+    private var persianTts: TextToSpeech? = null
+    @Volatile
+    private var isPersianEngineReady = false
+    private var persianEnginePkgCandidate: String = ""
+    private var persianEngineLabelCandidate: String = ""
+
+    // Dedicated English engine (Google TTS `com.google.android.tts` when installed)
+    private var englishTts: TextToSpeech? = null
+    @Volatile
+    private var isEnglishEngineReady = false
+    private var englishEnginePkgCandidate: String = ""
+    private var englishEngineLabelCandidate: String = ""
+
     private var activeFocusRequest: AudioFocusRequest? = null
+
+    data class SpeechSegment(
+        val text: String,
+        val isEnglish: Boolean
+    )
 
     data class TtsDiagnosticsInfo(
         val enginePackage: String = "",
         val engineLabel: String = "",
+        val persianEnginePackage: String = "",
+        val persianEngineLabel: String = "",
+        val englishEnginePackage: String = "",
+        val englishEngineLabel: String = "",
         val isInitialized: Boolean = false,
         val isPersianAvailable: Boolean = false,
         val isPersianInstalled: Boolean = false,
@@ -66,6 +93,12 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private var lastOverspeedBeepMs: Long = 0L
     private var lastCameraChimeMs: Long = 0L
 
+    private val speechGeneration = AtomicLong(0L)
+    private val sequenceLock = Any()
+    private val pendingSegments = ArrayDeque<SpeechSegment>()
+    @Volatile
+    private var activeSequenceGeneration: Long = 0L
+
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { }
 
     init {
@@ -80,30 +113,8 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         if (status == TextToSpeech.SUCCESS) {
             runCatching {
                 isInitialized = true
-                tts?.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
-                        requestDuckingFocus()
-                    }
-
-                    override fun onDone(utteranceId: String?) {
-                        abandonDuckingFocus()
-                    }
-
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) {
-                        abandonDuckingFocus()
-                    }
-
-                    override fun onError(utteranceId: String?, errorCode: Int) {
-                        abandonDuckingFocus()
-                    }
-                })
+                configureTtsInstance(tts)
+                discoverAndBindSpecializedEngines()
                 refreshTtsDiagnostics()
                 applyLanguage(resolveEffectiveLanguage(currentLanguage))
             }.onFailure { err ->
@@ -111,6 +122,149 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             }
         }
     }
+
+    private fun configureTtsInstance(engine: TextToSpeech?) {
+        if (engine == null) return
+        runCatching {
+            engine.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    requestDuckingFocus()
+                }
+
+                override fun onDone(utteranceId: String?) {
+                    handleUtteranceFinished(utteranceId)
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    handleUtteranceFinished(utteranceId)
+                }
+
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    handleUtteranceFinished(utteranceId)
+                }
+            })
+        }
+    }
+
+    private fun discoverAndBindSpecializedEngines() {
+        val baseEngine = tts ?: return
+        val engines = runCatching { baseEngine.engines?.toList().orEmpty() }.getOrDefault(emptyList())
+        val defaultPkg = runCatching { baseEngine.defaultEngine.orEmpty() }.getOrDefault("")
+
+        // 1. Persian: prefer any installed engine whose package name contains "sherpa"
+        val sherpaEngine = engines.firstOrNull { it.name.contains("sherpa", ignoreCase = true) }
+        if (sherpaEngine != null) {
+            persianEnginePkgCandidate = sherpaEngine.name
+            persianEngineLabelCandidate = sherpaEngine.label?.takeIf { it.isNotBlank() } ?: sherpaEngine.name
+            if (sherpaEngine.name == defaultPkg) {
+                if (supportsPersian(baseEngine)) {
+                    persianTts = baseEngine
+                    isPersianEngineReady = true
+                }
+            } else {
+                runCatching {
+                    persianTts = TextToSpeech(appContext, { initStatus ->
+                        if (initStatus == TextToSpeech.SUCCESS) {
+                            runCatching {
+                                val candidate = persianTts
+                                if (candidate != null && supportsPersian(candidate)) {
+                                    configureTtsInstance(candidate)
+                                    selectPersianLocale(candidate)
+                                    isPersianEngineReady = true
+                                } else {
+                                    isPersianEngineReady = false
+                                    runCatching { candidate?.shutdown() }
+                                    persianTts = null
+                                }
+                            }.onFailure { err ->
+                                isPersianEngineReady = false
+                                CrashLogManager.logError(appContext, "TTS", "Sherpa Persian TTS setup failed", err)
+                            }
+                        } else {
+                            isPersianEngineReady = false
+                            runCatching { persianTts?.shutdown() }
+                            persianTts = null
+                        }
+                        refreshTtsDiagnostics()
+                    }, sherpaEngine.name)
+                }.onFailure { err ->
+                    isPersianEngineReady = false
+                    CrashLogManager.logError(appContext, "TTS", "Failed to bind Sherpa TTS engine", err)
+                }
+            }
+        }
+
+        // 2. English: prefer Google's engine (com.google.android.tts) if installed, else default
+        val googleEngine = engines.firstOrNull { it.name.equals(GOOGLE_TTS_PACKAGE, ignoreCase = true) }
+        if (googleEngine != null) {
+            englishEnginePkgCandidate = googleEngine.name
+            englishEngineLabelCandidate = googleEngine.label?.takeIf { it.isNotBlank() } ?: googleEngine.name
+            if (googleEngine.name == defaultPkg) {
+                englishTts = baseEngine
+                isEnglishEngineReady = true
+            } else {
+                runCatching {
+                    englishTts = TextToSpeech(appContext, { initStatus ->
+                        if (initStatus == TextToSpeech.SUCCESS) {
+                            runCatching {
+                                val candidate = englishTts
+                                if (candidate != null) {
+                                    configureTtsInstance(candidate)
+                                    candidate.language = Locale.US
+                                    isEnglishEngineReady = true
+                                }
+                            }.onFailure { err ->
+                                isEnglishEngineReady = false
+                                CrashLogManager.logError(appContext, "TTS", "Google English TTS setup failed", err)
+                            }
+                        } else {
+                            isEnglishEngineReady = false
+                            runCatching { englishTts?.shutdown() }
+                            englishTts = null
+                        }
+                        refreshTtsDiagnostics()
+                    }, googleEngine.name)
+                }.onFailure { err ->
+                    isEnglishEngineReady = false
+                    CrashLogManager.logError(appContext, "TTS", "Failed to bind Google TTS engine", err)
+                }
+            }
+        }
+    }
+
+    private fun supportsPersian(engine: TextToSpeech): Boolean {
+        val faIrStatus = runCatching { engine.isLanguageAvailable(Locale.forLanguageTag("fa-IR")) }
+            .getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+        if (faIrStatus >= TextToSpeech.LANG_AVAILABLE) return true
+        val faStatus = runCatching { engine.isLanguageAvailable(Locale.forLanguageTag("fa")) }
+            .getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+        if (faStatus >= TextToSpeech.LANG_AVAILABLE) return true
+        val voices = runCatching { engine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
+        return voices.any { it.locale.language.equals("fa", ignoreCase = true) }
+    }
+
+    private fun selectPersianLocale(engine: TextToSpeech) {
+        val faIr = Locale.forLanguageTag("fa-IR")
+        val faIrStatus = runCatching { engine.isLanguageAvailable(faIr) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+        if (faIrStatus >= TextToSpeech.LANG_AVAILABLE) {
+            runCatching { engine.language = faIr }
+        } else {
+            runCatching { engine.language = Locale.forLanguageTag("fa") }
+        }
+    }
+
+    private fun activePersianEngine(): TextToSpeech? =
+        if (isPersianEngineReady && persianTts != null) persianTts else tts
+
+    private fun activeEnglishEngine(): TextToSpeech? =
+        if (isEnglishEngineReady && englishTts != null) englishTts else tts
 
     private fun requestDuckingFocus() {
         val am = audioManager ?: return
@@ -151,45 +305,75 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun refreshTtsDiagnostics(): TtsDiagnosticsInfo {
-        val engine = tts
-        if (engine == null || !isInitialized) {
+        val baseEngine = tts
+        if (baseEngine == null || !isInitialized) {
             val empty = TtsDiagnosticsInfo(isInitialized = isInitialized)
             _ttsDiagnostics.value = empty
             return empty
         }
         return runCatching {
-            val enginePkg = runCatching { engine.defaultEngine.orEmpty() }.getOrDefault("")
-            val engineLabel = runCatching {
-                val matched = engine.engines?.firstOrNull { it.name == enginePkg }
-                matched?.label?.takeIf { it.isNotBlank() }
-                    ?: if (enginePkg.isNotBlank()) {
-                        val pm = appContext.packageManager
-                        val ai = pm.getApplicationInfo(enginePkg, 0)
-                        pm.getApplicationLabel(ai).toString()
-                    } else ""
-            }.getOrDefault(enginePkg)
+            val defaultPkg = runCatching { baseEngine.defaultEngine.orEmpty() }.getOrDefault("")
+            val enginesList = runCatching { baseEngine.engines?.toList().orEmpty() }.getOrDefault(emptyList())
 
-            val faLocale = Locale.forLanguageTag("fa-IR")
-            val faStatus = runCatching { engine.isLanguageAvailable(faLocale) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
-            val voices = runCatching { engine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
-            val faVoices = voices.filter { it.locale.language.equals("fa", ignoreCase = true) }
+            fun labelForPackage(pkg: String): String {
+                if (pkg.isBlank()) return ""
+                val matched = enginesList.firstOrNull { it.name == pkg }
+                return matched?.label?.takeIf { it.isNotBlank() }
+                    ?: runCatching {
+                        val pm = appContext.packageManager
+                        val ai = pm.getApplicationInfo(pkg, 0)
+                        pm.getApplicationLabel(ai).toString()
+                    }.getOrDefault(pkg)
+            }
+
+            val defaultLabel = labelForPackage(defaultPkg)
+            val faEngine = activePersianEngine() ?: baseEngine
+            val enEngine = activeEnglishEngine() ?: baseEngine
+
+            val faEnginePkg = if (isPersianEngineReady && persianTts != null) persianEnginePkgCandidate else defaultPkg
+            val faEngineLabel = if (isPersianEngineReady && persianTts != null) {
+                persianEngineLabelCandidate.ifBlank { labelForPackage(faEnginePkg) }
+            } else {
+                defaultLabel
+            }
+
+            val enEnginePkg = if (isEnglishEngineReady && englishTts != null) englishEnginePkgCandidate else defaultPkg
+            val enEngineLabel = if (isEnglishEngineReady && englishTts != null) {
+                englishEngineLabelCandidate.ifBlank { labelForPackage(enEnginePkg) }
+            } else {
+                defaultLabel
+            }
+
+            val faLocaleIr = Locale.forLanguageTag("fa-IR")
+            val faLocale = Locale.forLanguageTag("fa")
+            val faStatus = maxOf(
+                runCatching { faEngine.isLanguageAvailable(faLocaleIr) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED),
+                runCatching { faEngine.isLanguageAvailable(faLocale) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+            )
+            val faVoices = runCatching { faEngine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
+                .filter { it.locale.language.equals("fa", ignoreCase = true) }
             val faAvailable = faStatus >= TextToSpeech.LANG_AVAILABLE || faVoices.isNotEmpty()
             val faInstalled = faVoices.any { !it.isNetworkConnectionRequired } ||
                 (faVoices.isEmpty() && faStatus >= TextToSpeech.LANG_AVAILABLE)
 
-            val enStatus = runCatching { engine.isLanguageAvailable(Locale.US) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
-            val enVoices = voices.filter {
-                it.locale.language.equals("en", ignoreCase = true) &&
-                    it.locale.country.equals("US", ignoreCase = true)
-            }
+            val enStatus = runCatching { enEngine.isLanguageAvailable(Locale.US) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+            val enVoices = runCatching { enEngine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
+                .filter {
+                    it.locale.language.equals("en", ignoreCase = true) &&
+                        it.locale.country.equals("US", ignoreCase = true)
+                }
             val enAvailable = enStatus >= TextToSpeech.LANG_AVAILABLE || enVoices.isNotEmpty()
             val enInstalled = enVoices.any { !it.isNetworkConnectionRequired } ||
                 (enVoices.isEmpty() && enStatus >= TextToSpeech.LANG_AVAILABLE)
 
             _isPersianVoiceAvailable.value = faAvailable && faInstalled
             val info = TtsDiagnosticsInfo(
-                enginePackage = enginePkg,
-                engineLabel = engineLabel.ifBlank { enginePkg },
+                enginePackage = defaultPkg,
+                engineLabel = defaultLabel.ifBlank { defaultPkg },
+                persianEnginePackage = faEnginePkg,
+                persianEngineLabel = faEngineLabel.ifBlank { faEnginePkg },
+                englishEnginePackage = enEnginePkg,
+                englishEngineLabel = enEngineLabel.ifBlank { enEnginePkg },
                 isInitialized = true,
                 isPersianAvailable = faAvailable,
                 isPersianInstalled = faInstalled,
@@ -227,17 +411,28 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     fun setVoiceEnabled(enabled: Boolean) {
         voiceEnabled = enabled
         if (!enabled) {
-            tts?.stop()
+            stopAllSpeech()
             abandonDuckingFocus()
         }
     }
 
+    private fun stopAllSpeech() {
+        speechGeneration.incrementAndGet()
+        synchronized(sequenceLock) {
+            pendingSegments.clear()
+        }
+        runCatching { tts?.stop() }
+        if (persianTts != null && persianTts !== tts) runCatching { persianTts?.stop() }
+        if (englishTts != null && englishTts !== tts && englishTts !== persianTts) {
+            runCatching { englishTts?.stop() }
+        }
+    }
+
     private fun applyLanguage(language: AppLanguage) {
-        val engine = tts ?: return
         if (language == AppLanguage.PERSIAN && _isPersianVoiceAvailable.value) {
-            engine.language = Locale.forLanguageTag("fa-IR")
+            activePersianEngine()?.let { selectPersianLocale(it) }
         } else {
-            engine.language = Locale.US
+            runCatching { activeEnglishEngine()?.language = Locale.US }
         }
     }
 
@@ -353,26 +548,22 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     }
 
     /**
-     * Explicitly tests either Persian (`fa-IR`) or American English (`en-US`) voice from the
-     * Diagnostics screen without silently swapping languages.
+     * Explicitly tests either Persian (`fa-IR`, using Sherpa + Google English for street names when
+     * available) or American English (`en-US`, using Google TTS when installed) from Diagnostics.
      */
     fun speakExplicitLanguageTest(targetLanguage: AppLanguage): Boolean {
-        val engine = tts ?: return false
         if (!isInitialized) return false
         val info = refreshTtsDiagnostics()
         if (targetLanguage == AppLanguage.PERSIAN && !info.isPersianAvailable) {
             return false
         }
-        val locale = if (targetLanguage == AppLanguage.PERSIAN) Locale.forLanguageTag("fa-IR") else Locale.US
         val sample = if (targetLanguage == AppLanguage.PERSIAN) {
-            "آزمایش صدای فارسی رهیاب. در نیم مایلی، از خط سمت راست به راست بپیچید."
+            "آزمایش صدای فارسی رهیاب. در نیم مایلی، به راست بپیچید و وارد Main Street شوید."
         } else {
-            "RahYab English voice test. In half a mile, use the right lane to turn right."
+            "RahYab English voice test. In half a mile, use the right lane to turn right onto Main Street."
         }
-        engine.language = locale
-        requestDuckingFocus()
         _lastSpokenText.value = sample
-        engine.speak(sample, TextToSpeech.QUEUE_FLUSH, null, "rahyab_diag_${System.currentTimeMillis()}")
+        speakRaw(sample, targetLanguage)
         return true
     }
 
@@ -398,10 +589,91 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     }
 
     private fun speakRaw(text: String, effectiveLanguage: AppLanguage) {
-        val engine = tts ?: return
-        applyLanguage(effectiveLanguage)
-        requestDuckingFocus()
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rahyab_${System.currentTimeMillis()}")
+        if (text.isBlank()) return
+        runCatching {
+            stopAllSpeech()
+            val gen = speechGeneration.incrementAndGet()
+            activeSequenceGeneration = gen
+
+            val segments = if (effectiveLanguage == AppLanguage.PERSIAN) {
+                splitPersianAndEnglishSegments(text)
+            } else {
+                listOf(SpeechSegment(text = text, isEnglish = true))
+            }
+
+            if (segments.isEmpty()) return
+            synchronized(sequenceLock) {
+                pendingSegments.clear()
+                segments.forEach { pendingSegments.addLast(it) }
+            }
+            requestDuckingFocus()
+            dispatchNextSegment(gen)
+        }.onFailure { err ->
+            CrashLogManager.logError(appContext, "TTS", "speakRaw failed, falling back to default engine", err)
+            runCatching {
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rahyab_fb_${System.currentTimeMillis()}")
+            }
+        }
+    }
+
+    private fun handleUtteranceFinished(utteranceId: String?) {
+        val gen = utteranceId
+            ?.substringAfter("gen_", missingDelimiterValue = "")
+            ?.substringBefore("_")
+            ?.toLongOrNull()
+        if (gen == null || gen != activeSequenceGeneration) {
+            return
+        }
+        dispatchNextSegment(gen)
+    }
+
+    private fun dispatchNextSegment(gen: Long) {
+        if (gen != activeSequenceGeneration) return
+        val next = synchronized(sequenceLock) {
+            if (gen != activeSequenceGeneration || pendingSegments.isEmpty()) null
+            else pendingSegments.removeFirst()
+        }
+        if (next == null) {
+            abandonDuckingFocus()
+            return
+        }
+
+        val engine = if (next.isEnglish) {
+            activeEnglishEngine() ?: tts
+        } else {
+            activePersianEngine() ?: tts
+        }
+        if (engine == null) {
+            abandonDuckingFocus()
+            return
+        }
+
+        val utteranceId = "rahyab_gen_${gen}_${System.nanoTime()}"
+        val spokenOk = runCatching {
+            if (next.isEnglish) {
+                engine.language = Locale.US
+            } else {
+                selectPersianLocale(engine)
+            }
+            val res = engine.speak(next.text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+            res == TextToSpeech.SUCCESS
+        }.onFailure { err ->
+            CrashLogManager.logError(appContext, "TTS", "Segment speak failed (${next.isEnglish})", err)
+        }.getOrDefault(false)
+
+        if (!spokenOk) {
+            // Fall back to default engine for this segment, or advance immediately so queue never stalls
+            val fallbackEngine = tts
+            val fbOk = if (fallbackEngine != null && fallbackEngine !== engine) {
+                runCatching {
+                    fallbackEngine.language = if (next.isEnglish) Locale.US else Locale.forLanguageTag("fa-IR")
+                    fallbackEngine.speak(next.text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) == TextToSpeech.SUCCESS
+                }.getOrDefault(false)
+            } else false
+            if (!fbOk) {
+                dispatchNextSegment(gen)
+            }
+        }
     }
 
     fun resetDeduplication() {
@@ -410,15 +682,70 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     }
 
     fun shutdown() {
+        stopAllSpeech()
         runCatching {
-            tts?.stop()
+            if (persianTts != null && persianTts !== tts) {
+                persianTts?.shutdown()
+            }
+            if (englishTts != null && englishTts !== tts && englishTts !== persianTts) {
+                englishTts?.shutdown()
+            }
             tts?.shutdown()
             abandonDuckingFocus()
         }
+        persianTts = null
+        englishTts = null
         tts = null
+        isPersianEngineReady = false
+        isEnglishEngineReady = false
+        isInitialized = false
     }
 
     companion object {
+        const val GOOGLE_TTS_PACKAGE = "com.google.android.tts"
+
+        private val ENGLISH_TOKEN_REGEX = Regex(
+            """(?:[A-Za-z][A-Za-z0-9'\-./]*|\d+[A-Za-z]+(?:-[A-Za-z0-9]+)*)(?:\s+(?:[A-Za-z0-9][A-Za-z0-9'\-./]*|&))*"""
+        )
+
+        /**
+         * Splits a Persian navigation instruction containing English street names, highway numbers,
+         * or exit codes (e.g. `I-5`, `194B`, `East 22nd Avenue`, `Portland`) into ordered Persian
+         * and English speech segments so each runs on its native TTS engine without long pauses.
+         */
+        fun splitPersianAndEnglishSegments(text: String): List<SpeechSegment> {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) return emptyList()
+
+            val segments = mutableListOf<SpeechSegment>()
+            var cursor = 0
+            for (match in ENGLISH_TOKEN_REGEX.findAll(trimmed)) {
+                val start = match.range.first
+                val end = match.range.last + 1
+                if (start > cursor) {
+                    val faPart = trimmed.substring(cursor, start).trim()
+                    if (faPart.isNotEmpty() && faPart.any { it.isLetterOrDigit() }) {
+                        segments.add(SpeechSegment(faPart, isEnglish = false))
+                    }
+                }
+                val enPart = match.value.trim().trimEnd('.', ',', '،', ';', ':')
+                if (enPart.isNotEmpty()) {
+                    segments.add(SpeechSegment(enPart, isEnglish = true))
+                }
+                cursor = end
+            }
+            if (cursor < trimmed.length) {
+                val tail = trimmed.substring(cursor).trim()
+                if (tail.isNotEmpty() && tail.any { it.isLetterOrDigit() }) {
+                    segments.add(SpeechSegment(tail, isEnglish = false))
+                }
+            }
+            return if (segments.isEmpty()) {
+                listOf(SpeechSegment(trimmed, isEnglish = false))
+            } else {
+                segments
+            }
+        }
         fun formatReroutingPrompt(language: AppLanguage): String =
             if (language == AppLanguage.PERSIAN) "در حال مسیریابی مجدد." else "Rerouting."
 

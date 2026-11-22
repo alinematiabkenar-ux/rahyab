@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="36dp"
+    android:viewportWidth="24"
+    android:viewportHeight="36">
+    <!-- Subtle outer light border for day/night map contrast -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,1 L18,1 C20.21,1 22,2.79 22,5 L22,31 C22,33.21 20.21,35 18,35 L6,35 C3.79,35 2,33.21 2,31 L2,5 C2,2.79 3.79,1 6,1 Z" />
+    <!-- Dark traffic light housing -->
+    <path
+        android:fillColor="#FF1E293B"
+        android:pathData="M6.5,2.5 L17.5,2.5 C19.16,2.5 20.5,3.84 20.5,5.5 L20.5,30.5 C20.5,32.16 19.16,33.5 17.5,33.5 L6.5,33.5 C4.84,33.5 3.5,32.16 3.5,30.5 L3.5,5.5 C3.5,3.84 4.84,2.5 6.5,2.5 Z" />
+    <!-- Red lamp (top) -->
+    <path
+        android:fillColor="#FFEF4444"
+        android:pathData="M12,5.5 A3.5,3.5 0 1,0 12,12.5 A3.5,3.5 0 1,0 12,5.5 Z" />
+    <!-- Yellow lamp (middle) -->
+    <path
+        android:fillColor="#FFFACC15"
+        android:pathData="M12,14.5 A3.5,3.5 0 1,0 12,21.5 A3.5,3.5 0 1,0 12,14.5 Z" />
+    <!-- Green lamp (bottom) -->
+    <path
+        android:fillColor="#FF22C55E"
+        android:pathData="M12,23.5 A3.5,3.5 0 1,0 12,30.5 A3.5,3.5 0 1,0 12,23.5 Z" />
+</vector>

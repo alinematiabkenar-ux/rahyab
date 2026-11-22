@@ -256,6 +256,8 @@ object EnglishStrings : AppStrings {
     override val diagNoRouteYet = "No route calculated in this session yet."
     override val diagSectionTts = "Text-to-Speech (TTS)"
     override val diagTtsEngine = "TTS Engine"
+    override val diagPersianTtsEngine = "Persian TTS Engine"
+    override val diagEnglishTtsEngine = "English TTS Engine"
     override val diagPersianVoiceStatus = "Persian (fa-IR)"
     override val diagEnglishVoiceStatus = "American English (en-US)"
     override val diagAvailableLabel = "Available"
@@ -316,4 +318,6 @@ object EnglishStrings : AppStrings {
     override val externalLinkNoMatch = "No offline match found for"
     override val externalLinkOutsideInstalledStates = "This location is outside your installed state maps."
     override val externalLinkLabelDefault = "Shared Location"
+    override val showTrafficLightsToggle = "Show traffic lights"
+    override val trafficLightAheadLabel = "Traffic light ahead"
 }

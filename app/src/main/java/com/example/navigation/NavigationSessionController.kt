@@ -708,6 +708,37 @@ class NavigationSessionController {
         return nearest to toSpeak
     }
 
+    /**
+     * Visual-only check for an upcoming traffic light on the driver's road within ~300 ft (~95 m)
+     * in the current direction of travel. Never triggers voice guidance.
+     */
+    fun findAheadTrafficLightMeters(
+        fix: GpsFix,
+        trafficLights: List<RoadHazardPoint>
+    ): Double? {
+        if (trafficLights.isEmpty()) return null
+        val hasDirection = fix.hasBearing || fix.speedMps >= 1.5f
+        var bestDist = Double.MAX_VALUE
+        for (sig in trafficLights) {
+            val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, sig.lat, sig.lon)
+            if (dist < 10.0 || dist > TRAFFIC_LIGHT_AHEAD_METERS) continue
+            if (hasDirection) {
+                val bearingToLight = ValhallaResponseParser.bearingDegrees(
+                    LatLon(fix.lat, fix.lon),
+                    LatLon(sig.lat, sig.lon)
+                )
+                val angleDiff = ValhallaResponseParser.angleDiffDegrees(fix.bearing.toDouble(), bearingToLight)
+                if (angleDiff > 35.0) continue
+                val lateralMeters = dist * sin(Math.toRadians(angleDiff))
+                if (lateralMeters > 18.0) continue
+            } else if (dist > 45.0) {
+                continue
+            }
+            if (dist < bestDist) bestDist = dist
+        }
+        return if (bestDist < Double.MAX_VALUE) bestDist else null
+    }
+
     private fun cameraWarningDistanceMeters(isHighway: Boolean): Double =
         if (isHighway) CAMERA_WARN_HIGHWAY_METERS else CAMERA_WARN_CITY_METERS
 
@@ -833,10 +864,6 @@ class NavigationSessionController {
                     "stop_sign", "stop" -> {
                         if (!settings.alertStopSignEnabled) continue
                         Triple(RoadAlertKind.STOP_SIGN, "Stop sign ahead", "جلوتر تابلوی ایست است")
-                    }
-                    "traffic_signal", "traffic_signals" -> {
-                        if (!settings.alertStopSignEnabled) continue
-                        Triple(RoadAlertKind.TRAFFIC_SIGNAL, "Traffic signal ahead", "جلوتر چراغ راهنمایی است")
                     }
                     "toll", "toll_booth" -> {
                         if (!settings.alertTollBoothEnabled) continue
@@ -999,6 +1026,9 @@ class NavigationSessionController {
         /** Speed & red-light camera warning lead distances: ~1,000 ft city, ~0.25 mi highway. */
         const val CAMERA_WARN_CITY_METERS = 315.0
         const val CAMERA_WARN_HIGHWAY_METERS = 420.0
+
+        /** Visual-only traffic light indicator distance (~300 ft ≈ 95 m). */
+        const val TRAFFIC_LIGHT_AHEAD_METERS = 95.0
 
         const val STAGE_ARRIVED = "arrived"
         const val STAGE_HW_2MI = "hw_2mi"
