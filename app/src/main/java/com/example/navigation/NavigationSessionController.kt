@@ -15,9 +15,10 @@ import kotlin.math.max
  *  - Orthogonal segment projection map matching (snap-to-road within 30 m)
  *  - Off-route detection (> 48 m off route for 3 consecutive updates)
  *  - Speed-aware & road-class-aware voice timing:
- *      * Highways: ~2 mi, ~1 mi, ~0.25 mi, and at maneuver
- *      * City streets: ~1,000 ft and just before turn
- *  - Early Sygic-style lane strip visibility (~1 mi highway, ~1,000 ft city) — strictly hidden if no lane data
+ *      * Highways: ~2 mi, ~1 mi (~1.5 km), ~0.5 mi (~800 m), ~0.25 mi (~400 m), and at maneuver
+ *      * Multi-lane / lane-data city turns, exits & forks: ~1 mi (~1.5 km), ~0.5 mi (~800 m), ~1,000 ft (~300 m), and just before turn
+ *      * Small residential streets: ~1,000 ft (~300 m) and just before turn
+ *  - Early Sygic-style lane strip visibility from ~1 mile on both city streets and highways — strictly hidden if no lane data
  *  - Real-geometry enlarged Junction Preview (~0.5 mi before highway exits/splits), respecting Settings & tap-dismiss
  *  - Speed limit tracking (strictly null when OSM maxspeed is absent!) & configurable warning threshold (0 / 5 / 10 mph)
  *  - Road alerts ahead (speed drops, speed-aware sharp curves, tolls, railroad, school zones, optional stop signs/signals)
@@ -31,6 +32,8 @@ class NavigationSessionController {
     private val lastSpokenAlertIds = mutableSetOf<String>()
     private val spokenStagesByManeuver = mutableMapOf<Int, MutableSet<String>>()
     private var trackedRouteId: String? = null
+    private var lastSpokenManeuverIndex: Int = -1
+    private var lastSpokenManeuverTimeMs: Long = 0L
 
     fun reset() {
         offRouteCount = 0
@@ -38,6 +41,18 @@ class NavigationSessionController {
         lastSpokenAlertIds.clear()
         spokenStagesByManeuver.clear()
         trackedRouteId = null
+        lastSpokenManeuverIndex = -1
+        lastSpokenManeuverTimeMs = 0L
+    }
+
+    /**
+     * Records that an external navigation prompt (such as initial route departure or reroute
+     * announcement) was just spoken so an immediate follow-up maneuver prompt waits briefly
+     * instead of interrupting it at the exact same moment.
+     */
+    fun markExternalPromptSpoken(timestampMs: Long = System.currentTimeMillis()) {
+        lastSpokenManeuverIndex = EXTERNAL_PROMPT_MANEUVER_INDEX
+        lastSpokenManeuverTimeMs = timestampMs
     }
 
     data class UpdateResult(
@@ -77,6 +92,8 @@ class NavigationSessionController {
         if (trackedRouteId != route.id) {
             spokenStagesByManeuver.clear()
             trackedRouteId = route.id
+            lastSpokenManeuverIndex = -1
+            lastSpokenManeuverTimeMs = 0L
         }
 
         // 1. Orthogonal projection map matching (snap-to-road)
@@ -114,11 +131,11 @@ class NavigationSessionController {
         val upcomingManeuver = route.maneuvers[upcomingManeuverIdx]
 
         // 4. Distance & live speed-blended ETA
-        val distToNextManeuver = polylineDistanceMeters(route.shape, bestIdx, upcomingManeuver.beginShapeIndex)
+        val distToNextManeuver = polylineDistanceFromPoint(route.shape, snappedLoc, bestIdx, upcomingManeuver.beginShapeIndex)
             .coerceAtLeast(
                 OfflinePlaceSearchEngine.haversineMeters(snappedLoc.lat, snappedLoc.lon, upcomingManeuver.lat, upcomingManeuver.lon)
             )
-        val remainingDistance = polylineDistanceMeters(route.shape, bestIdx, route.shape.lastIndex)
+        val remainingDistance = polylineDistanceFromPoint(route.shape, snappedLoc, bestIdx, route.shape.lastIndex)
         val fractionRemaining = if (route.distanceMeters > 1.0) {
             (remainingDistance / route.distanceMeters).coerceIn(0.0, 1.0)
         } else 0.0
@@ -140,41 +157,107 @@ class NavigationSessionController {
         val distToDest = OfflinePlaceSearchEngine.haversineMeters(snappedLoc.lat, snappedLoc.lon, destPoint.lat, destPoint.lon)
         val hasArrived = distToDest < 35.0 && remainingDistance < 60.0
 
-        // 6. Speed-aware & road-class-aware voice timing
-        // Never speak maneuver prompts while moving under 2 mph, and speak each stage only once per maneuver.
+        // 6. Speed-aware & road-class-aware voice timing with early lane-change warnings
+        // Never speak maneuver prompts while moving under 2 mph, speak each stage only once per
+        // maneuver, and never announce two different maneuvers at the same moment.
         val isHighway = upcomingManeuver.isHighwayRoad || fix.speedMps >= 20f
+        val approachManeuver = route.maneuvers.getOrNull(upcomingManeuverIdx - 1)
+        val hasLaneData = upcomingManeuver.lanes.isNotEmpty()
+        val isMultiLaneCityRoad = upcomingManeuver.laneCount >= 2 ||
+            upcomingManeuver.isMultiLaneRoad ||
+            (approachManeuver?.laneCount ?: 0) >= 2 ||
+            (approachManeuver?.isMultiLaneRoad == true) ||
+            ((approachManeuver?.speedLimitMph ?: upcomingManeuver.speedLimitMph ?: 0) >= 35)
+        val isEligibleForEarlyCityWarning = !isHighway &&
+            isEarlyWarningManeuverType(upcomingManeuver.type) &&
+            (hasLaneData || isMultiLaneCityRoad)
+
+        val isMetric = unit == DistanceUnit.METRIC
+        val earlyFarRange = if (isMetric) 1380.0..1650.0 else 1450.0..1780.0
+        val earlyMidRange = if (isMetric) 720.0..880.0 else 720.0..920.0
+        val hwQuarterRange = if (isMetric) 340.0..470.0 else 340.0..490.0
+        val cityNearRange = if (isMetric) 250.0..350.0 else 260.0..365.0
         val speedLeadMeters = max(0.0, fix.speedMps * 4.5)
+        val spokenForManeuver = spokenStagesByManeuver.getOrPut(upcomingManeuver.index) { mutableSetOf() }
+
         val rawStageKey: String? = when {
-            hasArrived -> "arrived"
+            hasArrived -> STAGE_ARRIVED
             fix.speedMps < MIN_VOICE_SPEED_MPS -> null
             isHighway -> when {
-                distToNextManeuver in (2950.0..3450.0) -> "hw_2mi"
-                distToNextManeuver in (1450.0..1780.0) -> "hw_1mi"
-                distToNextManeuver in (340.0..490.0) -> "hw_quarter_mi"
-                distToNextManeuver <= max(110.0, speedLeadMeters) -> "hw_now"
+                distToNextManeuver <= max(110.0, speedLeadMeters) -> STAGE_HW_NOW
+                distToNextManeuver in hwQuarterRange -> STAGE_HW_QUARTER_MI
+                distToNextManeuver in earlyMidRange -> STAGE_HW_HALF_MI
+                distToNextManeuver in earlyFarRange -> STAGE_HW_1MI
+                distToNextManeuver in (2950.0..3450.0) -> STAGE_HW_2MI
+                // Short spacing after previous maneuver: never skip early warning; speak with real distance
+                distToNextManeuver > earlyMidRange.endInclusive + EARLY_CATCHUP_BUFFER_METERS &&
+                    distToNextManeuver < earlyFarRange.start &&
+                    STAGE_HW_1MI !in spokenForManeuver -> STAGE_HW_1MI
+                distToNextManeuver > earlyMidRange.endInclusive &&
+                    distToNextManeuver <= earlyMidRange.endInclusive + EARLY_CATCHUP_BUFFER_METERS &&
+                    STAGE_HW_1MI !in spokenForManeuver &&
+                    STAGE_HW_HALF_MI !in spokenForManeuver -> STAGE_HW_HALF_MI
+                distToNextManeuver > hwQuarterRange.endInclusive + NEAR_CATCHUP_BUFFER_METERS &&
+                    distToNextManeuver < earlyMidRange.start &&
+                    STAGE_HW_HALF_MI !in spokenForManeuver -> STAGE_HW_HALF_MI
+                else -> null
+            }
+            isEligibleForEarlyCityWarning -> when {
+                distToNextManeuver <= max(55.0, fix.speedMps * 4.0) -> STAGE_CITY_NOW
+                distToNextManeuver in cityNearRange -> STAGE_CITY_1000FT
+                distToNextManeuver in earlyMidRange -> STAGE_CITY_HALF_MI
+                distToNextManeuver in earlyFarRange -> STAGE_CITY_1MI
+                // Short spacing after previous maneuver: speak early warning immediately with real distance
+                distToNextManeuver > earlyMidRange.endInclusive + EARLY_CATCHUP_BUFFER_METERS &&
+                    distToNextManeuver < earlyFarRange.start &&
+                    STAGE_CITY_1MI !in spokenForManeuver -> STAGE_CITY_1MI
+                distToNextManeuver > earlyMidRange.endInclusive &&
+                    distToNextManeuver <= earlyMidRange.endInclusive + EARLY_CATCHUP_BUFFER_METERS &&
+                    STAGE_CITY_1MI !in spokenForManeuver &&
+                    STAGE_CITY_HALF_MI !in spokenForManeuver -> STAGE_CITY_HALF_MI
+                distToNextManeuver > cityNearRange.endInclusive + NEAR_CATCHUP_BUFFER_METERS &&
+                    distToNextManeuver < earlyMidRange.start &&
+                    STAGE_CITY_HALF_MI !in spokenForManeuver -> STAGE_CITY_HALF_MI
                 else -> null
             }
             else -> when {
-                distToNextManeuver in (260.0..365.0) -> "city_1000ft"
-                distToNextManeuver <= max(55.0, fix.speedMps * 4.0) -> "city_now"
+                distToNextManeuver <= max(55.0, fix.speedMps * 4.0) -> STAGE_CITY_NOW
+                distToNextManeuver in cityNearRange -> STAGE_CITY_1000FT
                 else -> null
             }
         }
-        val maneuverToSpeak = rawStageKey?.let { stage ->
-            val spokenForManeuver = spokenStagesByManeuver.getOrPut(upcomingManeuver.index) { mutableSetOf() }
-            if (spokenForManeuver.add(stage)) {
-                upcomingManeuver to stage
+
+        val eventTimeMs = if (fix.timestampMs > 0L) fix.timestampMs else now
+        val isDifferentManeuver = lastSpokenManeuverIndex != -1 && lastSpokenManeuverIndex != upcomingManeuver.index
+        val elapsedSinceLastSpokenMs = eventTimeMs - lastSpokenManeuverTimeMs
+        val requiredCooldownMs = when (rawStageKey) {
+            STAGE_ARRIVED -> 0L
+            STAGE_CITY_NOW, STAGE_HW_NOW -> IMMEDIATE_INTER_MANEUVER_COOLDOWN_MS
+            else -> INTER_MANEUVER_COOLDOWN_MS
+        }
+        val isBlockedByOverlapGuard = rawStageKey != null &&
+            isDifferentManeuver &&
+            requiredCooldownMs > 0L &&
+            elapsedSinceLastSpokenMs in 0L until requiredCooldownMs
+
+        val maneuverToSpeak = if (rawStageKey != null && !isBlockedByOverlapGuard) {
+            if (spokenForManeuver.add(rawStageKey)) {
+                markPassedEarlierStages(spokenForManeuver, rawStageKey)
+                lastSpokenManeuverIndex = upcomingManeuver.index
+                lastSpokenManeuverTimeMs = eventTimeMs
+                upcomingManeuver to rawStageKey
             } else {
                 null
             }
+        } else {
+            null
         }
 
-        // 7. Phase 3: Early Sygic-style Lane Strip visibility (~1 mi highway, ~1,000 ft city)
+        // 7. Phase 3: Early Sygic-style Lane Strip visibility from ~1 mile on BOTH city streets and highways
         // Strictly hidden if `upcomingManeuver.lanes` is empty — NEVER invented!
-        val laneWindowMeters = if (upcomingManeuver.isHighwayExitOrSplit || isHighway) 1750.0 else 380.0
         val showLaneStrip = !hasArrived &&
             upcomingManeuver.lanes.isNotEmpty() &&
-            distToNextManeuver <= laneWindowMeters
+            distToNextManeuver <= LANE_STRIP_WINDOW_METERS
 
         // 8. Phase 3: Enlarged Junction Preview (~0.5 mi / 850 m before highway exits & complex splits)
         val isDismissedForThisManeuver = currentState.dismissedJunctionManeuverIndex == upcomingManeuver.index
@@ -251,12 +334,13 @@ class NavigationSessionController {
         val (newIdx, newLoc, newBearing) = advanceAlongShape(
             shape = route.shape,
             startIndex = currentState.snappedShapeIndex,
-            distanceMeters = advanceMeters
+            distanceMeters = advanceMeters,
+            currentLocation = currentState.snappedLocation
         )
-        val remainingDist = polylineDistanceMeters(route.shape, newIdx, route.shape.lastIndex)
+        val remainingDist = polylineDistanceFromPoint(route.shape, newLoc, newIdx, route.shape.lastIndex)
         val upcoming = route.maneuvers.getOrNull(currentState.currentManeuverIndex)
         val distToNext = if (upcoming != null) {
-            polylineDistanceMeters(route.shape, newIdx, upcoming.beginShapeIndex)
+            polylineDistanceFromPoint(route.shape, newLoc, newIdx, upcoming.beginShapeIndex)
         } else 0.0
 
         return currentState.copy(
@@ -288,10 +372,11 @@ class NavigationSessionController {
             else -> 15.6f // ~35 mph city street
         }
 
-        val (nextIdx, baseLoc, bearing) = advanceAlongShape(
+        val (_, baseLoc, bearing) = advanceAlongShape(
             shape = route.shape,
             startIndex = currentState.snappedShapeIndex,
-            distanceMeters = targetSpeedMps * elapsedSeconds
+            distanceMeters = targetSpeedMps * elapsedSeconds,
+            currentLocation = currentState.snappedLocation
         )
 
         val finalLoc = if (wrongTurnOffsetMeters > 0.0) {
@@ -362,27 +447,30 @@ class NavigationSessionController {
     private fun advanceAlongShape(
         shape: List<LatLon>,
         startIndex: Int,
-        distanceMeters: Double
+        distanceMeters: Double,
+        currentLocation: LatLon? = null
     ): Triple<Int, LatLon, Float> {
         var idx = startIndex.coerceIn(0, shape.lastIndex)
         var remaining = distanceMeters
+        var curPt = currentLocation ?: shape[idx]
         while (idx < shape.lastIndex && remaining > 0.0) {
-            val a = shape[idx]
-            val b = shape[idx + 1]
-            val segLen = OfflinePlaceSearchEngine.haversineMeters(a.lat, a.lon, b.lat, b.lon)
+            val nextPt = shape[idx + 1]
+            val segLen = OfflinePlaceSearchEngine.haversineMeters(curPt.lat, curPt.lon, nextPt.lat, nextPt.lon)
             if (segLen <= 0.1) {
                 idx++
+                curPt = shape[idx]
                 continue
             }
             if (remaining < segLen) {
                 val frac = remaining / segLen
-                val lat = a.lat + (b.lat - a.lat) * frac
-                val lon = a.lon + (b.lon - a.lon) * frac
-                val bearing = ValhallaResponseParser.bearingDegrees(a, b).toFloat()
+                val lat = curPt.lat + (nextPt.lat - curPt.lat) * frac
+                val lon = curPt.lon + (nextPt.lon - curPt.lon) * frac
+                val bearing = ValhallaResponseParser.bearingDegrees(curPt, nextPt).toFloat()
                 return Triple(idx, LatLon(lat, lon), bearing)
             }
             remaining -= segLen
             idx++
+            curPt = shape[idx]
         }
         val last = shape.last()
         val prev = shape.getOrElse(shape.lastIndex - 1) { last }
@@ -508,6 +596,21 @@ class NavigationSessionController {
         return ValhallaResponseParser.angleDiffDegrees(fix.bearing.toDouble(), bearingToTarget) <= 75.0
     }
 
+    private fun polylineDistanceFromPoint(
+        shape: List<LatLon>,
+        fromPoint: LatLon,
+        fromSegIdx: Int,
+        toIdx: Int
+    ): Double {
+        if (shape.size < 2 || fromSegIdx >= toIdx) return 0.0
+        val nextVertexIdx = (fromSegIdx + 1).coerceAtMost(toIdx).coerceIn(0, shape.lastIndex)
+        val firstHop = OfflinePlaceSearchEngine.haversineMeters(
+            fromPoint.lat, fromPoint.lon,
+            shape[nextVertexIdx].lat, shape[nextVertexIdx].lon
+        )
+        return firstHop + polylineDistanceMeters(shape, nextVertexIdx, toIdx)
+    }
+
     private fun polylineDistanceMeters(shape: List<LatLon>, fromIdx: Int, toIdx: Int): Double {
         if (shape.size < 2 || fromIdx >= toIdx) return 0.0
         val start = fromIdx.coerceIn(0, shape.lastIndex)
@@ -521,11 +624,85 @@ class NavigationSessionController {
         return sum
     }
 
+    private fun markPassedEarlierStages(spokenStages: MutableSet<String>, currentStage: String) {
+        when (currentStage) {
+            STAGE_HW_1MI -> spokenStages.add(STAGE_HW_2MI)
+            STAGE_HW_HALF_MI -> {
+                spokenStages.add(STAGE_HW_2MI)
+                spokenStages.add(STAGE_HW_1MI)
+            }
+            STAGE_HW_QUARTER_MI -> {
+                spokenStages.add(STAGE_HW_2MI)
+                spokenStages.add(STAGE_HW_1MI)
+                spokenStages.add(STAGE_HW_HALF_MI)
+            }
+            STAGE_HW_NOW -> {
+                spokenStages.add(STAGE_HW_2MI)
+                spokenStages.add(STAGE_HW_1MI)
+                spokenStages.add(STAGE_HW_HALF_MI)
+                spokenStages.add(STAGE_HW_QUARTER_MI)
+            }
+            STAGE_CITY_HALF_MI -> spokenStages.add(STAGE_CITY_1MI)
+            STAGE_CITY_1000FT -> {
+                spokenStages.add(STAGE_CITY_1MI)
+                spokenStages.add(STAGE_CITY_HALF_MI)
+            }
+            STAGE_CITY_NOW -> {
+                spokenStages.add(STAGE_CITY_1MI)
+                spokenStages.add(STAGE_CITY_HALF_MI)
+                spokenStages.add(STAGE_CITY_1000FT)
+            }
+        }
+    }
+
     companion object {
         /** 2 mph in meters per second — below this speed, maneuver prompts are suppressed after startup. */
         const val MIN_VOICE_SPEED_MPS = 0.89408f
 
         /** 3 mph in meters per second — below this speed, GPS drift will not trigger rerouting. */
         const val MIN_REROUTE_SPEED_MPS = 1.34112f
+
+        /** Lane strip visibility distance (~1 mile / ~1.6 km) for both city streets and highways. */
+        const val LANE_STRIP_WINDOW_METERS = 1750.0
+
+        /** Minimum gap before announcing a different maneuver's early/advance prompt. */
+        const val INTER_MANEUVER_COOLDOWN_MS = 3_000L
+
+        /** Minimum gap before announcing a different maneuver's immediate turn prompt. */
+        const val IMMEDIATE_INTER_MANEUVER_COOLDOWN_MS = 1_500L
+
+        private const val EARLY_CATCHUP_BUFFER_METERS = 100.0
+        private const val NEAR_CATCHUP_BUFFER_METERS = 50.0
+        private const val EXTERNAL_PROMPT_MANEUVER_INDEX = -2
+
+        const val STAGE_ARRIVED = "arrived"
+        const val STAGE_HW_2MI = "hw_2mi"
+        const val STAGE_HW_1MI = "hw_1mi"
+        const val STAGE_HW_HALF_MI = "hw_half_mi"
+        const val STAGE_HW_QUARTER_MI = "hw_quarter_mi"
+        const val STAGE_HW_NOW = "hw_now"
+        const val STAGE_CITY_1MI = "city_1mi"
+        const val STAGE_CITY_HALF_MI = "city_half_mi"
+        const val STAGE_CITY_1000FT = "city_1000ft"
+        const val STAGE_CITY_NOW = "city_now"
+
+        private val EARLY_WARNING_MANEUVER_TYPES = setOf(
+            ManeuverType.LEFT,
+            ManeuverType.SLIGHT_LEFT,
+            ManeuverType.SHARP_LEFT,
+            ManeuverType.RIGHT,
+            ManeuverType.SLIGHT_RIGHT,
+            ManeuverType.SHARP_RIGHT,
+            ManeuverType.U_TURN_LEFT,
+            ManeuverType.U_TURN_RIGHT,
+            ManeuverType.EXIT_LEFT,
+            ManeuverType.EXIT_RIGHT,
+            ManeuverType.RAMP_LEFT,
+            ManeuverType.RAMP_RIGHT,
+            ManeuverType.STAY_LEFT,
+            ManeuverType.STAY_RIGHT
+        )
+
+        fun isEarlyWarningManeuverType(type: ManeuverType): Boolean = type in EARLY_WARNING_MANEUVER_TYPES
     }
 }

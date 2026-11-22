@@ -578,7 +578,50 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         val safeIndex = index.coerceIn(0, routes.lastIndex)
         if (_selectedRouteIndex.value != safeIndex) {
             _selectedRouteIndex.value = safeIndex
+            // If actively navigating and switching to an alternative route, keep the same
+            // running foreground service and only refresh the route & notification.
+            if (_navigationState.value.isNavigating) {
+                switchActiveNavigationRoute(routes[safeIndex])
+            }
         }
+    }
+
+    private fun switchActiveNavigationRoute(newRoute: OfflineRoute) {
+        val dest = _selectedPlace.value ?: return
+        val s = settings.value
+        navController.reset()
+        voiceManager.resetDeduplication()
+        val initialManeuver = newRoute.maneuvers.firstOrNull()
+        val startLoc = _navigationState.value.snappedLocation
+            ?: newRoute.shape.firstOrNull()
+            ?: getEffectiveReferenceLocation()
+
+        _navigationState.value = _navigationState.value.copy(
+            route = newRoute,
+            currentManeuverIndex = 0,
+            snappedShapeIndex = 0,
+            isOffRoute = false,
+            isRerouting = false,
+            distanceToNextManeuverMeters = initialManeuver?.lengthMeters ?: newRoute.distanceMeters,
+            timeToNextManeuverSeconds = initialManeuver?.timeSeconds ?: newRoute.durationSeconds,
+            remainingDistanceMeters = newRoute.distanceMeters,
+            remainingTimeSeconds = newRoute.durationSeconds,
+            snappedLocation = startLoc,
+            currentSpeedLimitMph = initialManeuver?.speedLimitMph,
+            showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true,
+            dismissedJunctionManeuverIndex = -1
+        )
+
+        val firstInstruction = initialManeuver?.streetNames?.firstOrNull()?.ifBlank { initialManeuver.instructionEn }
+            ?: initialManeuver?.instructionEn
+            ?: dest.name
+        val etaText = BilingualFormatter.formatDuration(newRoute.durationSeconds, s.language)
+        NavigationForegroundService.updateNotification(
+            context = app,
+            title = "${dest.name} • $etaText",
+            body = firstInstruction,
+            force = true
+        )
     }
 
     fun startNavigation() {
@@ -588,6 +631,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         val route = routes[safeIdx]
         val dest = _selectedPlace.value ?: return
         val s = settings.value
+        val wasAlreadyNavigating = _navigationState.value.isNavigating
 
         stopInternalNavJobs()
         navController.reset()
@@ -599,6 +643,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         simulatedWrongTurnTicksRemaining = 0
 
         val initialManeuver = route.maneuvers.firstOrNull()
+        val initialDist = initialManeuver?.lengthMeters ?: route.distanceMeters
         val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
         _navigationState.value = ActiveNavigationState(
             isNavigating = true,
@@ -606,14 +651,15 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             destinationName = dest.name,
             destinationAddress = dest.formattedAddress,
             currentManeuverIndex = 0,
-            distanceToNextManeuverMeters = initialManeuver?.lengthMeters ?: route.distanceMeters,
+            distanceToNextManeuverMeters = initialDist,
             timeToNextManeuverSeconds = initialManeuver?.timeSeconds ?: route.durationSeconds,
             remainingDistanceMeters = route.distanceMeters,
             remainingTimeSeconds = route.durationSeconds,
             snappedLocation = startLoc,
             currentSpeedLimitMph = initialManeuver?.speedLimitMph,
             isSimulatingDrive = s.simulateDriveEnabled,
-            showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true
+            showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true &&
+                initialDist <= NavigationSessionController.LANE_STRIP_WINDOW_METERS
         )
 
         // Pre-fetch road hazards (railroad crossings, school zones, stop signs, traffic signals) along route
@@ -627,18 +673,28 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Start foreground service notification (foregroundServiceType="location", no ACCESS_BACKGROUND_LOCATION)
+        // Start foreground service ONLY once when navigation begins; if already running, only update notification
         val firstInstruction = initialManeuver?.instructionEn ?: dest.name
         val etaText = BilingualFormatter.formatDuration(route.durationSeconds, s.language)
-        NavigationForegroundService.startOrUpdate(
-            context = app,
-            title = "${dest.name} • $etaText",
-            body = firstInstruction
-        )
+        if (wasAlreadyNavigating) {
+            NavigationForegroundService.updateNotification(
+                context = app,
+                title = "${dest.name} • $etaText",
+                body = firstInstruction,
+                force = true
+            )
+        } else {
+            NavigationForegroundService.startOrUpdate(
+                context = app,
+                title = "${dest.name} • $etaText",
+                body = firstInstruction
+            )
+        }
 
         // Announce clear departure instruction with compass direction, starting street, and next turn
         val spoken = voiceManager.speakStartInstruction(route, s.language)
         if (spoken.isNotBlank()) {
+            navController.markExternalPromptSpoken()
             _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
         }
 
@@ -800,7 +856,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Update persistent foreground notification
+        // Update persistent foreground notification directly via NotificationManagerCompat.notify()
+        // (never calls startForegroundService() again; throttled to >= 2s and only when text changes)
         val currentManeuver = result.state.currentManeuver
         if (currentManeuver != null && result.state.isNavigating) {
             val distStr = BilingualFormatter.formatDistance(
@@ -809,7 +866,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 s.language
             )
             val etaStr = BilingualFormatter.formatDuration(result.state.remainingTimeSeconds, s.language)
-            NavigationForegroundService.startOrUpdate(
+            NavigationForegroundService.updateNotification(
                 context = app,
                 title = "$distStr • $etaStr",
                 body = currentManeuver.streetNames.firstOrNull()?.ifBlank { currentManeuver.instructionEn }
@@ -861,6 +918,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                 navController.reset()
                 voiceManager.resetDeduplication()
                 val spoken = voiceManager.speakStartInstruction(newRoute, s.language)
+                if (spoken.isNotBlank()) {
+                    navController.markExternalPromptSpoken()
+                }
                 _navigationState.value = _navigationState.value.copy(
                     route = newRoute,
                     currentManeuverIndex = 0,
@@ -871,6 +931,17 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
                     remainingTimeSeconds = newRoute.durationSeconds,
                     dismissedJunctionManeuverIndex = -1,
                     lastSpokenInstruction = spoken.ifBlank { _navigationState.value.lastSpokenInstruction }
+                )
+                // Keep the same running foreground service alive during reroute — only update notification
+                val firstManeuver = newRoute.maneuvers.firstOrNull()
+                val etaStr = BilingualFormatter.formatDuration(newRoute.durationSeconds, s.language)
+                NavigationForegroundService.updateNotification(
+                    context = app,
+                    title = "${dest.name} • $etaStr",
+                    body = firstManeuver?.streetNames?.firstOrNull()?.ifBlank { firstManeuver.instructionEn }
+                        ?: firstManeuver?.instructionEn
+                        ?: dest.name,
+                    force = true
                 )
             }.onFailure {
                 _navigationState.value = _navigationState.value.copy(isRerouting = false)

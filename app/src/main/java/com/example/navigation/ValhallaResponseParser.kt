@@ -296,6 +296,17 @@ object ValhallaResponseParser {
                 val lengthKm = mObj.optDouble("length", 0.0)
                 val timeSec = mObj.optDouble("time", 0.0)
 
+                val explicitLaneCount = maxOf(
+                    mObj.optInt("lane_count", 0),
+                    mObj.optInt("lanes_count", 0),
+                    mObj.optInt("lanes_forward", 0),
+                    resolvedLanes.size
+                )
+                val isMultiLaneRoad = explicitLaneCount >= 2 ||
+                    isHighwayFlag ||
+                    isExitOrSplit ||
+                    (speedLimitMph != null && speedLimitMph >= 35)
+
                 combinedManeuvers.add(
                     RouteManeuver(
                         index = maneuverCounter++,
@@ -314,7 +325,9 @@ object ValhallaResponseParser {
                         isHighwayRoad = isHighwayFlag || isExitOrSplit,
                         roundaboutExitCount = roundaboutExitCount,
                         hasToll = isToll,
-                        speedLimitMph = speedLimitMph
+                        speedLimitMph = speedLimitMph,
+                        laneCount = explicitLaneCount,
+                        isMultiLaneRoad = isMultiLaneRoad
                     )
                 )
             }

@@ -81,7 +81,9 @@ data class RouteManeuver(
     val isHighwayRoad: Boolean = false,
     val roundaboutExitCount: Int? = null,
     val hasToll: Boolean = false,
-    val speedLimitMph: Int? = null
+    val speedLimitMph: Int? = null,
+    val laneCount: Int = lanes.size,
+    val isMultiLaneRoad: Boolean = lanes.size >= 2
 )
 
 enum class RoadAlertKind {

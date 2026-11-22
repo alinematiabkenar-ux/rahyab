@@ -179,7 +179,8 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             distanceMeters = distanceMeters,
             unit = unit,
             language = effectiveLanguage,
-            includeLaneGuidance = includeLaneGuidance
+            includeLaneGuidance = includeLaneGuidance,
+            announcementStage = announcementStage
         )
         _lastSpokenText.value = utterance
 
@@ -415,19 +416,29 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             }
         }
 
+        fun isEarlyPrepareStage(stage: String): Boolean =
+            stage == NavigationSessionController.STAGE_CITY_1MI ||
+                stage == NavigationSessionController.STAGE_CITY_HALF_MI ||
+                stage == NavigationSessionController.STAGE_HW_1MI ||
+                stage == NavigationSessionController.STAGE_HW_HALF_MI ||
+                stage == NavigationSessionController.STAGE_HW_2MI
+
         /**
          * Builds natural American English or natural spoken Persian turn-by-turn prompts,
-         * integrating real lane guidance when available (and omitting lane advice when absent).
+         * integrating real lane guidance when available, and using directional "prepare to..."
+         * phrasing for early warnings when lane data is absent (NEVER inventing lanes).
          */
         fun formatSpokenInstruction(
             maneuver: RouteManeuver,
             distanceMeters: Double,
             unit: DistanceUnit,
             language: AppLanguage,
-            includeLaneGuidance: Boolean = true
+            includeLaneGuidance: Boolean = true,
+            announcementStage: String = ""
         ): String {
             val distPhrase = formatSpokenDistance(distanceMeters, unit, language)
             val lanePhrase = if (includeLaneGuidance) buildLaneVoiceClause(maneuver.lanes, language) else null
+            val isEarlyPrepare = lanePhrase.isNullOrBlank() && isEarlyPrepareStage(announcementStage)
             val exitNum = maneuver.signpost?.primaryExitNumber
             val toward = maneuver.signpost?.exitTowards?.firstOrNull().orEmpty()
             val roadName = maneuver.streetNames.firstOrNull().orEmpty()
@@ -437,6 +448,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     type = maneuver.type,
                     distPhrase = distPhrase,
                     lanePhrase = lanePhrase,
+                    isEarlyPrepare = isEarlyPrepare,
                     exitNum = exitNum,
                     toward = toward,
                     roadName = roadName,
@@ -447,6 +459,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     type = maneuver.type,
                     distPhrase = distPhrase,
                     lanePhrase = lanePhrase,
+                    isEarlyPrepare = isEarlyPrepare,
                     exitNum = exitNum,
                     toward = toward,
                     roadName = roadName,
@@ -459,6 +472,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             type: ManeuverType,
             distPhrase: String,
             lanePhrase: String?,
+            isEarlyPrepare: Boolean,
             exitNum: String?,
             toward: String,
             roadName: String,
@@ -525,10 +539,18 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                 else -> if (roadName.isNotBlank()) "continue on $roadName" else "continue straight"
             }
 
-            val sentence = if (!lanePhrase.isNullOrBlank()) {
-                "${prefix}use $lanePhrase to $core."
-            } else {
-                "${prefix}$core."
+            val sentence = when {
+                !lanePhrase.isNullOrBlank() -> "${prefix}use $lanePhrase to $core."
+                isEarlyPrepare && type != ManeuverType.STRAIGHT && type != ManeuverType.DEPART -> {
+                    if (type == ManeuverType.ROUNDABOUT) {
+                        val ordinal = englishOrdinal(roundaboutExit ?: 1)
+                        val exitTarget = if (roadName.isNotBlank()) " onto $roadName" else ""
+                        "${prefix}prepare to take the $ordinal exit at the roundabout$exitTarget."
+                    } else {
+                        "${prefix}prepare to $core."
+                    }
+                }
+                else -> "${prefix}$core."
             }
             return sentence.replaceFirstChar { it.uppercase() }
         }
@@ -540,6 +562,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             type: ManeuverType,
             distPhrase: String,
             lanePhrase: String?,
+            isEarlyPrepare: Boolean,
             exitNum: String?,
             toward: String,
             roadName: String,
@@ -576,6 +599,62 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     else -> null
                 }
                 if (integrated != null) return integrated
+            }
+
+            // Early warning WITHOUT lane data: never invent lanes — advise only the direction to prepare for
+            if (isEarlyPrepare) {
+                val prepareSentence = when (type) {
+                    ManeuverType.RIGHT ->
+                        if (roadName.isNotBlank()) "${prefix}برای پیچیدن به راست به سمت $roadName آماده شوید."
+                        else "${prefix}برای پیچیدن به راست آماده شوید."
+                    ManeuverType.LEFT ->
+                        if (roadName.isNotBlank()) "${prefix}برای پیچیدن به چپ به سمت $roadName آماده شوید."
+                        else "${prefix}برای پیچیدن به چپ آماده شوید."
+                    ManeuverType.SLIGHT_RIGHT ->
+                        if (roadName.isNotBlank()) "${prefix}برای متمایل شدن به راست به سمت $roadName آماده شوید."
+                        else "${prefix}برای متمایل شدن به راست آماده شوید."
+                    ManeuverType.SLIGHT_LEFT ->
+                        if (roadName.isNotBlank()) "${prefix}برای متمایل شدن به چپ به سمت $roadName آماده شوید."
+                        else "${prefix}برای متمایل شدن به چپ آماده شوید."
+                    ManeuverType.SHARP_RIGHT ->
+                        if (roadName.isNotBlank()) "${prefix}برای پیچ تند به راست به سمت $roadName آماده شوید."
+                        else "${prefix}برای پیچ تند به راست آماده شوید."
+                    ManeuverType.SHARP_LEFT ->
+                        if (roadName.isNotBlank()) "${prefix}برای پیچ تند به چپ به سمت $roadName آماده شوید."
+                        else "${prefix}برای پیچ تند به چپ آماده شوید."
+                    ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT ->
+                        if (roadName.isNotBlank()) "${prefix}برای دور زدن به سمت $roadName آماده شوید."
+                        else "${prefix}برای دور زدن آماده شوید."
+                    ManeuverType.EXIT_RIGHT, ManeuverType.EXIT_LEFT -> {
+                        val exitPart = if (!exitNum.isNullOrBlank()) "خروجی $exitNum" else "خروجی"
+                        when {
+                            toward.isNotBlank() -> "${prefix}برای ورود به $exitPart به سمت $toward آماده شوید."
+                            roadName.isNotBlank() -> "${prefix}برای ورود به $exitPart به سمت $roadName آماده شوید."
+                            else -> "${prefix}برای ورود به $exitPart آماده شوید."
+                        }
+                    }
+                    ManeuverType.RAMP_RIGHT ->
+                        if (roadName.isNotBlank()) "${prefix}برای ورود به رمپ سمت راست به سمت $roadName آماده شوید."
+                        else "${prefix}برای ورود به رمپ سمت راست آماده شوید."
+                    ManeuverType.RAMP_LEFT ->
+                        if (roadName.isNotBlank()) "${prefix}برای ورود به رمپ سمت چپ به سمت $roadName آماده شوید."
+                        else "${prefix}برای ورود به رمپ سمت چپ آماده شوید."
+                    ManeuverType.STAY_RIGHT -> {
+                        val target = toward.ifBlank { roadName }
+                        if (target.isNotBlank()) "${prefix}برای ماندن در سمت راست به سمت $target آماده شوید."
+                        else "${prefix}برای ماندن در سمت راست در دوراهی آماده شوید."
+                    }
+                    ManeuverType.STAY_LEFT -> {
+                        val target = toward.ifBlank { roadName }
+                        if (target.isNotBlank()) "${prefix}برای ماندن در سمت چپ به سمت $target آماده شوید."
+                        else "${prefix}برای ماندن در سمت چپ در دوراهی آماده شوید."
+                    }
+                    ManeuverType.MERGE ->
+                        if (roadName.isNotBlank()) "${prefix}برای ورود به $roadName آماده شوید."
+                        else "${prefix}برای ورود به مسیر اصلی آماده شوید."
+                    else -> null
+                }
+                if (prepareSentence != null) return prepareSentence
             }
 
             val core = when (type) {
@@ -707,7 +786,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             }
         }
 
-        private fun formatSpokenDistance(meters: Double, unit: DistanceUnit, language: AppLanguage): String {
+        internal fun formatSpokenDistance(meters: Double, unit: DistanceUnit, language: AppLanguage): String {
             if (meters < 75.0) return ""
             return when (unit) {
                 DistanceUnit.IMPERIAL -> {
@@ -715,21 +794,24 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     val feet = meters * 3.28084
                     if (language == AppLanguage.PERSIAN) {
                         when {
-                            miles in 1.75..2.3 -> "دو مایلی"
-                            miles in 0.85..1.2 -> "یک مایلی"
-                            miles in 0.42..0.60 -> "نیم مایلی"
-                            miles in 0.20..0.33 -> "یک‌چهارم مایلی"
-                            miles >= 0.8 -> "${String.format(Locale.US, "%.1f", miles).removeSuffix(".0")} مایلی"
+                            miles in 1.80..2.25 -> "دو مایلی"
+                            miles in 0.88..1.15 -> "یک مایلی"
+                            miles in 0.44..0.58 -> "نیم مایلی"
+                            miles in 0.21..0.31 -> "یک‌چهارم مایلی"
+                            miles >= 0.31 -> "${String.format(Locale.US, "%.1f", miles).removeSuffix(".0")} مایلی"
                             feet in 850.0..1150.0 -> "هزار فوتی"
                             else -> "${((feet / 100.0).roundToInt() * 100).coerceAtLeast(100)} فوتی"
                         }
                     } else {
                         when {
-                            miles in 1.75..2.3 -> "2 miles"
-                            miles in 0.85..1.2 -> "1 mile"
-                            miles in 0.42..0.60 -> "half a mile"
-                            miles in 0.20..0.33 -> "a quarter mile"
-                            miles >= 0.8 -> "${String.format(Locale.US, "%.1f", miles).removeSuffix(".0")} miles"
+                            miles in 1.80..2.25 -> "2 miles"
+                            miles in 0.88..1.15 -> "1 mile"
+                            miles in 0.44..0.58 -> "half a mile"
+                            miles in 0.21..0.31 -> "a quarter mile"
+                            miles >= 0.31 -> {
+                                val formatted = String.format(Locale.US, "%.1f", miles).removeSuffix(".0")
+                                if (formatted == "1") "1 mile" else "$formatted miles"
+                            }
                             feet in 850.0..1150.0 -> "1,000 feet"
                             else -> "${((feet / 100.0).roundToInt() * 100).coerceAtLeast(100)} feet"
                         }
@@ -739,12 +821,25 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     val km = meters / 1000.0
                     if (language == AppLanguage.PERSIAN) {
                         when {
+                            meters in 2950.0..3250.0 -> "3 کیلومتری"
+                            meters in 1380.0..1650.0 -> "1.5 کیلومتری"
+                            meters in 720.0..880.0 -> "800 متری"
+                            meters in 350.0..460.0 -> "400 متری"
+                            meters in 250.0..349.0 -> "300 متری"
                             km >= 1.0 -> "${String.format(Locale.US, "%.1f", km).removeSuffix(".0")} کیلومتری"
                             else -> "${((meters / 50.0).roundToInt() * 50).coerceAtLeast(50)} متری"
                         }
                     } else {
                         when {
-                            km >= 1.0 -> "${String.format(Locale.US, "%.1f", km).removeSuffix(".0")} kilometers"
+                            meters in 2950.0..3250.0 -> "3 kilometers"
+                            meters in 1380.0..1650.0 -> "1.5 kilometers"
+                            meters in 720.0..880.0 -> "800 meters"
+                            meters in 350.0..460.0 -> "400 meters"
+                            meters in 250.0..349.0 -> "300 meters"
+                            km >= 1.0 -> {
+                                val formatted = String.format(Locale.US, "%.1f", km).removeSuffix(".0")
+                                if (formatted == "1") "1 kilometer" else "$formatted kilometers"
+                            }
                             else -> "${((meters / 50.0).roundToInt() * 50).coerceAtLeast(50)} meters"
                         }
                     }
