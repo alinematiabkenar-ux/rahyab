@@ -354,6 +354,13 @@ interface AppStrings {
     val mapUpdateNotificationTitle: String
     val mapUpdateNotificationBody: String
     val mapUpdateWifiOnlyNotice: String
+    // External map links & shared addresses
+    val externalLinkOfflineShortUrl: String
+    val externalLinkExpanding: String
+    val externalLinkMatchesTitle: String
+    val externalLinkNoMatch: String
+    val externalLinkOutsideInstalledStates: String
+    val externalLinkLabelDefault: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

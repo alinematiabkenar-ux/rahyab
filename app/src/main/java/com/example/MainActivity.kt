@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: RahYabViewModel by viewModels()
     @Volatile
     private var isViewModelInitialized = false
+    private var pendingExternalIntent: Intent? = null
 
     private val navStopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -109,9 +110,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isExternalMapIntent(intent: Intent?): Boolean {
+        val action = intent?.action ?: return false
+        return (action == Intent.ACTION_VIEW && intent.data != null) ||
+            (action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        if (isExternalMapIntent(intent)) {
+            pendingExternalIntent = intent
+        }
 
         ContextCompat.registerReceiver(
             this,
@@ -143,7 +154,25 @@ class MainActivity : ComponentActivity() {
                 (application as? RahYabApplication)?.ensureMapLibreInitialized()
                 val vm = viewModel
                 isViewModelInitialized = true
+                LaunchedEffect(vm) {
+                    pendingExternalIntent?.let { extIntent ->
+                        pendingExternalIntent = null
+                        vm.handleExternalMapIntent(extIntent)
+                    }
+                }
                 RahYabAppRoot(viewModel = vm)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (isExternalMapIntent(intent)) {
+            if (isViewModelInitialized) {
+                viewModel.handleExternalMapIntent(intent)
+            } else {
+                pendingExternalIntent = intent
             }
         }
     }
@@ -252,6 +281,7 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val navState by viewModel.navigationState.collectAsStateWithLifecycle()
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val showPersianTtsDialog by viewModel.showPersianTtsDialog.collectAsStateWithLifecycle()
+    val openDriveTabEvent by viewModel.openDriveTabEvent.collectAsStateWithLifecycle()
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
     val strings = remember(settings.language) { stringsFor(settings.language) }
@@ -409,6 +439,12 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                         if (startOnMapsAfterOnboarding) {
                             startOnMapsAfterOnboarding = false
                             navigateTab(RahYabRoutes.ROUTE_MAPS)
+                        }
+                    }
+
+                    LaunchedEffect(openDriveTabEvent) {
+                        if (openDriveTabEvent > 0L && currentRoute != RahYabRoutes.ROUTE_DRIVE) {
+                            navigateTab(RahYabRoutes.ROUTE_DRIVE)
                         }
                     }
 

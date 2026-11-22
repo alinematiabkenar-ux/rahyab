@@ -174,6 +174,7 @@ fun DriveScreen(
     val simulationSpeed by viewModel.simulationSpeedMultiplier.collectAsStateWithLifecycle()
     val visibleCameras by viewModel.visibleCameras.collectAsStateWithLifecycle()
     val freeDriveAheadAlert by viewModel.freeDriveAheadAlert.collectAsStateWithLifecycle()
+    val externalMatchChoices by viewModel.externalLinkMatchChoices.collectAsStateWithLifecycle()
     val isSimulationActive = navState.isSimulatingDrive || settings.simulateDriveEnabled
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
@@ -870,6 +871,79 @@ fun DriveScreen(
                 onClose = { showReportSheet = false }
             )
             Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    // Short list picker when a shared address / map link matches several offline places
+    if (externalMatchChoices.isNotEmpty()) {
+        ModalBottomSheet(
+            onDismissRequest = { viewModel.dismissExternalMatchChoices() }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .testTag("external_link_matches_sheet"),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = strings.externalLinkMatchesTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                externalMatchChoices.forEach { place ->
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.selectExternalMatchChoice(place) }
+                            .testTag("external_match_${place.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Place,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = place.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (place.formattedAddress.isNotBlank()) {
+                                    Text(
+                                        text = place.formattedAddress,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (place.distanceMeters > 0.0) {
+                                Text(
+                                    text = BilingualFormatter.formatDistance(
+                                        place.distanceMeters,
+                                        settings.distanceUnit,
+                                        language
+                                    ),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+            }
         }
     }
 

@@ -310,4 +310,10 @@ object EnglishStrings : AppStrings {
     override val mapUpdateNotificationTitle = "Map pack update available"
     override val mapUpdateNotificationBody = "Newer offline map data is ready to download."
     override val mapUpdateWifiOnlyNotice = "Wi-Fi only is enabled for large downloads. Connect to Wi-Fi or turn off Wi-Fi only in Settings."
+    override val externalLinkOfflineShortUrl = "You are offline and short map links cannot be expanded. Please share the full address instead."
+    override val externalLinkExpanding = "Opening shared map link…"
+    override val externalLinkMatchesTitle = "Choose a matching place"
+    override val externalLinkNoMatch = "No offline match found for"
+    override val externalLinkOutsideInstalledStates = "This location is outside your installed state maps."
+    override val externalLinkLabelDefault = "Shared Location"
 }

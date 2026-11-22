@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -27,6 +28,7 @@ import com.example.navigation.ActiveNavigationState
 import com.example.navigation.AheadAlert
 import com.example.navigation.CameraFollowController
 import com.example.navigation.CompassTracker
+import com.example.navigation.ExternalMapIntentParser
 import com.example.navigation.GpsFix
 import com.example.navigation.LastRouteDiagnostics
 import com.example.navigation.LatLon
@@ -34,6 +36,7 @@ import com.example.navigation.LocationTracker
 import com.example.navigation.MissingStatesException
 import com.example.navigation.NavigationSessionController
 import com.example.navigation.OfflineRoute
+import com.example.navigation.ParsedExternalMapTarget
 import com.example.navigation.RoadAlertKind
 import com.example.navigation.RouteOptions
 import com.example.navigation.RoutePreference
@@ -76,6 +79,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val locationTracker = app.locationTracker
     private val compassTracker = app.compassTracker
     private val voiceManager = app.voiceGuidanceManager
+    private val networkStatusMonitor = app.networkStatusMonitor
     private val savedPlaceDao = app.database.savedPlaceDao()
     private val userReportDao = app.database.userReportDao()
     private val installedPackDao = app.database.installedPackDao()
@@ -254,6 +258,15 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     private val _freeDriveAheadAlert = MutableStateFlow<AheadAlert?>(null)
     val freeDriveAheadAlert: StateFlow<AheadAlert?> = _freeDriveAheadAlert.asStateFlow()
 
+    // Short list of matching places when an external map link / shared address has multiple offline matches
+    private val _externalLinkMatchChoices = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
+    val externalLinkMatchChoices: StateFlow<List<PlaceSearchResult>> = _externalLinkMatchChoices.asStateFlow()
+
+    // Signal for MainActivity to switch to the Drive tab when an external link arrives
+    private val _openDriveTabEvent = MutableStateFlow(0L)
+    val openDriveTabEvent: StateFlow<Long> = _openDriveTabEvent.asStateFlow()
+
+    private var externalIntentJob: Job? = null
     private var searchJob: Job? = null
     private var gpsWatchdogJob: Job? = null
     private var simulationJob: Job? = null
@@ -631,6 +644,193 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         if (!_navigationState.value.isNavigating) {
             recenterCamera()
         }
+    }
+
+    // --- EXTERNAL MAP LINKS & SHARED ADDRESSES (geo:, Google/Apple Maps, ACTION_SEND) ---
+    fun handleExternalMapIntent(intent: Intent?) {
+        val target = ExternalMapIntentParser.parseIntent(intent)
+        if (target is ParsedExternalMapTarget.None) return
+
+        _openDriveTabEvent.value = System.currentTimeMillis()
+        externalIntentJob?.cancel()
+        externalIntentJob = viewModelScope.launch {
+            resolveParsedExternalTarget(target)
+        }
+    }
+
+    fun selectExternalMatchChoice(place: PlaceSearchResult) {
+        _externalLinkMatchChoices.value = emptyList()
+        viewModelScope.launch {
+            selectPlaceWithCoverageCheck(place)
+        }
+    }
+
+    fun dismissExternalMatchChoices() {
+        _externalLinkMatchChoices.value = emptyList()
+    }
+
+    private suspend fun resolveParsedExternalTarget(target: ParsedExternalMapTarget) {
+        val str = stringsFor(settings.value.language)
+        when (target) {
+            is ParsedExternalMapTarget.None -> Unit
+            is ParsedExternalMapTarget.Coordinates -> {
+                showExternalCoordinates(target.lat, target.lon, target.label)
+            }
+            is ParsedExternalMapTarget.SearchQuery -> {
+                searchExternalQueryOffline(target.query)
+            }
+            is ParsedExternalMapTarget.ShortLink -> {
+                val isOnline = networkStatusMonitor.networkState.value.isOnline
+                if (!isOnline) {
+                    val fallback = target.fallbackText?.trim().orEmpty()
+                    if (fallback.isNotBlank()) {
+                        searchExternalQueryOffline(fallback, offlineShortLinkHint = true)
+                    } else {
+                        _snackbarMessage.value = str.externalLinkOfflineShortUrl
+                    }
+                    return
+                }
+                _snackbarMessage.value = str.externalLinkExpanding
+                val expandedUrl = ExternalMapIntentParser.expandShortMapLink(target.url)
+                if (!expandedUrl.isNullOrBlank()) {
+                    val expandedUri = runCatching { Uri.parse(expandedUrl) }.getOrNull()
+                    val parsedExpanded = expandedUri?.let {
+                        ExternalMapIntentParser.parseUri(it, fallbackText = target.fallbackText)
+                    } ?: ParsedExternalMapTarget.None
+                    if (parsedExpanded !is ParsedExternalMapTarget.None &&
+                        parsedExpanded !is ParsedExternalMapTarget.ShortLink
+                    ) {
+                        resolveParsedExternalTarget(parsedExpanded)
+                        return
+                    }
+                }
+                val fallback = target.fallbackText?.trim().orEmpty()
+                if (fallback.isNotBlank()) {
+                    searchExternalQueryOffline(fallback)
+                } else {
+                    _snackbarMessage.value = str.externalLinkOfflineShortUrl
+                }
+            }
+        }
+    }
+
+    private suspend fun showExternalCoordinates(lat: Double, lon: Double, label: String?) {
+        val str = stringsFor(settings.value.language)
+        val bestState = UsStatesCatalog.findBestStateForLocation(lat, lon)
+        val coordsText = String.format(java.util.Locale.US, "%.5f, %.5f", lat, lon)
+        val place = PlaceSearchResult(
+            id = "ext_${System.currentTimeMillis()}",
+            name = label?.takeIf { it.isNotBlank() } ?: str.externalLinkLabelDefault,
+            brand = "",
+            category = "shared_link",
+            address = coordsText,
+            city = "",
+            stateCode = bestState?.code.orEmpty(),
+            postcode = "",
+            lat = lat,
+            lon = lon,
+            distanceMeters = 0.0,
+            relevanceScore = 100.0,
+            source = "external_link"
+        )
+        selectPlaceWithCoverageCheck(place)
+    }
+
+    private suspend fun searchExternalQueryOffline(
+        query: String,
+        offlineShortLinkHint: Boolean = false
+    ) {
+        val str = stringsFor(settings.value.language)
+        val ref = getEffectiveReferenceLocation()
+        val results = offlineSearch.search(query, ref.lat, ref.lon, limit = 8)
+
+        if (results.isEmpty()) {
+            val mentionedState = ExternalMapIntentParser.detectMentionedUsState(query)
+            val installedCodes = getInstalledStateCodeSet()
+            if (mentionedState != null && mentionedState.code !in installedCodes &&
+                !UsStatesCatalog.isPointCoveredByInstalledPacks(mentionedState.centerLat, mentionedState.centerLon, installedCodes)
+            ) {
+                val placeholder = PlaceSearchResult(
+                    id = "ext_missing_${mentionedState.code}",
+                    name = query,
+                    brand = "",
+                    category = "shared_link",
+                    address = mentionedState.nameEn,
+                    city = "",
+                    stateCode = mentionedState.code,
+                    postcode = "",
+                    lat = mentionedState.centerLat,
+                    lon = mentionedState.centerLon,
+                    distanceMeters = 0.0,
+                    relevanceScore = 0.0,
+                    source = "external_link"
+                )
+                selectPlace(placeholder)
+                _missingStatesForRoute.value = listOf(mentionedState)
+                _snackbarMessage.value = str.externalLinkOutsideInstalledStates
+            } else {
+                _searchQuery.value = query
+                _snackbarMessage.value = if (offlineShortLinkHint) {
+                    str.externalLinkOfflineShortUrl
+                } else {
+                    "${str.externalLinkNoMatch}: $query"
+                }
+            }
+            return
+        }
+
+        val isSingleBestMatch = results.size == 1 ||
+            (results[0].relevanceScore - results[1].relevanceScore >= 18.0)
+        if (isSingleBestMatch) {
+            _externalLinkMatchChoices.value = emptyList()
+            selectPlaceWithCoverageCheck(results.first())
+        } else {
+            _externalLinkMatchChoices.value = results.take(6)
+        }
+    }
+
+    private suspend fun selectPlaceWithCoverageCheck(place: PlaceSearchResult) {
+        val str = stringsFor(settings.value.language)
+        if (_navigationState.value.isNavigating) {
+            stopNavigation()
+        }
+        selectPlace(place)
+        val installedCodes = getInstalledStateCodeSet()
+        if (!UsStatesCatalog.isPointCoveredByInstalledPacks(place.lat, place.lon, installedCodes)) {
+            val missing = findMissingStatePackForPoint(place.lat, place.lon, installedCodes)
+            if (missing != null) {
+                _missingStatesForRoute.value = listOf(missing)
+            }
+            _snackbarMessage.value = str.externalLinkOutsideInstalledStates
+        }
+    }
+
+    private suspend fun getInstalledStateCodeSet(): Set<String> {
+        val dbInstalled = runCatching {
+            installedPackDao.getAllOnce()
+                .filter { it.status == PackInstallStatus.INSTALLED.name }
+                .map { it.stateCode }
+        }.getOrDefault(emptyList())
+        val pmtilesInstalled = packManager.getInstalledPmtilesFiles().map { it.first }
+        return (dbInstalled + pmtilesInstalled).toSet()
+    }
+
+    private fun findMissingStatePackForPoint(
+        lat: Double,
+        lon: Double,
+        installedCodes: Set<String>
+    ): UsStateInfo? {
+        val state = UsStatesCatalog.findBestStateForLocation(lat, lon) ?: return null
+        val regional = UsStatesCatalog.regionsByParent[state.code]
+        if (regional != null) {
+            val matchingRegion = regional.firstOrNull {
+                lat in it.minLat..it.maxLat && lon in it.minLon..it.maxLon
+            }
+            if (matchingRegion != null && matchingRegion.code !in installedCodes) {
+                return matchingRegion
+            }
+        }
+        return state.takeIf { it.code !in installedCodes }
     }
 
     fun savePlaceAs(place: PlaceSearchResult, type: SavedPlaceType) {

@@ -310,4 +310,10 @@ object PersianStrings : AppStrings {
     override val mapUpdateNotificationTitle = "به‌روزرسانی بسته نقشه موجود است"
     override val mapUpdateNotificationBody = "نسخه جدید نقشه آفلاین آماده دانلود است."
     override val mapUpdateWifiOnlyNotice = "گزینه «فقط وای‌فای» برای دانلودهای حجیم روشن است. به وای‌فای وصل شوید یا آن را در تنظیمات خاموش کنید."
+    override val externalLinkOfflineShortUrl = "آفلاین هستید و لینک کوتاه نقشه باز نمی‌شود. لطفاً آدرس کامل را به اشتراک بگذارید."
+    override val externalLinkExpanding = "در حال باز کردن لینک نقشه…"
+    override val externalLinkMatchesTitle = "مکان مورد نظر را انتخاب کنید"
+    override val externalLinkNoMatch = "نتیجه آفلاینی پیدا نشد برای"
+    override val externalLinkOutsideInstalledStates = "این موقعیت خارج از نقشه‌های نصب‌شده شماست."
+    override val externalLinkLabelDefault = "موقعیت اشتراک‌گذاری‌شده"
 }
