@@ -136,6 +136,12 @@ object ValhallaResponseParser {
             val beginIdx = beginRaw.coerceIn(0, lastIdx)
             val endIdx = endRaw.coerceIn(beginIdx, lastIdx)
 
+            val ownedEndIdx = when {
+                beginIdx == endIdx -> endIdx
+                endIdx == lastIdx -> endIdx
+                else -> endIdx - 1
+            }
+
             // Valhalla returns edge.speed_limit in km/h (0 or omitted or 255 = unlimited/unknown)
             val speedKph = if (edge.has("speed_limit") && !edge.isNull("speed_limit")) {
                 edge.optDouble("speed_limit", 0.0)
@@ -144,7 +150,7 @@ object ValhallaResponseParser {
             }
             if (speedKph > 0.0 && speedKph < 250.0) {
                 val speedMph = (speedKph * 0.621371).roundToInt().coerceIn(5, 85)
-                for (idx in beginIdx..endIdx) {
+                for (idx in beginIdx..ownedEndIdx) {
                     speedLimits[idx] = speedMph
                 }
             }
@@ -155,7 +161,7 @@ object ValhallaResponseParser {
                 0
             }
             if (laneCount > 0) {
-                for (idx in beginIdx..endIdx) {
+                for (idx in beginIdx..ownedEndIdx) {
                     laneCounts[idx] = laneCount
                 }
             }

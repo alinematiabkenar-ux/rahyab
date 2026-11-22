@@ -10,6 +10,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
+import com.example.util.CrashLogManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,8 +32,9 @@ import kotlin.math.roundToInt
 class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
 
     private val appContext = context.applicationContext
-    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private var tts: TextToSpeech? = null
+    @Volatile
     private var isInitialized = false
 
     private var activeFocusRequest: AudioFocusRequest? = null
@@ -66,42 +68,51 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { }
 
     init {
-        tts = TextToSpeech(appContext, this)
+        tts = runCatching {
+            TextToSpeech(appContext, this)
+        }.onFailure { err ->
+            CrashLogManager.logError(appContext, "TTS", "TextToSpeech engine creation failed", err)
+        }.getOrNull()
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            isInitialized = true
-            tts?.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    requestDuckingFocus()
-                }
+            runCatching {
+                isInitialized = true
+                tts?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        requestDuckingFocus()
+                    }
 
-                override fun onDone(utteranceId: String?) {
-                    abandonDuckingFocus()
-                }
+                    override fun onDone(utteranceId: String?) {
+                        abandonDuckingFocus()
+                    }
 
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {
-                    abandonDuckingFocus()
-                }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        abandonDuckingFocus()
+                    }
 
-                override fun onError(utteranceId: String?, errorCode: Int) {
-                    abandonDuckingFocus()
-                }
-            })
-            refreshTtsDiagnostics()
-            applyLanguage(currentLanguage)
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        abandonDuckingFocus()
+                    }
+                })
+                refreshTtsDiagnostics()
+                applyLanguage(resolveEffectiveLanguage(currentLanguage))
+            }.onFailure { err ->
+                CrashLogManager.logError(appContext, "TTS", "TextToSpeech onInit setup failed", err)
+            }
         }
     }
 
     private fun requestDuckingFocus() {
+        val am = audioManager ?: return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val attrs = AudioAttributes.Builder()
@@ -113,10 +124,10 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
                     .setOnAudioFocusChangeListener(focusChangeListener)
                     .build()
                 activeFocusRequest = req
-                audioManager.requestAudioFocus(req)
+                am.requestAudioFocus(req)
             } else {
                 @Suppress("DEPRECATION")
-                audioManager.requestAudioFocus(
+                am.requestAudioFocus(
                     focusChangeListener,
                     AudioManager.STREAM_MUSIC,
                     AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
@@ -126,13 +137,14 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     }
 
     private fun abandonDuckingFocus() {
+        val am = audioManager ?: return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                activeFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                activeFocusRequest?.let { am.abandonAudioFocusRequest(it) }
                 activeFocusRequest = null
             } else {
                 @Suppress("DEPRECATION")
-                audioManager.abandonAudioFocus(focusChangeListener)
+                am.abandonAudioFocus(focusChangeListener)
             }
         }
     }
@@ -144,46 +156,52 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             _ttsDiagnostics.value = empty
             return empty
         }
-        val enginePkg = runCatching { engine.defaultEngine.orEmpty() }.getOrDefault("")
-        val engineLabel = runCatching {
-            val matched = engine.engines?.firstOrNull { it.name == enginePkg }
-            matched?.label?.takeIf { it.isNotBlank() }
-                ?: if (enginePkg.isNotBlank()) {
-                    val pm = appContext.packageManager
-                    val ai = pm.getApplicationInfo(enginePkg, 0)
-                    pm.getApplicationLabel(ai).toString()
-                } else ""
-        }.getOrDefault(enginePkg)
+        return runCatching {
+            val enginePkg = runCatching { engine.defaultEngine.orEmpty() }.getOrDefault("")
+            val engineLabel = runCatching {
+                val matched = engine.engines?.firstOrNull { it.name == enginePkg }
+                matched?.label?.takeIf { it.isNotBlank() }
+                    ?: if (enginePkg.isNotBlank()) {
+                        val pm = appContext.packageManager
+                        val ai = pm.getApplicationInfo(enginePkg, 0)
+                        pm.getApplicationLabel(ai).toString()
+                    } else ""
+            }.getOrDefault(enginePkg)
 
-        val faLocale = Locale.forLanguageTag("fa-IR")
-        val faStatus = runCatching { engine.isLanguageAvailable(faLocale) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
-        val voices = runCatching { engine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
-        val faVoices = voices.filter { it.locale.language.equals("fa", ignoreCase = true) }
-        val faAvailable = faStatus >= TextToSpeech.LANG_AVAILABLE || faVoices.isNotEmpty()
-        val faInstalled = faVoices.any { !it.isNetworkConnectionRequired } ||
-            (faVoices.isEmpty() && faStatus >= TextToSpeech.LANG_AVAILABLE)
+            val faLocale = Locale.forLanguageTag("fa-IR")
+            val faStatus = runCatching { engine.isLanguageAvailable(faLocale) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+            val voices = runCatching { engine.voices?.toList().orEmpty() }.getOrDefault(emptyList())
+            val faVoices = voices.filter { it.locale.language.equals("fa", ignoreCase = true) }
+            val faAvailable = faStatus >= TextToSpeech.LANG_AVAILABLE || faVoices.isNotEmpty()
+            val faInstalled = faVoices.any { !it.isNetworkConnectionRequired } ||
+                (faVoices.isEmpty() && faStatus >= TextToSpeech.LANG_AVAILABLE)
 
-        val enStatus = runCatching { engine.isLanguageAvailable(Locale.US) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
-        val enVoices = voices.filter {
-            it.locale.language.equals("en", ignoreCase = true) &&
-                it.locale.country.equals("US", ignoreCase = true)
+            val enStatus = runCatching { engine.isLanguageAvailable(Locale.US) }.getOrDefault(TextToSpeech.LANG_NOT_SUPPORTED)
+            val enVoices = voices.filter {
+                it.locale.language.equals("en", ignoreCase = true) &&
+                    it.locale.country.equals("US", ignoreCase = true)
+            }
+            val enAvailable = enStatus >= TextToSpeech.LANG_AVAILABLE || enVoices.isNotEmpty()
+            val enInstalled = enVoices.any { !it.isNetworkConnectionRequired } ||
+                (enVoices.isEmpty() && enStatus >= TextToSpeech.LANG_AVAILABLE)
+
+            _isPersianVoiceAvailable.value = faAvailable && faInstalled
+            val info = TtsDiagnosticsInfo(
+                enginePackage = enginePkg,
+                engineLabel = engineLabel.ifBlank { enginePkg },
+                isInitialized = true,
+                isPersianAvailable = faAvailable,
+                isPersianInstalled = faInstalled,
+                isEnglishUsAvailable = enAvailable,
+                isEnglishUsInstalled = enInstalled
+            )
+            _ttsDiagnostics.value = info
+            info
+        }.onFailure { err ->
+            CrashLogManager.logError(appContext, "TTS", "refreshTtsDiagnostics failed", err)
+        }.getOrElse {
+            TtsDiagnosticsInfo(isInitialized = isInitialized).also { _ttsDiagnostics.value = it }
         }
-        val enAvailable = enStatus >= TextToSpeech.LANG_AVAILABLE || enVoices.isNotEmpty()
-        val enInstalled = enVoices.any { !it.isNetworkConnectionRequired } ||
-            (enVoices.isEmpty() && enStatus >= TextToSpeech.LANG_AVAILABLE)
-
-        _isPersianVoiceAvailable.value = faAvailable && faInstalled
-        val info = TtsDiagnosticsInfo(
-            enginePackage = enginePkg,
-            engineLabel = engineLabel.ifBlank { enginePkg },
-            isInitialized = true,
-            isPersianAvailable = faAvailable,
-            isPersianInstalled = faInstalled,
-            isEnglishUsAvailable = enAvailable,
-            isEnglishUsInstalled = enInstalled
-        )
-        _ttsDiagnostics.value = info
-        return info
     }
 
     fun checkPersianAvailability(): Boolean {

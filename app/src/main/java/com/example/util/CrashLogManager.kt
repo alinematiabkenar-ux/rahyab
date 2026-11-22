@@ -28,7 +28,7 @@ object CrashLogManager {
         if (installed) return
         synchronized(this) {
             if (installed) return
-            val appContext = context.applicationContext
+            val appContext = context.applicationContext ?: context
             val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
             Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
                 runCatching {
@@ -156,8 +156,8 @@ object CrashLogManager {
     }
 
     internal fun crashLogFile(context: Context): File =
-        File(context.applicationContext.filesDir, CRASH_LOG_FILE_NAME)
+        File((context.applicationContext ?: context).filesDir, CRASH_LOG_FILE_NAME)
 
     internal fun errorLogFile(context: Context): File =
-        File(context.applicationContext.filesDir, ERROR_LOG_FILE_NAME)
+        File((context.applicationContext ?: context).filesDir, ERROR_LOG_FILE_NAME)
 }

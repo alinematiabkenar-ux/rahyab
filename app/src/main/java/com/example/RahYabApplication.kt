@@ -1,6 +1,7 @@
 package com.example
 
 import android.app.Application
+import android.content.Context
 import com.example.data.local.RahYabDatabase
 import com.example.data.packs.StatePackManager
 import com.example.data.preferences.UserPreferencesRepository
@@ -15,47 +16,75 @@ import org.maplibre.android.MapLibre
 
 class RahYabApplication : Application() {
 
-    lateinit var database: RahYabDatabase
+    @Volatile
+    var isMapLibreInitialized: Boolean = false
         private set
-    lateinit var preferencesRepository: UserPreferencesRepository
-        private set
-    lateinit var packManager: StatePackManager
-        private set
-    lateinit var offlineSearchEngine: OfflinePlaceSearchEngine
-        private set
-    lateinit var onlineOregonDevSearchClient: OnlineOregonDevSearchClient
-        private set
-    lateinit var routingEngine: ValhallaRoutingEngine
-        private set
-    lateinit var locationTracker: LocationTracker
-        private set
-    lateinit var compassTracker: CompassTracker
-        private set
-    lateinit var voiceGuidanceManager: VoiceGuidanceManager
-        private set
+
+    private val databaseDelegate = lazy { RahYabDatabase.getInstance(this) }
+    val database: RahYabDatabase by databaseDelegate
+
+    private val preferencesDelegate = lazy { UserPreferencesRepository(this) }
+    val preferencesRepository: UserPreferencesRepository by preferencesDelegate
+
+    private val packManagerDelegate = lazy { StatePackManager(this, database.installedPackDao()) }
+    val packManager: StatePackManager by packManagerDelegate
+
+    private val offlineSearchDelegate = lazy { OfflinePlaceSearchEngine(packManager, database.savedPlaceDao()) }
+    val offlineSearchEngine: OfflinePlaceSearchEngine by offlineSearchDelegate
+
+    private val onlineSearchDelegate = lazy { OnlineOregonDevSearchClient() }
+    val onlineOregonDevSearchClient: OnlineOregonDevSearchClient by onlineSearchDelegate
+
+    private val routingEngineDelegate = lazy { ValhallaRoutingEngine(this, packManager) }
+    val routingEngine: ValhallaRoutingEngine by routingEngineDelegate
+
+    private val locationTrackerDelegate = lazy { LocationTracker(this) }
+    val locationTracker: LocationTracker by locationTrackerDelegate
+
+    private val compassTrackerDelegate = lazy { CompassTracker(this) }
+    val compassTracker: CompassTracker by compassTrackerDelegate
+
+    private val voiceGuidanceDelegate = lazy { VoiceGuidanceManager(this) }
+    val voiceGuidanceManager: VoiceGuidanceManager by voiceGuidanceDelegate
+
+    val isPackManagerInitialized: Boolean get() = packManagerDelegate.isInitialized()
+    val isCompassTrackerInitialized: Boolean get() = compassTrackerDelegate.isInitialized()
+    val isVoiceGuidanceInitialized: Boolean get() = voiceGuidanceDelegate.isInitialized()
+    val isRoutingEngineInitialized: Boolean get() = routingEngineDelegate.isInitialized()
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        // Install crash handler as early as possible so even Application.onCreate crashes are captured
+        runCatching { CrashLogManager.install(base) }
+    }
 
     override fun onCreate() {
-        super.onCreate()
+        // Install uncaught exception handler as the very first line before anything else runs
         CrashLogManager.install(this)
-        // Initialize MapLibre Native once at application startup
-        runCatching { MapLibre.getInstance(this) }
+        super.onCreate()
+        // All heavy subsystems (MapLibre, Room, PackManager, TTS, Compass, Valhalla) are
+        // initialized lazily so that if a crash log is pending on next launch, MainActivity
+        // can show the safe crash recovery screen without touching any of them.
+    }
 
-        database = RahYabDatabase.getInstance(this)
-        preferencesRepository = UserPreferencesRepository(this)
-        packManager = StatePackManager(this, database.installedPackDao())
-        offlineSearchEngine = OfflinePlaceSearchEngine(packManager, database.savedPlaceDao())
-        onlineOregonDevSearchClient = OnlineOregonDevSearchClient()
-        routingEngine = ValhallaRoutingEngine(this, packManager)
-        locationTracker = LocationTracker(this)
-        compassTracker = CompassTracker(this)
-        voiceGuidanceManager = VoiceGuidanceManager(this)
+    fun ensureMapLibreInitialized() {
+        if (isMapLibreInitialized) return
+        synchronized(this) {
+            if (isMapLibreInitialized) return
+            runCatching {
+                MapLibre.getInstance(this)
+                isMapLibreInitialized = true
+            }.onFailure { err ->
+                CrashLogManager.logError(this, "MapLibre", "MapLibre initialization failed", err)
+            }
+        }
     }
 
     override fun onTerminate() {
         super.onTerminate()
-        locationTracker.stopTracking()
-        compassTracker.stop()
-        voiceGuidanceManager.shutdown()
-        routingEngine.close()
+        if (locationTrackerDelegate.isInitialized()) locationTracker.stopTracking()
+        if (compassTrackerDelegate.isInitialized()) compassTracker.stop()
+        if (voiceGuidanceDelegate.isInitialized()) voiceGuidanceManager.shutdown()
+        if (routingEngineDelegate.isInitialized()) routingEngine.close()
     }
 }

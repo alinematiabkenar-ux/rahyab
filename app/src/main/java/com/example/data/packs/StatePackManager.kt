@@ -7,6 +7,7 @@ import com.example.data.local.InstalledPackDao
 import com.example.data.local.InstalledPackEntity
 import com.example.data.local.PackInstallStatus
 import com.example.data.model.UsStatesCatalog
+import com.example.util.CrashLogManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
@@ -75,6 +76,7 @@ class StatePackManager(
     private val manifestAdapter = moshi.adapter(PackManifest::class.java)
 
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val indexingJobs = ConcurrentHashMap<String, Job>()
 
     private val _manifest = MutableStateFlow<PackManifest?>(null)
     val manifest: StateFlow<PackManifest?> = _manifest.asStateFlow()
@@ -87,6 +89,9 @@ class StatePackManager(
 
     private val _packsChangedTick = MutableStateFlow(0L)
     val packsChangedTick: StateFlow<Long> = _packsChangedTick.asStateFlow()
+
+    private val _indexingStatusMessage = MutableStateFlow<String?>(null)
+    val indexingStatusMessage: StateFlow<String?> = _indexingStatusMessage.asStateFlow()
 
     val packsRootDir: File
         get() = File(context.filesDir, "packs").apply { mkdirs() }
@@ -232,7 +237,7 @@ class StatePackManager(
 
             val computedStatus = when {
                 pmValid && vhValid && dbValid -> {
-                    ensurePlacesLatLonIndex(db)
+                    // NEVER create indexes during startup audit — large places DBs (490+ MB) must open instantly
                     val manifestEntry = _manifest.value?.states?.find { it.stateCode.equals(code, true) }
                     if (manifestEntry != null && record != null && record.installedVersion.isNotEmpty() && record.installedVersion != manifestEntry.version) {
                         PackInstallStatus.UPDATE_AVAILABLE
@@ -465,9 +470,6 @@ class StatePackManager(
                     throw IllegalStateException(buildMissingFilesNote(pmValid, vhValid, dbValid))
                 }
 
-                // Ensure spatial lat/lon index exists for fast ~50 km nearby FTS5 searches
-                ensurePlacesLatLonIndex(placesDbFile(code))
-
                 // Extract Valhalla tar into unified tile directory for seamless cross-state routing
                 extractTarIntoDirectory(valhallaTarFile(code), unifiedValhallaTileDir)
 
@@ -491,6 +493,8 @@ class StatePackManager(
                     )
                 )
                 notifyPacksChanged()
+                // Build optional spatial index once in background after install/update without blocking UI or DB
+                scheduleBackgroundPlacesIndexing(code, placesDbFile(code))
                 return
             } catch (ce: CancellationException) {
                 val existing = installedPackDao.getByState(code)
@@ -678,7 +682,7 @@ class StatePackManager(
                             target.delete()
                             return@withContext Result.failure(IllegalArgumentException("Invalid or corrupted FTS5 places SQLite database"))
                         }
-                        ensurePlacesLatLonIndex(target)
+                        scheduleBackgroundPlacesIndexing(code, target)
                     }
                     else -> {
                         return@withContext Result.failure(
@@ -689,6 +693,12 @@ class StatePackManager(
             }
 
             auditInstalledPacks()
+            if (lowerName.endsWith(".zip") || lowerName.endsWith(".rahyab")) {
+                val dbFile = placesDbFile(code)
+                if (dbFile.exists() && isValidPlacesDb(dbFile)) {
+                    scheduleBackgroundPlacesIndexing(code, dbFile)
+                }
+            }
             Result.success(displayName ?: "Imported")
         } catch (e: Exception) {
             Result.failure(e)
@@ -894,21 +904,67 @@ class StatePackManager(
             } finally {
                 conn.close()
             }
-        } catch (_: Exception) {
+        } catch (_: UnsatisfiedLinkError) {
+            // Host JVM unit tests without Android .so: validate SQLite 3 magic header
+            hasSqliteHeader(file)
+        } catch (t: Throwable) {
+            CrashLogManager.logError(context, "PackAudit", "Failed to validate places DB ${file.name}", t)
             false
         }
     }
 
+    private fun hasSqliteHeader(file: File): Boolean = runCatching {
+        FileInputStream(file).use { fis ->
+            val header = ByteArray(16)
+            fis.read(header) == 16 && String(header, Charsets.US_ASCII).startsWith("SQLite format 3")
+        }
+    }.getOrDefault(false)
+
     /**
-     * Ensures a composite B-tree index on `places(lat, lon)` exists inside the installed places DB
-     * so nearby (~50 km) FTS5 chain searches stay instantaneous.
+     * Schedules one-time background creation of `idx_places_lat_lon ON places(lat, lon)` AFTER
+     * a pack is installed, updated, or imported. Never runs during app startup and never blocks
+     * the UI or other DB reads; if creation fails (e.g., low disk space), logs and continues cleanly.
      */
-    fun ensurePlacesLatLonIndex(dbFile: File) {
+    fun scheduleBackgroundPlacesIndexing(stateCode: String, dbFile: File) {
+        val code = stateCode.lowercase()
         if (!dbFile.exists() || dbFile.length() < 1024L) return
-        runCatching {
+        if (indexingJobs[code]?.isActive == true) return
+        val job = scope.launch(Dispatchers.IO) {
+            try {
+                ensurePlacesLatLonIndex(code, dbFile)
+            } finally {
+                indexingJobs.remove(code)
+                if (_indexingStatusMessage.value?.contains(code.uppercase()) == true) {
+                    _indexingStatusMessage.value = null
+                }
+            }
+        }
+        indexingJobs[code] = job
+    }
+
+    internal fun ensurePlacesLatLonIndex(stateCode: String, dbFile: File) {
+        if (!dbFile.exists() || dbFile.length() < 1024L) return
+        try {
             val driver = androidx.sqlite.driver.bundled.BundledSQLiteDriver()
             val conn = driver.open(dbFile.absolutePath)
             try {
+                // Fast check: skip immediately if index already exists
+                val checkStmt = conn.prepare(
+                    "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_places_lat_lon'"
+                )
+                val alreadyExists = try {
+                    checkStmt.step()
+                } finally {
+                    checkStmt.close()
+                }
+                if (alreadyExists) return
+
+                _indexingStatusMessage.value = "Optimizing search index (${stateCode.uppercase()})…"
+                // Use busy_timeout so concurrent read queries wait cleanly without failing
+                runCatching {
+                    val busyStmt = conn.prepare("PRAGMA busy_timeout = 5000")
+                    try { busyStmt.step() } finally { busyStmt.close() }
+                }
                 val stmt = conn.prepare("CREATE INDEX IF NOT EXISTS idx_places_lat_lon ON places(lat, lon)")
                 try {
                     stmt.step()
@@ -918,6 +974,14 @@ class StatePackManager(
             } finally {
                 conn.close()
             }
+        } catch (t: Throwable) {
+            // Never crash or block search if disk space is tight — log and continue without index
+            CrashLogManager.logError(
+                context = context,
+                tag = "PlacesIndex",
+                message = "Skipped idx_places_lat_lon for ${stateCode.uppercase()}; continuing without spatial index",
+                throwable = t
+            )
         }
     }
 

@@ -98,10 +98,12 @@ object RahYabRoutes {
 class MainActivity : ComponentActivity() {
 
     private val viewModel: RahYabViewModel by viewModels()
+    @Volatile
+    private var isViewModelInitialized = false
 
     private val navStopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == NavigationForegroundService.BROADCAST_NAVIGATION_STOPPED) {
+            if (intent?.action == NavigationForegroundService.BROADCAST_NAVIGATION_STOPPED && isViewModelInitialized) {
                 viewModel.stopNavigation()
             }
         }
@@ -118,14 +120,127 @@ class MainActivity : ComponentActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
+        val initialCrashLog = CrashLogManager.readPendingCrashLog(this)
+
         setContent {
-            RahYabAppRoot(viewModel = viewModel)
+            var pendingCrashLog by remember { mutableStateOf(initialCrashLog) }
+            if (pendingCrashLog != null) {
+                // Minimal safe screen: does NOT create ViewModel, MapLibre, TTS, Compass, or PackManager
+                SafeCrashRecoveryScreen(
+                    crashText = pendingCrashLog!!,
+                    onCopyDetails = { text ->
+                        runCatching {
+                            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("RahYab Crash Log", text))
+                        }
+                    },
+                    onContinue = {
+                        CrashLogManager.clearPendingCrashLog(this@MainActivity)
+                        pendingCrashLog = null
+                    }
+                )
+            } else {
+                (application as? RahYabApplication)?.ensureMapLibreInitialized()
+                val vm = viewModel
+                isViewModelInitialized = true
+                RahYabAppRoot(viewModel = vm)
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         runCatching { unregisterReceiver(navStopReceiver) }
+    }
+}
+
+/**
+ * Minimal standalone crash recovery screen rendered BEFORE creating ViewModel, MapLibre,
+ * TextToSpeech, CompassTracker, or StatePackManager so startup crashes are always inspectable.
+ */
+@Composable
+fun SafeCrashRecoveryScreen(
+    crashText: String,
+    onCopyDetails: (String) -> Unit,
+    onContinue: () -> Unit
+) {
+    var copiedFeedback by remember { mutableStateOf(false) }
+
+    MaterialTheme {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("safe_crash_recovery_screen"),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 40.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Text(
+                    text = "The app closed unexpectedly",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    text = "An error occurred during your previous launch. Copy the details below or tap Continue to open the app.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    Text(
+                        text = crashText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .verticalScroll(rememberScrollState())
+                            .testTag("safe_crash_log_text")
+                    )
+                }
+                if (copiedFeedback) {
+                    Text(
+                        text = "Error details copied to clipboard.",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            onCopyDetails(crashText)
+                            copiedFeedback = true
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 48.dp)
+                            .testTag("copy_crash_details_button")
+                    ) {
+                        Text("Copy error details")
+                    }
+                    TextButton(
+                        onClick = onContinue,
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("continue_after_crash_button")
+                    ) {
+                        Text("Continue")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -244,9 +359,6 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val currentRoute = backStackEntry?.destination?.route ?: RahYabRoutes.ROUTE_DRIVE
 
     var startOnMapsAfterOnboarding by remember { mutableStateOf(false) }
-    var pendingCrashLog by remember {
-        mutableStateOf(CrashLogManager.readPendingCrashLog(context))
-    }
 
     CompositionLocalProvider(
         LocalLayoutDirection provides layoutDirection,
@@ -413,70 +525,6 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                             Text(strings.close)
                         }
                     }
-                )
-            }
-
-            // Crash Recovery Dialog if the previous session ended with an uncaught exception
-            pendingCrashLog?.let { crashText ->
-                AlertDialog(
-                    onDismissRequest = {
-                        CrashLogManager.clearPendingCrashLog(context)
-                        pendingCrashLog = null
-                    },
-                    title = { Text(strings.crashDialogTitle) },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                text = strings.crashDialogBody,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 220.dp)
-                            ) {
-                                Text(
-                                    text = crashText,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 11.sp,
-                                    lineHeight = 14.sp,
-                                    modifier = Modifier
-                                        .padding(10.dp)
-                                        .verticalScroll(rememberScrollState())
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                runCatching {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                    clipboard?.setPrimaryClip(ClipData.newPlainText("RahYab Crash Log", crashText))
-                                }
-                                CrashLogManager.clearPendingCrashLog(context)
-                                pendingCrashLog = null
-                                viewModel.showSnackbar(strings.errorDetailsCopied)
-                            },
-                            modifier = Modifier.testTag("copy_crash_details_button")
-                        ) {
-                            Text(strings.copyErrorDetails)
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = {
-                                CrashLogManager.clearPendingCrashLog(context)
-                                pendingCrashLog = null
-                            },
-                            modifier = Modifier.testTag("dismiss_crash_dialog_button")
-                        ) {
-                            Text(strings.close)
-                        }
-                    },
-                    modifier = Modifier.testTag("crash_log_dialog")
                 )
             }
         }

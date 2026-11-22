@@ -7,6 +7,7 @@ import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.RoadHazardPoint
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 
@@ -284,8 +285,12 @@ class NavigationSessionController {
             distToNextManeuver <= 850.0
 
         // 9. Phase 3: Speed limit (strictly null if OSM maxspeed is absent — NEVER guessed!)
-        val speedLimitMph = route.speedLimitsByShapeIndex[bestIdx]
-            ?: upcomingManeuver.speedLimitMph
+        val speedLimitMph = if (route.speedLimitsByShapeIndex.isNotEmpty()) {
+            route.speedLimitsByShapeIndex[bestIdx]
+        } else {
+            val activeManeuver = route.maneuvers.getOrNull((upcomingManeuverIdx - 1).coerceAtLeast(0))
+            activeManeuver?.speedLimitMph
+        }
         val currentMph = fix.speedMps * 2.23694f
         val isOverspeed = speedLimitMph != null && currentMph > (speedLimitMph + settings.speedWarningThresholdMph)
 
@@ -430,6 +435,7 @@ class NavigationSessionController {
         var bestDist = Double.MAX_VALUE
         var bestPoint = shape[0]
         var bestIdx = 0
+        var bestT = 0.0
         var bestBearing = fix.bearing
 
         for (i in 0 until shape.lastIndex) {
@@ -452,10 +458,14 @@ class NavigationSessionController {
             val projLat = a.lat + t * (b.lat - a.lat)
             val projLon = a.lon + t * (b.lon - a.lon)
             val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, projLat, projLon)
-            if (dist < bestDist) {
+            val isCloser = dist < bestDist - 0.01
+            // When tied at a shared vertex (end of segment i-1 == start of segment i), prefer the outgoing segment
+            val isForwardVertexTie = abs(dist - bestDist) <= 0.01 && bestT >= 0.999 && t < 0.999
+            if (isCloser || isForwardVertexTie) {
                 bestDist = dist
                 bestPoint = LatLon(projLat, projLon)
                 bestIdx = i
+                bestT = t
                 bestBearing = ValhallaResponseParser.bearingDegrees(a, b).toFloat()
             }
         }

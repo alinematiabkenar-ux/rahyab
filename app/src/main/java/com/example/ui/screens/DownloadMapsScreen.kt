@@ -91,6 +91,7 @@ fun DownloadMapsScreen(
     val lowStorageStateCode by viewModel.lowStoragePromptStateCode.collectAsStateWithLifecycle()
     val mismatchedBuilds by viewModel.mismatchedBuildVersions.collectAsStateWithLifecycle()
     val packsTick by viewModel.packsChangedTick.collectAsStateWithLifecycle()
+    val indexingStatus by viewModel.indexingStatusMessage.collectAsStateWithLifecycle()
 
     var filterText by remember { mutableStateOf("") }
     var showInstalledOnly by remember { mutableStateOf(false) }
@@ -173,6 +174,32 @@ fun DownloadMapsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            indexingStatus?.let { note ->
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("places_indexing_progress_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .width(48.dp)
+                                .height(4.dp)
+                        )
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

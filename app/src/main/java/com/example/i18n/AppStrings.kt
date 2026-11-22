@@ -24,846 +24,300 @@ enum class MapThemeMode(val code: String) {
     NIGHT("night")
 }
 
-data class AppStrings(
-    val appName: String,
-    val tagline: String,
+/**
+ * Bilingual string contract implemented as zero-arg singleton objects ([EnglishStrings] and
+ * [PersianStrings]) so it never hits the 255-parameter JVM/DEX constructor limit.
+ */
+interface AppStrings {
+    val appName: String
+    val tagline: String
     // Bottom nav / navigation destinations
-    val tabDrive: String,
-    val tabMaps: String,
-    val tabSettings: String,
+    val tabDrive: String
+    val tabMaps: String
+    val tabSettings: String
     // Search
-    val searchHint: String,
-    val searchNoPacksTitle: String,
-    val searchNoPacksBody: String,
-    val searchNoResults: String,
-    val searchCategoryGas: String,
-    val searchCategoryPharmacy: String,
-    val searchCategoryGrocery: String,
-    val searchCategoryCoffee: String,
-    val searchCategoryFood: String,
-    val searchCategoryHospital: String,
-    val savedHome: String,
-    val savedWork: String,
-    val savedFavorites: String,
-    val savedRecent: String,
-    val setHome: String,
-    val setWork: String,
-    val addFavorite: String,
-    val removeFavorite: String,
-    val navigateNow: String,
-    val previewRoute: String,
+    val searchHint: String
+    val searchNoPacksTitle: String
+    val searchNoPacksBody: String
+    val searchNoResults: String
+    val searchCategoryGas: String
+    val searchCategoryPharmacy: String
+    val searchCategoryGrocery: String
+    val searchCategoryCoffee: String
+    val searchCategoryFood: String
+    val searchCategoryHospital: String
+    val savedHome: String
+    val savedWork: String
+    val savedFavorites: String
+    val savedRecent: String
+    val setHome: String
+    val setWork: String
+    val addFavorite: String
+    val removeFavorite: String
+    val navigateNow: String
+    val previewRoute: String
     // Routing & Navigation
-    val routeOptions: String,
-    val avoidTolls: String,
-    val avoidHighways: String,
-    val avoidFerries: String,
-    val calculatingRoute: String,
-    val routePrimary: String,
-    val routeShortest: String,
-    val routeAlternate: String,
-    val routePreferenceLabel: String,
-    val startNavigation: String,
-    val endNavigation: String,
-    val rerouting: String,
-    val arrivedTitle: String,
-    val arrivedSubtitle: String,
-    val etaLabel: String,
-    val remainingLabel: String,
-    val arrivalLabel: String,
-    val nextManeuverExit: String,
-    val view3D: String,
-    val view2D: String,
-    val recenter: String,
-    val compassNorthUp: String,
-    val compassHeadingUp: String,
-    val compassLowAccuracyMessage: String,
-    val muteVoice: String,
-    val unmuteVoice: String,
-    val gpsWaiting: String,
-    val gpsPermissionRequired: String,
-    val grantLocationPermission: String,
-    val approximateLocationTitle: String,
-    val approximateLocationBanner: String,
-    val openAppSettings: String,
-    val simulationModeBadge: String,
-    val offlineReadyBadge: String,
-    val noMapPackLoaded: String,
-    val downloadOrImportAction: String,
-    val missingRoutingTiles: String,
-    val missingStateRouteTitle: String,
-    val downloadMissingStateAction: String,
+    val routeOptions: String
+    val avoidTolls: String
+    val avoidHighways: String
+    val avoidFerries: String
+    val calculatingRoute: String
+    val routePrimary: String
+    val routeShortest: String
+    val routeAlternate: String
+    val routePreferenceLabel: String
+    val startNavigation: String
+    val endNavigation: String
+    val rerouting: String
+    val arrivedTitle: String
+    val arrivedSubtitle: String
+    val etaLabel: String
+    val remainingLabel: String
+    val arrivalLabel: String
+    val nextManeuverExit: String
+    val view3D: String
+    val view2D: String
+    val recenter: String
+    val compassNorthUp: String
+    val compassHeadingUp: String
+    val compassLowAccuracyMessage: String
+    val muteVoice: String
+    val unmuteVoice: String
+    val gpsWaiting: String
+    val gpsPermissionRequired: String
+    val grantLocationPermission: String
+    val approximateLocationTitle: String
+    val approximateLocationBanner: String
+    val openAppSettings: String
+    val simulationModeBadge: String
+    val offlineReadyBadge: String
+    val noMapPackLoaded: String
+    val downloadOrImportAction: String
+    val missingRoutingTiles: String
+    val missingStateRouteTitle: String
+    val downloadMissingStateAction: String
     // Lane guidance & signposts
-    val junctionPreviewLabel: String,
-    val tapToClosePreview: String,
-    val exitLabel: String,
+    val junctionPreviewLabel: String
+    val tapToClosePreview: String
+    val exitLabel: String
     // Speed & Alerts
-    val speedLimitTitle: String,
-    val speedUnitMph: String,
-    val speedUnitKmh: String,
-    val overspeedWarning: String,
-    val alertSpeedDrop: String,
-    val alertSharpCurve: String,
-    val alertTollBooth: String,
-    val alertRailroad: String,
-    val alertSchoolZone: String,
-    val alertStopSign: String,
-    val sectionRoadAlerts: String,
-    val junctionPreviewSetting: String,
-    val speedWarningThresholdLabel: String,
-    val alertToggleSpeedDrop: String,
-    val alertToggleSharpCurve: String,
-    val alertToggleTollBooth: String,
-    val alertToggleRailroad: String,
-    val alertToggleSchoolZone: String,
-    val alertToggleStopSign: String,
+    val speedLimitTitle: String
+    val speedUnitMph: String
+    val speedUnitKmh: String
+    val overspeedWarning: String
+    val alertSpeedDrop: String
+    val alertSharpCurve: String
+    val alertTollBooth: String
+    val alertRailroad: String
+    val alertSchoolZone: String
+    val alertStopSign: String
+    val sectionRoadAlerts: String
+    val junctionPreviewSetting: String
+    val speedWarningThresholdLabel: String
+    val alertToggleSpeedDrop: String
+    val alertToggleSharpCurve: String
+    val alertToggleTollBooth: String
+    val alertToggleRailroad: String
+    val alertToggleSchoolZone: String
+    val alertToggleStopSign: String
     // Waze-style user reports (8 types + management + export/import)
-    val reportButton: String,
-    val reportSheetTitle: String,
-    val reportPolice: String,
-    val reportHazard: String,
-    val reportCrash: String,
-    val reportClosure: String,
-    val reportSpeedTrap: String,
-    val reportConstruction: String,
-    val reportObjectOnRoad: String,
-    val reportStalledVehicle: String,
-    val reportSavedToast: String,
-    val reportAheadPrefix: String,
-    val reportStillThere: String,
-    val reportGone: String,
-    val activeReportsTitle: String,
-    val sectionMyReports: String,
-    val noActiveReports: String,
-    val addNoteHint: String,
-    val saveNote: String,
-    val exportReports: String,
-    val importReports: String,
+    val reportButton: String
+    val reportSheetTitle: String
+    val reportPolice: String
+    val reportHazard: String
+    val reportCrash: String
+    val reportClosure: String
+    val reportSpeedTrap: String
+    val reportConstruction: String
+    val reportObjectOnRoad: String
+    val reportStalledVehicle: String
+    val reportSavedToast: String
+    val reportAheadPrefix: String
+    val reportStillThere: String
+    val reportGone: String
+    val activeReportsTitle: String
+    val sectionMyReports: String
+    val noActiveReports: String
+    val addNoteHint: String
+    val saveNote: String
+    val exportReports: String
+    val importReports: String
     // Backup & Transfer (Settings + Saved Places + Reports)
-    val sectionBackupTransfer: String,
-    val exportBackupButton: String,
-    val importBackupButton: String,
-    val backupExportSuccess: String,
-    val backupImportSuccess: String,
-    val backupTransferFailed: String,
+    val sectionBackupTransfer: String
+    val exportBackupButton: String
+    val importBackupButton: String
+    val backupExportSuccess: String
+    val backupImportSuccess: String
+    val backupTransferFailed: String
     // State Map Packs screen
-    val mapsScreenTitle: String,
-    val storageUsedLabel: String,
-    val storageAvailableLabel: String,
-    val refreshManifest: String,
-    val importLocalPack: String,
-    val filterStatesHint: String,
-    val filterAll: String,
-    val filterInstalled: String,
-    val currentStateBadge: String,
-    val regionalPacksHint: String,
-    val updateAllButton: String,
-    val buildMismatchTitle: String,
-    val buildMismatchBody: String,
-    val statusNotDownloaded: String,
-    val statusQueued: String,
-    val statusDownloading: String,
-    val statusPaused: String,
-    val statusVerifying: String,
-    val statusInstalled: String,
-    val statusUpdateAvailable: String,
-    val statusCorrupted: String,
-    val actionDownload: String,
-    val actionPause: String,
-    val actionResume: String,
-    val actionUpdate: String,
-    val actionDelete: String,
-    val actionRetry: String,
-    val actionImportFiles: String,
-    val lowStorageTitle: String,
-    val lowStorageBody: String,
-    val cancel: String,
-    val proceedAnyway: String,
-    val confirmDeleteTitle: String,
-    val confirmDeleteBody: String,
-    val manifestUnconfiguredHint: String,
-    val packFilesSummary: String,
-    val importPickStateTitle: String,
-    val importPickFileHint: String,
-    val importSuccess: String,
-    val importFailed: String,
-    val checksumMismatch: String,
-    val osmOnlyPlacesNote: String,
+    val mapsScreenTitle: String
+    val storageUsedLabel: String
+    val storageAvailableLabel: String
+    val refreshManifest: String
+    val importLocalPack: String
+    val filterStatesHint: String
+    val filterAll: String
+    val filterInstalled: String
+    val currentStateBadge: String
+    val regionalPacksHint: String
+    val updateAllButton: String
+    val buildMismatchTitle: String
+    val buildMismatchBody: String
+    val statusNotDownloaded: String
+    val statusQueued: String
+    val statusDownloading: String
+    val statusPaused: String
+    val statusVerifying: String
+    val statusInstalled: String
+    val statusUpdateAvailable: String
+    val statusCorrupted: String
+    val actionDownload: String
+    val actionPause: String
+    val actionResume: String
+    val actionUpdate: String
+    val actionDelete: String
+    val actionRetry: String
+    val actionImportFiles: String
+    val lowStorageTitle: String
+    val lowStorageBody: String
+    val cancel: String
+    val proceedAnyway: String
+    val confirmDeleteTitle: String
+    val confirmDeleteBody: String
+    val manifestUnconfiguredHint: String
+    val packFilesSummary: String
+    val importPickStateTitle: String
+    val importPickFileHint: String
+    val importSuccess: String
+    val importFailed: String
+    val checksumMismatch: String
+    val osmOnlyPlacesNote: String
     // Settings & GitHub Releases Pack Source
-    val settingsTitle: String,
-    val sectionLanguageUnits: String,
-    val languageLabel: String,
-    val languageEnglish: String,
-    val languagePersian: String,
-    val unitsLabel: String,
-    val unitsImperial: String,
-    val unitsMetric: String,
-    val themeModeLabel: String,
-    val themeAuto: String,
-    val themeDay: String,
-    val themeNight: String,
-    val sectionVoiceGuidance: String,
-    val voiceGuidanceEnabled: String,
-    val speedWarningAudio: String,
-    val testVoiceButton: String,
-    val persianTtsMissingTitle: String,
-    val persianTtsMissingBody: String,
-    val openTtsSettings: String,
-    val sectionPackServer: String,
-    val githubOwnerLabel: String,
-    val githubRepoLabel: String,
-    val saveGithubRepo: String,
-    val customBaseUrlLabel: String,
-    val baseUrlPlaceholder: String,
-    val activePackUrlLabel: String,
-    val saveBaseUrl: String,
-    val sectionRoutingDefaults: String,
-    val sectionAboutLicenses: String,
-    val aboutTitle: String,
-    val appVersionLabel: String,
-    val dataBuildVersionLabel: String,
-    val mapAttributionShort: String,
-    val osmAttributionFull: String,
-    val overtureAttributionFull: String,
-    val openSourceLicensesBody: String,
-    val close: String,
+    val settingsTitle: String
+    val sectionLanguageUnits: String
+    val languageLabel: String
+    val languageEnglish: String
+    val languagePersian: String
+    val unitsLabel: String
+    val unitsImperial: String
+    val unitsMetric: String
+    val themeModeLabel: String
+    val themeAuto: String
+    val themeDay: String
+    val themeNight: String
+    val sectionVoiceGuidance: String
+    val voiceGuidanceEnabled: String
+    val speedWarningAudio: String
+    val testVoiceButton: String
+    val persianTtsMissingTitle: String
+    val persianTtsMissingBody: String
+    val openTtsSettings: String
+    val sectionPackServer: String
+    val githubOwnerLabel: String
+    val githubRepoLabel: String
+    val saveGithubRepo: String
+    val customBaseUrlLabel: String
+    val baseUrlPlaceholder: String
+    val activePackUrlLabel: String
+    val saveBaseUrl: String
+    val sectionRoutingDefaults: String
+    val sectionAboutLicenses: String
+    val aboutTitle: String
+    val appVersionLabel: String
+    val dataBuildVersionLabel: String
+    val mapAttributionShort: String
+    val osmAttributionFull: String
+    val overtureAttributionFull: String
+    val openSourceLicensesBody: String
+    val close: String
     // Developer Testing
-    val sectionDevTesting: String,
-    val devOnlineOregonTitle: String,
-    val devOnlineOregonSubtitle: String,
-    val devOnlineBadge: String,
-    val enableDevOregonQuickAction: String,
+    val sectionDevTesting: String
+    val devOnlineOregonTitle: String
+    val devOnlineOregonSubtitle: String
+    val devOnlineBadge: String
+    val enableDevOregonQuickAction: String
     // Phase 2 Additions
-    val thenPrefix: String,
-    val repeatVoice: String,
-    val gpsSignalLost: String,
-    val turnListHeader: String,
-    val showTurns: String,
-    val hideTurns: String,
-    val droppedPin: String,
-    val simulateDriveTitle: String,
-    val simulateDriveSubtitle: String,
-    val simulateWrongTurn: String,
-    val permissionRationaleTitle: String,
-    val permissionRationaleBody: String,
-    val continueAction: String,
-    val nativeRoutingError: String,
+    val thenPrefix: String
+    val repeatVoice: String
+    val gpsSignalLost: String
+    val turnListHeader: String
+    val showTurns: String
+    val hideTurns: String
+    val droppedPin: String
+    val simulateDriveTitle: String
+    val simulateDriveSubtitle: String
+    val simulateWrongTurn: String
+    val permissionRationaleTitle: String
+    val permissionRationaleBody: String
+    val continueAction: String
+    val nativeRoutingError: String
     // Phase 4 Welcome Onboarding
-    val welcomeTitle: String,
-    val welcomeSubtitle: String,
-    val welcomePermissionsCardTitle: String,
-    val welcomePermissionsGranted: String,
-    val welcomeGrantPermissionsButton: String,
-    val welcomeOpenMapsButton: String,
+    val welcomeTitle: String
+    val welcomeSubtitle: String
+    val welcomePermissionsCardTitle: String
+    val welcomePermissionsGranted: String
+    val welcomeGrantPermissionsButton: String
+    val welcomeOpenMapsButton: String
     // Crash Recovery Dialog
-    val crashDialogTitle: String,
-    val crashDialogBody: String,
-    val copyErrorDetails: String,
-    val errorDetailsCopied: String,
+    val crashDialogTitle: String
+    val crashDialogBody: String
+    val copyErrorDetails: String
+    val errorDetailsCopied: String
     // Diagnostics & Persian Voice Fallback
-    val diagnosticsTitle: String,
-    val diagnosticsSubtitle: String,
-    val openDiagnostics: String,
-    val copyAll: String,
-    val diagnosticsCopied: String,
-    val backAction: String,
-    val diagSectionAppDevice: String,
-    val diagAndroidVersion: String,
-    val diagPhoneModel: String,
-    val diagSectionPacks: String,
-    val diagBuildVersion: String,
-    val diagPlacesSource: String,
-    val diagFileSizes: String,
-    val diagNoPacksInstalled: String,
-    val diagSectionGpsCompass: String,
-    val diagGpsAccuracy: String,
-    val diagGpsProvider: String,
-    val diagGpsFixAge: String,
-    val diagPreciseLocation: String,
-    val diagCompassHeading: String,
-    val diagCompassAccuracy: String,
-    val diagNoGpsFix: String,
-    val diagSectionLastRoute: String,
-    val diagManeuversCount: String,
-    val diagManeuversWithLanes: String,
-    val diagShapeSpeedLimits: String,
-    val diagRoutingTimeMs: String,
-    val diagNoRouteYet: String,
-    val diagSectionTts: String,
-    val diagTtsEngine: String,
-    val diagPersianVoiceStatus: String,
-    val diagEnglishVoiceStatus: String,
-    val diagAvailableLabel: String,
-    val diagInstalledLabel: String,
-    val diagTestPersianVoice: String,
-    val diagTestEnglishVoice: String,
-    val diagPersianVoiceUnavailableToast: String,
-    val diagUseEnglishVoiceInPersian: String,
-    val diagUseEnglishVoiceInPersianSubtitle: String,
-    val diagPersianInstallSteps: String,
-    val diagSectionErrorLog: String,
-    val diagNoErrorsLogged: String,
-    val diagYes: String,
-    val diagNo: String,
-    val diagGranted: String,
-    val diagNotGranted: String,
-    val diagSensorHigh: String,
-    val diagSensorMedium: String,
-    val diagSensorLow: String,
-    val diagSensorUnreliable: String,
+    val diagnosticsTitle: String
+    val diagnosticsSubtitle: String
+    val openDiagnostics: String
+    val copyAll: String
+    val diagnosticsCopied: String
+    val backAction: String
+    val diagSectionAppDevice: String
+    val diagAndroidVersion: String
+    val diagPhoneModel: String
+    val diagSectionPacks: String
+    val diagBuildVersion: String
+    val diagPlacesSource: String
+    val diagFileSizes: String
+    val diagNoPacksInstalled: String
+    val diagSectionGpsCompass: String
+    val diagGpsAccuracy: String
+    val diagGpsProvider: String
+    val diagGpsFixAge: String
+    val diagPreciseLocation: String
+    val diagCompassHeading: String
+    val diagCompassAccuracy: String
+    val diagNoGpsFix: String
+    val diagSectionLastRoute: String
+    val diagManeuversCount: String
+    val diagManeuversWithLanes: String
+    val diagShapeSpeedLimits: String
+    val diagRoutingTimeMs: String
+    val diagNoRouteYet: String
+    val diagSectionTts: String
+    val diagTtsEngine: String
+    val diagPersianVoiceStatus: String
+    val diagEnglishVoiceStatus: String
+    val diagAvailableLabel: String
+    val diagInstalledLabel: String
+    val diagTestPersianVoice: String
+    val diagTestEnglishVoice: String
+    val diagPersianVoiceUnavailableToast: String
+    val diagUseEnglishVoiceInPersian: String
+    val diagUseEnglishVoiceInPersianSubtitle: String
+    val diagPersianInstallSteps: String
+    val diagSectionErrorLog: String
+    val diagNoErrorsLogged: String
+    val diagYes: String
+    val diagNo: String
+    val diagGranted: String
+    val diagNotGranted: String
+    val diagSensorHigh: String
+    val diagSensorMedium: String
+    val diagSensorLow: String
+    val diagSensorUnreliable: String
     val diagSensorUnavailable: String
-)
+}
 
-val EnglishStrings = AppStrings(
-    appName = "RahYab",
-    tagline = "Offline US Turn-by-Turn Navigation",
-    tabDrive = "Drive",
-    tabMaps = "Maps",
-    tabSettings = "Settings",
-    searchHint = "Search places, brands, addresses, or فارسی...",
-    searchNoPacksTitle = "No State Packs Installed",
-    searchNoPacksBody = "Download or import a US state map pack (e.g. Oregon) to search businesses, addresses, and navigate completely offline.",
-    searchNoResults = "No matching places found in installed state packs.",
-    searchCategoryGas = "Gas",
-    searchCategoryPharmacy = "Pharmacy",
-    searchCategoryGrocery = "Grocery",
-    searchCategoryCoffee = "Coffee",
-    searchCategoryFood = "Food",
-    searchCategoryHospital = "Hospital",
-    savedHome = "Home",
-    savedWork = "Work",
-    savedFavorites = "Favorites",
-    savedRecent = "Recent",
-    setHome = "Set Home",
-    setWork = "Set Work",
-    addFavorite = "Save Favorite",
-    removeFavorite = "Remove Favorite",
-    navigateNow = "Start",
-    previewRoute = "Directions",
-    routeOptions = "Route Options",
-    avoidTolls = "Avoid Tolls",
-    avoidHighways = "Avoid Highways",
-    avoidFerries = "Avoid Ferries",
-    calculatingRoute = "Calculating offline route…",
-    routePrimary = "Fastest",
-    routeShortest = "Shortest",
-    routeAlternate = "Alternative",
-    routePreferenceLabel = "Route Preference",
-    startNavigation = "Start",
-    endNavigation = "End",
-    rerouting = "Rerouting…",
-    arrivedTitle = "You have arrived",
-    arrivedSubtitle = "Destination is nearby",
-    etaLabel = "ETA",
-    remainingLabel = "Remaining",
-    arrivalLabel = "Arrival",
-    nextManeuverExit = "Exit",
-    view3D = "3D",
-    view2D = "2D",
-    recenter = "Recenter",
-    compassNorthUp = "Rotate map to North-Up",
-    compassHeadingUp = "Follow your direction",
-    compassLowAccuracyMessage = "Compass accuracy is low. Move your phone in a figure-8 motion to calibrate.",
-    muteVoice = "Mute voice",
-    unmuteVoice = "Unmute voice",
-    gpsWaiting = "Finding your location...",
-    gpsPermissionRequired = "Location permission is required for offline GPS navigation.",
-    grantLocationPermission = "Enable GPS",
-    approximateLocationTitle = "Approximate location only",
-    approximateLocationBanner = "Your position may be inaccurate. Open Settings -> Permissions -> Location and turn on \"Use precise location\".",
-    openAppSettings = "Open Settings",
-    simulationModeBadge = "SIMULATION",
-    offlineReadyBadge = "Offline GPS",
-    noMapPackLoaded = "No offline state map installed yet",
-    downloadOrImportAction = "Download Maps",
-    missingRoutingTiles = "Routing tiles for this state are missing or corrupted. Download or re-import the state pack to calculate routes.",
-    missingStateRouteTitle = "Missing State Map Pack",
-    downloadMissingStateAction = "Download Missing State",
-    junctionPreviewLabel = "Junction Preview",
-    tapToClosePreview = "Tap to close",
-    exitLabel = "EXIT",
-    speedLimitTitle = "SPEED\nLIMIT",
-    speedUnitMph = "MPH",
-    speedUnitKmh = "KM/H",
-    overspeedWarning = "Slow down — over speed limit",
-    alertSpeedDrop = "Speed limit drops ahead",
-    alertSharpCurve = "Sharp curve ahead",
-    alertTollBooth = "Toll booth ahead",
-    alertRailroad = "Railroad crossing ahead",
-    alertSchoolZone = "School zone ahead",
-    alertStopSign = "Stop sign ahead",
-    sectionRoadAlerts = "Lane, Speed & Road Alerts",
-    junctionPreviewSetting = "Highway Junction Previews",
-    speedWarningThresholdLabel = "Overspeed Warning Threshold",
-    alertToggleSpeedDrop = "Speed Limit Drops Ahead",
-    alertToggleSharpCurve = "Sharp Curves Ahead",
-    alertToggleTollBooth = "Toll Booths",
-    alertToggleRailroad = "Railroad Crossings",
-    alertToggleSchoolZone = "School Zones",
-    alertToggleStopSign = "Stop Signs & Traffic Signals",
-    reportButton = "Report",
-    reportSheetTitle = "Report Driving Alert",
-    reportPolice = "Police",
-    reportHazard = "Hazard",
-    reportCrash = "Crash",
-    reportClosure = "Road Closed",
-    reportSpeedTrap = "Speed Trap",
-    reportConstruction = "Construction",
-    reportObjectOnRoad = "Object on Road",
-    reportStalledVehicle = "Stalled Vehicle",
-    reportSavedToast = "Report saved on device map",
-    reportAheadPrefix = "Reported ahead",
-    reportStillThere = "Still there",
-    reportGone = "Cleared",
-    activeReportsTitle = "Nearby Alerts",
-    sectionMyReports = "My Driving Reports & Sharing",
-    noActiveReports = "No active reports saved on this phone.",
-    addNoteHint = "Optional short note…",
-    saveNote = "Save",
-    exportReports = "Export Reports",
-    importReports = "Import Reports",
-    sectionBackupTransfer = "Backup & Phone Transfer",
-    exportBackupButton = "Export Settings & Saved Places",
-    importBackupButton = "Import Settings & Saved Places",
-    backupExportSuccess = "Backup exported successfully",
-    backupImportSuccess = "Backup imported successfully",
-    backupTransferFailed = "Backup file could not be processed",
-    mapsScreenTitle = "Download US Maps",
-    storageUsedLabel = "Map Storage Used",
-    storageAvailableLabel = "Free Phone Space",
-    refreshManifest = "Check Updates",
-    importLocalPack = "Import Local File",
-    filterStatesHint = "Search 50 states + D.C.",
-    filterAll = "All (51)",
-    filterInstalled = "Installed",
-    currentStateBadge = "Your Location",
-    regionalPacksHint = "Split into regions for fast downloads",
-    updateAllButton = "Update All",
-    buildMismatchTitle = "Map Build Mismatch",
-    buildMismatchBody = "Installed state packs come from different data builds. Update them so cross-state routes stay accurate.",
-    statusNotDownloaded = "Not downloaded",
-    statusQueued = "Queued…",
-    statusDownloading = "Downloading",
-    statusPaused = "Paused",
-    statusVerifying = "Verifying checksums…",
-    statusInstalled = "Installed",
-    statusUpdateAvailable = "Update available",
-    statusCorrupted = "Pack incomplete or corrupted",
-    actionDownload = "Download",
-    actionPause = "Pause",
-    actionResume = "Resume",
-    actionUpdate = "Update",
-    actionDelete = "Delete",
-    actionRetry = "Retry",
-    actionImportFiles = "Import",
-    lowStorageTitle = "Low Storage Space",
-    lowStorageBody = "Your phone has limited free space for this state pack. Free up space or proceed with caution.",
-    cancel = "Cancel",
-    proceedAnyway = "Download Anyway",
-    confirmDeleteTitle = "Delete State Pack?",
-    confirmDeleteBody = "This removes the offline map tiles, routing graph, and places database for this pack.",
-    manifestUnconfiguredHint = "Configure your GitHub repository in Settings to download state packs, or tap Import to load local files.",
-    packFilesSummary = "Map Tiles • Valhalla Routing • Places FTS5",
-    importPickStateTitle = "Import Pack File For State",
-    importPickFileHint = "Select a .zip bundle or an individual .pmtiles, .tar, or .db file",
-    importSuccess = "Imported successfully",
-    importFailed = "File validation failed or file is corrupted",
-    checksumMismatch = "Checksum verification failed. Pack marked corrupted.",
-    osmOnlyPlacesNote = "Places built from OpenStreetMap only (Overture unavailable during build)",
-    settingsTitle = "Settings",
-    sectionLanguageUnits = "Language & Units",
-    languageLabel = "App & Voice Language",
-    languageEnglish = "American English",
-    languagePersian = "فارسی (Persian)",
-    unitsLabel = "Distance & Speed Units",
-    unitsImperial = "Miles & Feet (MPH)",
-    unitsMetric = "Kilometers & Meters (KM/H)",
-    themeModeLabel = "Map & Cockpit Theme",
-    themeAuto = "Auto (Day / Night)",
-    themeDay = "Day",
-    themeNight = "Night",
-    sectionVoiceGuidance = "Voice Guidance",
-    voiceGuidanceEnabled = "Turn-by-Turn Voice Prompts",
-    speedWarningAudio = "Overspeed Warning Sound",
-    testVoiceButton = "Test Voice Guidance",
-    persianTtsMissingTitle = "Persian Voice Not Installed",
-    persianTtsMissingBody = "Your phone does not have a Persian (fa-IR) Text-to-Speech voice installed. Open Android TTS Settings -> Speech Recognition & Synthesis -> Install Voice Data -> Persian (Iran). Voice guidance will use English until installed.",
-    openTtsSettings = "Open TTS Settings",
-    sectionPackServer = "GitHub Map Pack Source",
-    githubOwnerLabel = "GitHub Username",
-    githubRepoLabel = "Repository Name",
-    saveGithubRepo = "Save GitHub Repo",
-    customBaseUrlLabel = "Optional Custom Base URL Override",
-    baseUrlPlaceholder = "Leave blank to use GitHub Releases",
-    activePackUrlLabel = "Active Download URL",
-    saveBaseUrl = "Save Custom URL",
-    sectionRoutingDefaults = "Routing Defaults",
-    sectionAboutLicenses = "About & Licenses",
-    aboutTitle = "About RahYab & Licenses",
-    appVersionLabel = "App Version",
-    dataBuildVersionLabel = "Data Build Version",
-    mapAttributionShort = "© OpenStreetMap • Overture Maps",
-    osmAttributionFull = "© OpenStreetMap contributors. Map and routing data is available under the Open Database License (ODbL).",
-    overtureAttributionFull = "Place and business directory data derived from Overture Maps Foundation (CDLA Permissive 2.0 / ODbL).",
-    openSourceLicensesBody = "Map rendering powered by MapLibre Native (BSD-2-Clause) with Protomaps PMTiles vector basemap format. Offline routing powered by Valhalla (MIT) via valhalla-mobile. Place search powered by on-device SQLite FTS5.",
-    close = "Close",
-    sectionDevTesting = "Developer & Emulator Testing",
-    devOnlineOregonTitle = "Oregon Online Test Mode",
-    devOnlineOregonSubtitle = "Load Oregon vector map (OpenFreeMap), routing (public Valhalla), and search (Photon/Nominatim) online before building offline state packs.",
-    devOnlineBadge = "DEV ONLINE • OR",
-    enableDevOregonQuickAction = "Enable Oregon Dev Test Mode",
-    thenPrefix = "Then",
-    repeatVoice = "Repeat",
-    gpsSignalLost = "GPS signal lost",
-    turnListHeader = "Turn-by-Turn Steps",
-    showTurns = "Steps",
-    hideTurns = "Hide Steps",
-    droppedPin = "Dropped Pin",
-    simulateDriveTitle = "Simulate Drive (Emulator Testing)",
-    simulateDriveSubtitle = "Moves your position along the active route at realistic city and highway speeds to test lanes, voice, alerts, and rerouting.",
-    simulateWrongTurn = "Wrong Turn",
-    permissionRationaleTitle = "Location & Notification Permissions",
-    permissionRationaleBody = "RahYab needs GPS location access to guide you turn-by-turn completely offline, and notification permission to keep navigating in the background with a persistent turn notification.",
-    continueAction = "Continue",
-    nativeRoutingError = "Offline routing engine could not calculate a route. Ensure state routing tiles are installed and not corrupted.",
-    welcomeTitle = "Welcome to RahYab",
-    welcomeSubtitle = "100% offline US turn-by-turn car navigation with lane guidance, road alerts, and natural English & Persian voice.",
-    welcomePermissionsCardTitle = "GPS & Notification Access",
-    welcomePermissionsGranted = "Location permission granted",
-    welcomeGrantPermissionsButton = "Allow Location & Notifications",
-    welcomeOpenMapsButton = "Continue to Download Maps",
-    crashDialogTitle = "The app closed unexpectedly",
-    crashDialogBody = "An unexpected error occurred during your previous session. Copy the error details below so you can share them for troubleshooting.",
-    copyErrorDetails = "Copy error details",
-    errorDetailsCopied = "Error details copied",
-    diagnosticsTitle = "Diagnostics",
-    diagnosticsSubtitle = "App version, installed map packs, GPS & compass status, last route metrics, TTS voices, and recent error log.",
-    openDiagnostics = "Open Diagnostics",
-    copyAll = "Copy all",
-    diagnosticsCopied = "Diagnostics copied to clipboard",
-    backAction = "Back",
-    diagSectionAppDevice = "App & Device",
-    diagAndroidVersion = "Android Version",
-    diagPhoneModel = "Phone Model",
-    diagSectionPacks = "Installed Map Packs",
-    diagBuildVersion = "Build Version",
-    diagPlacesSource = "Places Source",
-    diagFileSizes = "File Sizes",
-    diagNoPacksInstalled = "No offline map packs installed.",
-    diagSectionGpsCompass = "GPS & Compass",
-    diagGpsAccuracy = "GPS Accuracy",
-    diagGpsProvider = "Provider",
-    diagGpsFixAge = "Last Fix Age",
-    diagPreciseLocation = "Precise Location Permission",
-    diagCompassHeading = "Compass Heading",
-    diagCompassAccuracy = "Compass Sensor Accuracy",
-    diagNoGpsFix = "No GPS fix received yet",
-    diagSectionLastRoute = "Last Calculated Route",
-    diagManeuversCount = "Maneuvers",
-    diagManeuversWithLanes = "Maneuvers with Lane Data",
-    diagShapeSpeedLimits = "Shape Points with Speed Limit",
-    diagRoutingTimeMs = "Routing Time",
-    diagNoRouteYet = "No route calculated in this session yet.",
-    diagSectionTts = "Text-to-Speech (TTS)",
-    diagTtsEngine = "TTS Engine",
-    diagPersianVoiceStatus = "Persian (fa-IR)",
-    diagEnglishVoiceStatus = "American English (en-US)",
-    diagAvailableLabel = "Available",
-    diagInstalledLabel = "Installed",
-    diagTestPersianVoice = "Test Persian voice",
-    diagTestEnglishVoice = "Test English voice",
-    diagPersianVoiceUnavailableToast = "Persian (fa-IR) voice is not installed on this phone.",
-    diagUseEnglishVoiceInPersian = "Speak voice guidance in English (keep Persian UI)",
-    diagUseEnglishVoiceInPersianSubtitle = "Keep all menus and labels in Persian while speaking turn-by-turn directions in American English.",
-    diagPersianInstallSteps = "To install Persian (fa-IR) voice:\n1. Make sure \"Speech Recognition & Synthesis from Google\" is installed and updated.\n2. Tap \"Open TTS Settings\" below.\n3. Select Speech Recognition & Synthesis as the preferred engine.\n4. Tap the engine gear icon -> Install voice data -> Persian (Iran).\n5. Return to RahYab and tap \"Test Persian voice\".\n\nبرای نصب صدای فارسی:\n۱. برنامه «Speech Recognition & Synthesis from Google» را نصب/به‌روز کنید.\n۲. وارد تنظیمات TTS ← Install voice data شوید و زبان فارسی (ایران) را دانلود کنید.",
-    diagSectionErrorLog = "App Error Log (Last 20 Lines)",
-    diagNoErrorsLogged = "No errors logged.",
-    diagYes = "Yes",
-    diagNo = "No",
-    diagGranted = "Granted",
-    diagNotGranted = "Not granted",
-    diagSensorHigh = "High",
-    diagSensorMedium = "Medium",
-    diagSensorLow = "Low",
-    diagSensorUnreliable = "Unreliable",
-    diagSensorUnavailable = "No reading yet"
-)
-
-val PersianStrings = AppStrings(
-    appName = "رهیاب",
-    tagline = "مسیریابی کاملاً آفلاین در ایالات متحده",
-    tabDrive = "رانندگی",
-    tabMaps = "نقشه‌ها",
-    tabSettings = "تنظیمات",
-    searchHint = "جستجوی مکان، برند، آدرس یا مثلاً بست بای، پمپ بنزین...",
-    searchNoPacksTitle = "هیچ نقشه ایالتی نصب نشده است",
-    searchNoPacksBody = "برای جستجوی فروشگاه‌ها، آدرس‌ها و مسیریابی کاملاً آفلاین، بسته یک ایالت (مانند اورگن) را دانلود یا وارد کنید.",
-    searchNoResults = "مکانی در بسته‌های نصب‌شده یافت نشد.",
-    searchCategoryGas = "پمپ بنزین",
-    searchCategoryPharmacy = "داروخانه",
-    searchCategoryGrocery = "سوپرمارکت",
-    searchCategoryCoffee = "کافه",
-    searchCategoryFood = "رستوران",
-    searchCategoryHospital = "بیمارستان",
-    savedHome = "خانه",
-    savedWork = "محل کار",
-    savedFavorites = "علاقه‌مندی‌ها",
-    savedRecent = "اخیر",
-    setHome = "تنظیم خانه",
-    setWork = "تنظیم محل کار",
-    addFavorite = "ذخیره در علاقه‌مندی",
-    removeFavorite = "حذف از علاقه‌مندی",
-    navigateNow = "شروع",
-    previewRoute = "مسیریابی",
-    routeOptions = "گزینه‌های مسیر",
-    avoidTolls = "پرهیز از عوارضی",
-    avoidHighways = "پرهیز از بزرگراه",
-    avoidFerries = "پرهیز از کشتی",
-    calculatingRoute = "در حال محاسبه مسیر آفلاین…",
-    routePrimary = "سریع‌ترین",
-    routeShortest = "کوتاه‌ترین",
-    routeAlternate = "جایگزین",
-    routePreferenceLabel = "اولویت مسیر",
-    startNavigation = "شروع",
-    endNavigation = "پایان",
-    rerouting = "در حال مسیریابی مجدد…",
-    arrivedTitle = "به مقصد رسیدید",
-    arrivedSubtitle = "مقصد در نزدیکی شماست",
-    etaLabel = "زمان باقی‌مانده",
-    remainingLabel = "مسافت",
-    arrivalLabel = "ساعت رسیدن",
-    nextManeuverExit = "خروجی",
-    view3D = "سه‌بعدی",
-    view2D = "دوبعدی",
-    recenter = "مرکز",
-    compassNorthUp = "چرخش نقشه به سمت شمال",
-    compassHeadingUp = "چرخش نقشه هم‌جهت حرکت شما",
-    compassLowAccuracyMessage = "دقت قطب‌نما کم است. برای کالیبره کردن، گوشی را به شکل عدد ۸ انگلیسی حرکت دهید.",
-    muteVoice = "قطع صدا",
-    unmuteVoice = "وصل صدا",
-    gpsWaiting = "در حال یافتن موقعیت شما...",
-    gpsPermissionRequired = "برای مسیریابی آفلاین به دسترسی موقعیت مکانی GPS نیاز است.",
-    grantLocationPermission = "فعال‌سازی GPS",
-    approximateLocationTitle = "فقط موقعیت مکانی تقریبی فعال است",
-    approximateLocationBanner = "موقعیت شما ممکن است دقیق نباشد. وارد تنظیمات برنامه ← مجوزها ← موقعیت مکانی شوید و گزینه «استفاده از موقعیت دقیق» (Use precise location) را روشن کنید.",
-    openAppSettings = "باز کردن تنظیمات",
-    simulationModeBadge = "SIMULATION • شبیه‌سازی",
-    offlineReadyBadge = "GPS آفلاین",
-    noMapPackLoaded = "هنوز بسته نقشه آفلاین نصب نشده است",
-    downloadOrImportAction = "دانلود نقشه‌ها",
-    missingRoutingTiles = "فایل مسیریابی این ایالت ناقص یا نصب نشده است. برای مسیریابی، بسته ایالت را دانلود یا دوباره وارد کنید.",
-    missingStateRouteTitle = "بسته نقشه ایالت مورد نیاز نصب نیست",
-    downloadMissingStateAction = "دانلود ایالت مورد نیاز",
-    junctionPreviewLabel = "نمای تقاطع",
-    tapToClosePreview = "برای بستن لمس کنید",
-    exitLabel = "خروجی",
-    speedLimitTitle = "محدودیت\nسرعت",
-    speedUnitMph = "مایل/س",
-    speedUnitKmh = "کیلومتر/س",
-    overspeedWarning = "سرعت غیرمجاز — سرعت را کاهش دهید",
-    alertSpeedDrop = "کاهش سرعت مجاز در پیش است",
-    alertSharpCurve = "پیچ تند در پیش است",
-    alertTollBooth = "جلوتر عوارضی است",
-    alertRailroad = "جلوتر تقاطع راه‌آهن است",
-    alertSchoolZone = "جلوتر منطقه مدرسه است",
-    alertStopSign = "جلوتر تابلوی ایست است",
-    sectionRoadAlerts = "راهنمای خط، سرعت و هشدارهای جاده",
-    junctionPreviewSetting = "نمای بزرگ‌نمایی تقاطع‌های بزرگراه",
-    speedWarningThresholdLabel = "آستانه هشدار سرعت غیرمجاز",
-    alertToggleSpeedDrop = "کاهش سرعت مجاز جلوتر",
-    alertToggleSharpCurve = "پیچ‌های تند",
-    alertToggleTollBooth = "ایستگاه‌های عوارضی",
-    alertToggleRailroad = "تقاطع راه‌آهن",
-    alertToggleSchoolZone = "مناطق مدرسه",
-    alertToggleStopSign = "تابلوی ایست و چراغ راهنمایی",
-    reportButton = "گزارش",
-    reportSheetTitle = "ثبت گزارش جاده‌ای",
-    reportPolice = "پلیس",
-    reportHazard = "خطر در جاده",
-    reportCrash = "تصادف",
-    reportClosure = "مسدودی مسیر",
-    reportSpeedTrap = "کنترل سرعت",
-    reportConstruction = "عملیات عمرانی",
-    reportObjectOnRoad = "شیء در جاده",
-    reportStalledVehicle = "خودروی متوقف",
-    reportSavedToast = "گزارش روی نقشه گوشی ذخیره شد",
-    reportAheadPrefix = "گزارش در پیش رو",
-    reportStillThere = "هنوز هست",
-    reportGone = "برطرف شده",
-    activeReportsTitle = "هشدارهای نزدیک",
-    sectionMyReports = "گزارش‌های من و اشتراک‌گذاری",
-    noActiveReports = "هیچ گزارش فعالی روی گوشی ثبت نشده است.",
-    addNoteHint = "یادداشت کوتاه اختیاری…",
-    saveNote = "ذخیره",
-    exportReports = "خروجی گزارش‌ها",
-    importReports = "ورود گزارش‌ها",
-    sectionBackupTransfer = "پشتیبان‌گیری و انتقال به گوشی جدید",
-    exportBackupButton = "خروجی تنظیمات و مکان‌های ذخیره‌شده",
-    importBackupButton = "ورود تنظیمات و مکان‌های ذخیره‌شده",
-    backupExportSuccess = "فایل پشتیبان با موفقیت ذخیره شد",
-    backupImportSuccess = "تنظیمات و مکان‌ها با موفقیت بازیابی شدند",
-    backupTransferFailed = "خطا در خواندن یا ذخیره فایل پشتیبان",
-    mapsScreenTitle = "دانلود نقشه‌های آمریکا",
-    storageUsedLabel = "فضای مصرف‌شده نقشه",
-    storageAvailableLabel = "فضای آزاد گوشی",
-    refreshManifest = "بررسی بروزرسانی",
-    importLocalPack = "وارد کردن فایل محلی",
-    filterStatesHint = "جستجو بین ۵۰ ایالت و واشینگتن دی‌سی",
-    filterAll = "همه (۵۱)",
-    filterInstalled = "نصب‌شده",
-    currentStateBadge = "موقعیت فعلی شما",
-    regionalPacksHint = "تقسیم‌شده به بخش‌های منطقه‌ای برای دانلود سریع‌تر",
-    updateAllButton = "بروزرسانی همه",
-    buildMismatchTitle = "اختلاف نسخه بسته‌های نقشه",
-    buildMismatchBody = "بسته‌های نصب‌شده از نسخه‌های ساخت متفاوتی هستند. برای دقت مسیریابی بین‌ایالتی آن‌ها را بروزرسانی کنید.",
-    statusNotDownloaded = "دانلود نشده",
-    statusQueued = "در صف دانلود…",
-    statusDownloading = "در حال دانلود",
-    statusPaused = "متوقف شده",
-    statusVerifying = "در حال بررسی صحت فایل‌ها…",
-    statusInstalled = "نصب شده",
-    statusUpdateAvailable = "بروزرسانی موجود است",
-    statusCorrupted = "بسته ناقص یا خراب است",
-    actionDownload = "دانلود",
-    actionPause = "توقف",
-    actionResume = "ادامه",
-    actionUpdate = "بروزرسانی",
-    actionDelete = "حذف",
-    actionRetry = "تلاش مجدد",
-    actionImportFiles = "وارد کردن",
-    lowStorageTitle = "کمبود فضای ذخیره‌سازی",
-    lowStorageBody = "فضای آزاد گوشی برای این بسته ایالتی کم است. فضای دستگاه را خالی کنید یا با احتیاط ادامه دهید.",
-    cancel = "انصراف",
-    proceedAnyway = "ادامه دانلود",
-    confirmDeleteTitle = "حذف بسته ایالت؟",
-    confirmDeleteBody = "کاشی‌های نقشه، فایل مسیریابی و پایگاه داده مکان‌های این بسته حذف خواهند شد.",
-    manifestUnconfiguredHint = "نام کاربری و مخزن گیت‌هاب خود را در تنظیمات وارد کنید تا نقشه‌ها دانلود شوند، یا فایل محلی وارد کنید.",
-    packFilesSummary = "نقشه برداری • مسیریابی والهالا • جستجوی FTS5",
-    importPickStateTitle = "وارد کردن فایل برای ایالت",
-    importPickFileHint = "یک فایل .zip یا فایل‌های جداگانه .pmtiles، .tar یا .db انتخاب کنید",
-    importSuccess = "با موفقیت وارد شد",
-    importFailed = "بررسی فایل ناموفق بود یا فایل خراب است",
-    checksumMismatch = "عدم تطابق امضای SHA-256. بسته خراب علامت‌گذاری شد.",
-    osmOnlyPlacesNote = "مکان‌ها فقط از OpenStreetMap ساخته شده‌اند (داده Overture هنگام ساخت در دسترس نبود)",
-    settingsTitle = "تنظیمات",
-    sectionLanguageUnits = "زبان و واحدها",
-    languageLabel = "زبان برنامه و راهنمای صوتی",
-    languageEnglish = "انگلیسی آمریکایی (English)",
-    languagePersian = "فارسی",
-    unitsLabel = "واحد مسافت و سرعت",
-    unitsImperial = "مایل و فوت (MPH)",
-    unitsMetric = "کیلومتر و متر (KM/H)",
-    themeModeLabel = "حالت روز و شب نقشه",
-    themeAuto = "خودکار (روز / شب)",
-    themeDay = "روز",
-    themeNight = "شب",
-    sectionVoiceGuidance = "راهنمای صوتی",
-    voiceGuidanceEnabled = "اعلام صوتی مسیر",
-    speedWarningAudio = "صدای هشدار سرعت غیرمجاز",
-    testVoiceButton = "آزمایش صدای راهنما",
-    persianTtsMissingTitle = "صدای فارسی روی گوشی نصب نیست",
-    persianTtsMissingBody = "صدای تبدیل متن به گفتار فارسی (fa-IR) روی این گوشی یافت نشد. وارد تنظیمات TTS اندروید شوید، سرویس Speech Recognition & Synthesis را انتخاب کرده و داده صوتی فارسی را نصب کنید. تا زمان نصب، راهنمای صوتی به انگلیسی پخش می‌شود.",
-    openTtsSettings = "باز کردن تنظیمات TTS",
-    sectionPackServer = "مخزن گیت‌هاب بسته‌های نقشه",
-    githubOwnerLabel = "نام کاربری گیت‌هاب (Username)",
-    githubRepoLabel = "نام مخزن (Repository)",
-    saveGithubRepo = "ذخیره مخزن گیت‌هاب",
-    customBaseUrlLabel = "نشانی سفارشی اختیاری (جایگزین گیت‌هاب)",
-    baseUrlPlaceholder = "خالی بگذارید تا از GitHub Releases استفاده شود",
-    activePackUrlLabel = "نشانی فعال دانلود",
-    saveBaseUrl = "ذخیره نشانی سفارشی",
-    sectionRoutingDefaults = "تنظیمات پیش‌فرض مسیر",
-    sectionAboutLicenses = "درباره برنامه و مجوزها",
-    aboutTitle = "درباره رهیاب و مجوزها",
-    appVersionLabel = "نسخه برنامه",
-    dataBuildVersionLabel = "نسخه داده نقشه",
-    mapAttributionShort = "© OpenStreetMap • Overture Maps",
-    osmAttributionFull = "© مشارکت‌کنندگان OpenStreetMap. داده‌های نقشه و مسیریابی تحت مجوز Open Database License (ODbL) ارائه شده‌اند.",
-    overtureAttributionFull = "داده‌های اماکن و کسب‌وکارها برگرفته از Overture Maps Foundation (تحت مجوز CDLA Permissive 2.0 / ODbL).",
-    openSourceLicensesBody = "نمایش نقشه با MapLibre Native (BSD-2-Clause) و فرمت برداری Protomaps PMTiles. مسیریابی آفلاین با موتور Valhalla (MIT) از طریق valhalla-mobile. جستجوی مکان با SQLite FTS5 روی دستگاه.",
-    close = "بستن",
-    sectionDevTesting = "تست توسعه‌دهنده و شبیه‌ساز",
-    devOnlineOregonTitle = "حالت تست آنلاین اورگن",
-    devOnlineOregonSubtitle = "پیش از ساخت بسته‌های آفلاین، نقشه اورگن (OpenFreeMap)، مسیریابی (والهالای عمومی) و جستجو (Photon/Nominatim) را آنلاین بارگذاری می‌کند.",
-    devOnlineBadge = "تست آنلاین • OR",
-    enableDevOregonQuickAction = "فعال‌سازی تست آنلاین اورگن",
-    thenPrefix = "سپس",
-    repeatVoice = "تکرار صدا",
-    gpsSignalLost = "سیگنال GPS قطع شد",
-    turnListHeader = "فهرست پیچ‌های مسیر",
-    showTurns = "مراحل مسیر",
-    hideTurns = "بستن مراحل",
-    droppedPin = "نقطه انتخاب‌شده روی نقشه",
-    simulateDriveTitle = "شبیه‌سازی رانندگی (تست شبیه‌ساز)",
-    simulateDriveSubtitle = "موقعیت شما را با سرعت واقعی در طول مسیر انتخاب‌شده حرکت می‌دهد تا راهنمای خط، صدا، هشدارها و مسیریابی مجدد را آزمایش کنید.",
-    simulateWrongTurn = "انحراف آزمایشی",
-    permissionRationaleTitle = "دسترسی موقعیت مکانی و اعلان‌ها",
-    permissionRationaleBody = "رهیاب برای مسیریابی کاملاً آفلاین به دسترسی GPS و برای ادامه راهنمایی در پس‌زمینه از طریق اعلان پایدار به دسترسی اعلان نیاز دارد.",
-    continueAction = "ادامه",
-    nativeRoutingError = "موتور مسیریابی آفلاین نتوانست مسیر را محاسبه کند. از نصب و سالم بودن بسته ایالت اطمینان حاصل کنید.",
-    welcomeTitle = "به رهیاب خوش آمدید",
-    welcomeSubtitle = "مسیریابی خودرو کاملاً آفلاین در آمریکا با راهنمای خط، هشدارهای جاده و صدای طبیعی فارسی و انگلیسی.",
-    welcomePermissionsCardTitle = "دسترسی GPS و اعلان‌ها",
-    welcomePermissionsGranted = "دسترسی موقعیت مکانی فعال شد",
-    welcomeGrantPermissionsButton = "اجازه دسترسی موقعیت و اعلان",
-    welcomeOpenMapsButton = "ادامه به صفحه دانلود نقشه‌ها",
-    crashDialogTitle = "برنامه به طور غیرمنتظره بسته شد",
-    crashDialogBody = "در اجرای قبلی خطای غیرمنتظره‌ای رخ داد. می‌توانید جزئیات خطا را کپی کنید و ارسال نمایید.",
-    copyErrorDetails = "کپی جزئیات خطا",
-    errorDetailsCopied = "جزئیات خطا کپی شد",
-    diagnosticsTitle = "عیب‌یابی و اطلاعات فنی",
-    diagnosticsSubtitle = "نسخه برنامه، بسته‌های نقشه نصب‌شده، وضعیت GPS و قطب‌نما، آمار آخرین مسیر، صداهای TTS و گزارش خطاها.",
-    openDiagnostics = "باز کردن صفحه عیب‌یابی",
-    copyAll = "کپی همه",
-    diagnosticsCopied = "اطلاعات عیب‌یابی در حافظه کپی شد",
-    backAction = "بازگشت",
-    diagSectionAppDevice = "برنامه و دستگاه",
-    diagAndroidVersion = "نسخه اندروید",
-    diagPhoneModel = "مدل گوشی",
-    diagSectionPacks = "بسته‌های نقشه نصب‌شده",
-    diagBuildVersion = "نسخه ساخت",
-    diagPlacesSource = "منبع اماکن",
-    diagFileSizes = "حجم فایل‌ها",
-    diagNoPacksInstalled = "هیچ بسته نقشه آفلاینی نصب نشده است.",
-    diagSectionGpsCompass = "موقعیت‌یاب GPS و قطب‌نما",
-    diagGpsAccuracy = "دقت GPS",
-    diagGpsProvider = "ارائه‌دهنده موقعیت",
-    diagGpsFixAge = "زمان گذشته از آخرین موقعیت",
-    diagPreciseLocation = "مجوز موقعیت مکانی دقیق",
-    diagCompassHeading = "زاویه قطب‌نما",
-    diagCompassAccuracy = "دقت سنسور قطب‌نما",
-    diagNoGpsFix = "هنوز موقعیت GPS دریافت نشده است",
-    diagSectionLastRoute = "آخرین مسیر محاسبه‌شده",
-    diagManeuversCount = "تعداد مانورها",
-    diagManeuversWithLanes = "مانورهای دارای راهنمای خط",
-    diagShapeSpeedLimits = "نقاط مسیر دارای سرعت مجاز",
-    diagRoutingTimeMs = "زمان محاسبه مسیر",
-    diagNoRouteYet = "هنوز در این نشست مسیری محاسبه نشده است.",
-    diagSectionTts = "تبدیل متن به گفتار (TTS)",
-    diagTtsEngine = "موتور صوتی",
-    diagPersianVoiceStatus = "صدای فارسی (fa-IR)",
-    diagEnglishVoiceStatus = "صدای انگلیسی آمریکایی (en-US)",
-    diagAvailableLabel = "در دسترس",
-    diagInstalledLabel = "نصب‌شده",
-    diagTestPersianVoice = "آزمایش صدای فارسی",
-    diagTestEnglishVoice = "آزمایش صدای انگلیسی",
-    diagPersianVoiceUnavailableToast = "صدای فارسی (fa-IR) روی این گوشی نصب نیست.",
-    diagUseEnglishVoiceInPersian = "پخش راهنمای صوتی به انگلیسی (با حفظ زبان فارسی برنامه)",
-    diagUseEnglishVoiceInPersianSubtitle = "منوها و نوشته‌های برنامه فارسی باقی می‌مانند اما راهنمای صوتی به انگلیسی آمریکایی پخش می‌شود.",
-    diagPersianInstallSteps = "برای نصب صدای فارسی روی گوشی:\n۱. مطمئن شوید برنامه «Speech Recognition & Synthesis from Google» از گوگل پلی نصب و به‌روز است.\n۲. روی دکمه «باز کردن تنظیمات TTS» بزنید.\n۳. موتور پیش‌فرض را روی Speech Recognition & Synthesis قرار دهید.\n۴. وارد تنظیمات موتور ← Install voice data شوید و زبان فارسی (ایران) را دانلود کنید.\n۵. به رهیاب برگردید و «آزمایش صدای فارسی» را بزنید.",
-    diagSectionErrorLog = "گزارش خطاهای برنامه (۲۰ خط آخر)",
-    diagNoErrorsLogged = "هیچ خطایی ثبت نشده است.",
-    diagYes = "بله",
-    diagNo = "خیر",
-    diagGranted = "داده شده",
-    diagNotGranted = "داده نشده",
-    diagSensorHigh = "بالا",
-    diagSensorMedium = "متوسط",
-    diagSensorLow = "کم",
-    diagSensorUnreliable = "نامعتبر",
-    diagSensorUnavailable = "بدون خوانش"
-)
-
-val LocalAppStrings = compositionLocalOf { EnglishStrings }
+val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }
 val LocalAppLanguage = compositionLocalOf { AppLanguage.ENGLISH }
 
 fun stringsFor(language: AppLanguage): AppStrings =

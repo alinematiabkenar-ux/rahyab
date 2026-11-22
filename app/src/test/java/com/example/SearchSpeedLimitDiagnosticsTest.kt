@@ -75,14 +75,6 @@ class SearchSpeedLimitDiagnosticsTest {
                 )
                 """.trimIndent()
             )
-            db.execSQL(
-                """
-                CREATE VIRTUAL TABLE places_fts USING fts5(
-                    name, brand, category, address, city, postcode,
-                    content='places', content_rowid='id'
-                )
-                """.trimIndent()
-            )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_places_lat_lon ON places(lat, lon)")
 
             fun insertPlace(
@@ -104,8 +96,8 @@ class SearchSpeedLimitDiagnosticsTest {
                 )
             }
 
-            // Insert 120 distant Portland/Salem/Bend branches FIRST with higher popularity so a
-            // statewide BM25-only LIMIT 60 query would completely miss Eugene!
+            // Insert 120 distant Portland branches FIRST with higher popularity so a statewide
+            // LIMIT 60 BM25-only query would completely miss Eugene!
             val chains = listOf(
                 Triple("Starbucks", "Starbucks", "coffee"),
                 Triple("Shell", "Shell", "fuel"),
@@ -129,22 +121,21 @@ class SearchSpeedLimitDiagnosticsTest {
                 }
             }
 
-            // Now insert Eugene branches near (44.0521, -123.0868)
+            // Now insert Eugene/Springfield branches near (44.0521, -123.0868)
             insertPlace("Starbucks", "Starbucks", "coffee", "810 Willamette St", "Eugene", 44.0512, -123.0920, popularity = 5.0)
             insertPlace("Starbucks", "Starbucks", "coffee", "2850 Willamette St", "Eugene", 44.0274, -123.0915, popularity = 5.0)
             insertPlace("Shell", "Shell", "fuel", "1990 Franklin Blvd", "Eugene", 44.0456, -123.0630, popularity = 5.0)
             insertPlace("Walmart Supercenter", "Walmart", "supermarket", "4550 W 11th Ave", "Eugene", 44.0472, -123.1680, popularity = 5.0)
             insertPlace("Best Buy", "Best Buy", "electronics", "3300 Gateway St", "Springfield", 44.0759, -123.0446, popularity = 5.0)
-
-            db.execSQL("INSERT INTO places_fts(places_fts) VALUES('rebuild')")
         } finally {
             db.close()
         }
 
+        val driver = RobolectricFts5EmulatingSqliteDriver()
         val engine = OfflinePlaceSearchEngine(
             packManager = StatePackManager(context, com.example.data.local.RahYabDatabase.getInstance(context).installedPackDao()),
             savedPlaceDao = com.example.data.local.RahYabDatabase.getInstance(context).savedPlaceDao(),
-            sqliteDriver = RobolectricAndroidSqliteDriver()
+            sqliteDriver = driver
         )
 
         val eugeneLat = 44.0521
@@ -165,6 +156,8 @@ class SearchSpeedLimitDiagnosticsTest {
                 top.distanceMeters < 15_000.0
             )
         }
+        assertTrue("Nearby 50 km bounding-box SQL query must execute before statewide query", driver.executedNearbyQueryCount >= 4)
+        assertTrue("Statewide SQL query must also execute", driver.executedStatewideQueryCount >= 4)
     }
 
     // -------------------------------------------------------------------------
@@ -175,13 +168,13 @@ class SearchSpeedLimitDiagnosticsTest {
     fun part2_traceAttributesEnrichesSpeedLimitsAndSimulateDriveReflectsRealLimitsOnly() {
         // 1. Verify polyline6 encode/decode round-trip & trace_attributes request JSON
         val shape = listOf(
-            LatLon(44.05210, -123.08680), // 0: I-5 North (65 mph / 105 kph)
+            LatLon(44.05210, -123.08680), // 0: I-5 North (edge 0: 0..2, 65 mph / 105 kph)
             LatLon(44.05600, -123.08680), // 1: I-5 North (65 mph)
-            LatLon(44.06000, -123.08680), // 2: I-5 North (65 mph)
-            LatLon(44.06300, -123.08200), // 3: Coburg Rd (35 mph / 56 kph)
-            LatLon(44.06600, -123.08200), // 4: Coburg Rd (35 mph)
-            LatLon(44.06800, -123.07900), // 5: Untagged side street (no OSM maxspeed)
-            LatLon(44.07000, -123.07900)  // 6: Untagged side street
+            LatLon(44.06000, -123.08680), // 2: Exit onto Coburg Rd (edge 1: 2..4, 35 mph / 56 kph)
+            LatLon(44.06300, -123.08200), // 3: Coburg Rd (35 mph)
+            LatLon(44.06600, -123.08200), // 4: Turn onto untagged Oak St (edge 2: 4..6, no OSM maxspeed)
+            LatLon(44.06800, -123.07900), // 5: Untagged side street
+            LatLon(44.07000, -123.07900)  // 6: Untagged side street end
         )
         val encoded = ValhallaResponseParser.encodePolyline6(shape)
         val decoded = ValhallaResponseParser.decodePolyline6(encoded)
@@ -215,8 +208,8 @@ class SearchSpeedLimitDiagnosticsTest {
                     type = ManeuverType.DEPART,
                     instructionEn = "Drive north on I-5",
                     streetNames = listOf("I-5"),
-                    lengthMeters = 1000.0,
-                    timeSeconds = 40.0,
+                    lengthMeters = 900.0,
+                    timeSeconds = 35.0,
                     beginShapeIndex = 0,
                     endShapeIndex = 2,
                     lat = shape[0].lat,
@@ -229,44 +222,45 @@ class SearchSpeedLimitDiagnosticsTest {
                     streetNames = listOf("Coburg Rd"),
                     lengthMeters = 900.0,
                     timeSeconds = 70.0,
-                    beginShapeIndex = 3,
+                    beginShapeIndex = 2,
                     endShapeIndex = 4,
-                    lat = shape[3].lat,
-                    lon = shape[3].lon
+                    lat = shape[2].lat,
+                    lon = shape[2].lon
                 ),
                 RouteManeuver(
                     index = 2,
                     type = ManeuverType.RIGHT,
                     instructionEn = "Turn right onto Oak St",
                     streetNames = listOf("Oak St"),
-                    lengthMeters = 600.0,
-                    timeSeconds = 70.0,
-                    beginShapeIndex = 5,
+                    lengthMeters = 700.0,
+                    timeSeconds = 75.0,
+                    beginShapeIndex = 4,
                     endShapeIndex = 6,
-                    lat = shape[5].lat,
-                    lon = shape[5].lon
+                    lat = shape[4].lat,
+                    lon = shape[4].lon
                 )
             ),
             speedLimitsByShapeIndex = emptyMap()
         )
 
-        // Realistic Valhalla trace_attributes response (edge.speed_limit in km/h; untagged edge omits/0)
+        // Realistic contiguous Valhalla trace_attributes response (edge.speed_limit in km/h; untagged edge has 0)
         val traceJson = """
             {
               "edges": [
                 { "begin_shape_index": 0, "end_shape_index": 2, "speed_limit": 105, "lane_count": 3 },
-                { "begin_shape_index": 3, "end_shape_index": 4, "speed_limit": 56, "lane_count": 2 },
-                { "begin_shape_index": 5, "end_shape_index": 6, "speed_limit": 0, "lane_count": 1 }
+                { "begin_shape_index": 2, "end_shape_index": 4, "speed_limit": 56, "lane_count": 2 },
+                { "begin_shape_index": 4, "end_shape_index": 6, "speed_limit": 0, "lane_count": 1 }
               ]
             }
         """.trimIndent()
 
         val enriched = ValhallaResponseParser.enrichRouteWithTraceAttributes(baseRoute, traceJson)
         assertEquals(65, enriched.speedLimitsByShapeIndex[0])
-        assertEquals(65, enriched.speedLimitsByShapeIndex[2])
+        assertEquals(65, enriched.speedLimitsByShapeIndex[1])
+        assertEquals(35, enriched.speedLimitsByShapeIndex[2])
         assertEquals(35, enriched.speedLimitsByShapeIndex[3])
-        assertEquals(35, enriched.speedLimitsByShapeIndex[4])
-        // Untagged street must stay null (never invented!)
+        // Untagged street must stay null (never invented, and Coburg Rd's 35 must NOT bleed onto index 4!)
+        assertNull(enriched.speedLimitsByShapeIndex[4])
         assertNull(enriched.speedLimitsByShapeIndex[5])
         assertNull(enriched.speedLimitsByShapeIndex[6])
         assertEquals(3, enriched.maneuvers[0].laneCount)
@@ -301,10 +295,10 @@ class SearchSpeedLimitDiagnosticsTest {
         navState = resI5.state
         assertEquals(65, navState.currentSpeedLimitMph)
 
-        // On Coburg Rd (index 3): should show 35 mph
-        val resCoburg = controller.processGpsFix(
+        // At transition onto Coburg Rd (index 2 & 3): should immediately update to 35 mph
+        val resCoburgStart = controller.processGpsFix(
             currentState = navState,
-            fix = GpsFix(lat = shape[3].lat, lon = shape[3].lon, speedMps = 15f, bearing = 0f, accuracyMeters = 4f, timestampMs = 2_000L),
+            fix = GpsFix(lat = shape[2].lat, lon = shape[2].lon, speedMps = 16f, bearing = 45f, accuracyMeters = 4f, timestampMs = 2_000L),
             dbHazards = emptyList(),
             userReports = emptyList(),
             unit = DistanceUnit.IMPERIAL,
@@ -312,13 +306,12 @@ class SearchSpeedLimitDiagnosticsTest {
             speedAudioEnabled = false,
             settings = settings
         )
-        navState = resCoburg.state
+        navState = resCoburgStart.state
         assertEquals(35, navState.currentSpeedLimitMph)
 
-        // On untagged Oak St (index 5): speed limit MUST be null (hidden)
-        val resUntagged = controller.processGpsFix(
+        val resCoburgMid = controller.processGpsFix(
             currentState = navState,
-            fix = GpsFix(lat = shape[5].lat, lon = shape[5].lon, speedMps = 10f, bearing = 45f, accuracyMeters = 4f, timestampMs = 3_000L),
+            fix = GpsFix(lat = shape[3].lat, lon = shape[3].lon, speedMps = 15f, bearing = 0f, accuracyMeters = 4f, timestampMs = 3_000L),
             dbHazards = emptyList(),
             userReports = emptyList(),
             unit = DistanceUnit.IMPERIAL,
@@ -326,7 +319,33 @@ class SearchSpeedLimitDiagnosticsTest {
             speedAudioEnabled = false,
             settings = settings
         )
-        assertNull("Speed limit sign must stay hidden when OSM speed_limit is absent", resUntagged.state.currentSpeedLimitMph)
+        navState = resCoburgMid.state
+        assertEquals(35, navState.currentSpeedLimitMph)
+
+        // On untagged Oak St (index 4 & 5): speed limit MUST be null (hidden!)
+        val resUntaggedStart = controller.processGpsFix(
+            currentState = navState,
+            fix = GpsFix(lat = shape[4].lat, lon = shape[4].lon, speedMps = 10f, bearing = 45f, accuracyMeters = 4f, timestampMs = 4_000L),
+            dbHazards = emptyList(),
+            userReports = emptyList(),
+            unit = DistanceUnit.IMPERIAL,
+            language = AppLanguage.ENGLISH,
+            speedAudioEnabled = false,
+            settings = settings
+        )
+        assertNull("Speed limit must be null at start of untagged street", resUntaggedStart.state.currentSpeedLimitMph)
+
+        val resUntaggedMid = controller.processGpsFix(
+            currentState = resUntaggedStart.state,
+            fix = GpsFix(lat = shape[5].lat, lon = shape[5].lon, speedMps = 10f, bearing = 0f, accuracyMeters = 4f, timestampMs = 5_000L),
+            dbHazards = emptyList(),
+            userReports = emptyList(),
+            unit = DistanceUnit.IMPERIAL,
+            language = AppLanguage.ENGLISH,
+            speedAudioEnabled = false,
+            settings = settings
+        )
+        assertNull("Speed limit sign must stay hidden when OSM speed_limit is absent", resUntaggedMid.state.currentSpeedLimitMph)
     }
 
     // -------------------------------------------------------------------------
@@ -442,11 +461,16 @@ class SearchSpeedLimitDiagnosticsTest {
     }
 
     /**
-     * Minimal test-only [SQLiteDriver] adapter backed by Robolectric's Android [SQLiteDatabase]
-     * so unit tests on Linux JVM can run real SQLite FTS5 + `bm25()` queries against
-     * [OfflinePlaceSearchEngine].
+     * Test-only [SQLiteDriver] backed by Robolectric's Android [SQLiteDatabase].
+     * Because Robolectric's host SQLite binary omits the FTS5 module (`no such module: fts5`),
+     * this adapter translates `places_fts MATCH ?` & `bm25(...)` into equivalent SQL on the real
+     * SQLite `places` table while executing the EXACT nearby bounding-box `BETWEEN` + Euclidean
+     * distance `ORDER BY` + `LIMIT` and statewide `ORDER BY` + `LIMIT` clauses verbatim.
      */
-    private class RobolectricAndroidSqliteDriver : SQLiteDriver {
+    private class RobolectricFts5EmulatingSqliteDriver : SQLiteDriver {
+        var executedNearbyQueryCount: Int = 0
+        var executedStatewideQueryCount: Int = 0
+
         override fun open(fileName: String): SQLiteConnection {
             val db = SQLiteDatabase.openDatabase(fileName, null, SQLiteDatabase.OPEN_READONLY)
             return object : SQLiteConnection {
@@ -455,9 +479,9 @@ class SearchSpeedLimitDiagnosticsTest {
             }
         }
 
-        private class AndroidStatement(
+        private inner class AndroidStatement(
             private val db: SQLiteDatabase,
-            private val sql: String
+            private val originalSql: String
         ) : SQLiteStatement {
             private val args = mutableMapOf<Int, String?>()
             private var cursor: Cursor? = null
@@ -473,12 +497,61 @@ class SearchSpeedLimitDiagnosticsTest {
                 if (!executed) {
                     executed = true
                     val maxIdx = args.keys.maxOrNull() ?: 0
-                    val selectionArgs = if (maxIdx > 0) {
-                        Array(maxIdx) { idx -> args[idx + 1] ?: "" }
+                    val rawArgs = Array(maxIdx) { idx -> args[idx + 1] ?: "" }
+                    if (originalSql.contains("places_fts MATCH ?")) {
+                        val isNearby = originalSql.contains("p.lat BETWEEN ? AND ?")
+                        if (isNearby) executedNearbyQueryCount++ else executedStatewideQueryCount++
+                        val ftsExpr = rawArgs.getOrNull(1).orEmpty()
+                        val tokens = ftsExpr
+                            .replace("*", "")
+                            .replace("\"", "")
+                            .split(Regex("\\s+"))
+                            .filter { it.isNotBlank() && !it.equals("AND", true) && !it.equals("OR", true) }
+                        val tokenWhere = if (tokens.isEmpty()) "1=1" else tokens.joinToString(" AND ") {
+                            "(LOWER(p.name || ' ' || COALESCE(p.brand,'') || ' ' || COALESCE(p.category,'') || ' ' || COALESCE(p.address,'') || ' ' || COALESCE(p.city,'')) LIKE ?)"
+                        }
+                        val tokenArgs = tokens.map { "%${it.lowercase()}%" }
+                        val translatedSql: String
+                        val translatedArgs: List<String>
+                        if (isNearby) {
+                            translatedSql = """
+                                SELECT p.id, p.name, COALESCE(p.brand, ''), COALESCE(p.category, ''),
+                                       COALESCE(p.address, ''), COALESCE(p.city, ''), COALESCE(p.state, ?),
+                                       COALESCE(p.postcode, ''), p.lat, p.lon, COALESCE(p.source, 'overture'),
+                                       COALESCE(p.popularity, 1.0), -8.0 AS rank_score
+                                FROM places p
+                                WHERE $tokenWhere
+                                  AND p.lat BETWEEN ? AND ?
+                                  AND p.lon BETWEEN ? AND ?
+                                ORDER BY ((p.lat - ?) * (p.lat - ?) + (p.lon - ?) * (p.lon - ?) * ?) ASC
+                                LIMIT ?
+                            """.trimIndent()
+                            translatedArgs = buildList {
+                                add(rawArgs[0])
+                                addAll(tokenArgs)
+                                for (i in 2 until rawArgs.size) add(rawArgs[i])
+                            }
+                        } else {
+                            translatedSql = """
+                                SELECT p.id, p.name, COALESCE(p.brand, ''), COALESCE(p.category, ''),
+                                       COALESCE(p.address, ''), COALESCE(p.city, ''), COALESCE(p.state, ?),
+                                       COALESCE(p.postcode, ''), p.lat, p.lon, COALESCE(p.source, 'overture'),
+                                       COALESCE(p.popularity, 1.0), -8.0 AS rank_score
+                                FROM places p
+                                WHERE $tokenWhere
+                                ORDER BY rank_score ASC, p.id ASC
+                                LIMIT ?
+                            """.trimIndent()
+                            translatedArgs = buildList {
+                                add(rawArgs[0])
+                                addAll(tokenArgs)
+                                add(rawArgs.last())
+                            }
+                        }
+                        cursor = db.rawQuery(translatedSql, translatedArgs.toTypedArray())
                     } else {
-                        emptyArray()
+                        cursor = db.rawQuery(originalSql, rawArgs)
                     }
-                    cursor = db.rawQuery(sql, selectionArgs)
                 }
                 return cursor?.moveToNext() ?: false
             }

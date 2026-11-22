@@ -91,6 +91,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val isFetchingManifest: StateFlow<Boolean> = packManager.isFetchingManifest
     val manifestError: StateFlow<String?> = packManager.manifestError
     val packsChangedTick: StateFlow<Long> = packManager.packsChangedTick
+    val indexingStatusMessage: StateFlow<String?> = packManager.indexingStatusMessage
 
     val currentLocationStateCode: StateFlow<String?> = currentGpsFix.map { fix ->
         val lat = fix?.lat ?: EUGENE_OR_LAT

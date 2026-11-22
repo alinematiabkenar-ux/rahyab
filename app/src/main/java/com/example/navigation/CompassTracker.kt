@@ -27,12 +27,12 @@ import kotlin.math.abs
 class CompassTracker(context: Context) : SensorEventListener {
 
     private val appContext = context.applicationContext
-    private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val displayManager = appContext.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
 
-    private val rotationVectorSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-    private val accelerometerSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-    private val magnetometerSensor: Sensor? = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+    private val rotationVectorSensor: Sensor? = runCatching { sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) }.getOrNull()
+    private val accelerometerSensor: Sensor? = runCatching { sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) }.getOrNull()
+    private val magnetometerSensor: Sensor? = runCatching { sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD) }.getOrNull()
 
     private val _headingDegrees = MutableStateFlow<Float?>(null)
     val headingDegrees: StateFlow<Float?> = _headingDegrees.asStateFlow()
@@ -89,7 +89,7 @@ class CompassTracker(context: Context) : SensorEventListener {
     fun stop() {
         if (!isListening) return
         isListening = false
-        runCatching { sensorManager.unregisterListener(this) }
+        runCatching { sensorManager?.unregisterListener(this) }
     }
 
     private fun syncListeningState() {
@@ -103,27 +103,30 @@ class CompassTracker(context: Context) : SensorEventListener {
 
     private fun startListening() {
         if (isListening) return
+        val sm = sensorManager ?: return
         var registered = false
-        if (rotationVectorSensor != null) {
-            registered = sensorManager.registerListener(
-                this,
-                rotationVectorSensor,
-                SensorManager.SENSOR_DELAY_UI
-            )
-        } else if (accelerometerSensor != null && magnetometerSensor != null) {
-            hasGravity = false
-            hasMagnetic = false
-            val regAcc = sensorManager.registerListener(
-                this,
-                accelerometerSensor,
-                SensorManager.SENSOR_DELAY_UI
-            )
-            val regMag = sensorManager.registerListener(
-                this,
-                magnetometerSensor,
-                SensorManager.SENSOR_DELAY_UI
-            )
-            registered = regAcc && regMag
+        runCatching {
+            if (rotationVectorSensor != null) {
+                registered = sm.registerListener(
+                    this,
+                    rotationVectorSensor,
+                    SensorManager.SENSOR_DELAY_UI
+                )
+            } else if (accelerometerSensor != null && magnetometerSensor != null) {
+                hasGravity = false
+                hasMagnetic = false
+                val regAcc = sm.registerListener(
+                    this,
+                    accelerometerSensor,
+                    SensorManager.SENSOR_DELAY_UI
+                )
+                val regMag = sm.registerListener(
+                    this,
+                    magnetometerSensor,
+                    SensorManager.SENSOR_DELAY_UI
+                )
+                registered = regAcc && regMag
+            }
         }
         isListening = registered
     }
