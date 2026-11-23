@@ -408,6 +408,29 @@ interface AppStrings {
     val diagParkedTime: String
     val diagParkedAccuracy: String
     val diagNoParkedCar: String
+    // Android Auto (AA3-AA8)
+    val carNoOfflineMapMessage: String
+    val carActionSearch: String
+    val carActionFavorites: String
+    val carActionRecent: String
+    val carActionStart: String
+    val carActionStop: String
+    val carActionMute: String
+    val carActionUnmute: String
+    val carActionReportClosure: String
+    val carClosureReportedToast: String
+    val carSearchHint: String
+    val carSearchDrivingHint: String
+    val carNoResults: String
+    val carNoSavedPlaces: String
+    val carNoRecentPlaces: String
+    val carCalculatingRoute: String
+    val carRoutePreviewTitle: String
+    val carRouteFastestTag: String
+    val carRouteShortestTag: String
+    val carArrivedTitle: String
+    val carReroutingTitle: String
+    val carAlertDismiss: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

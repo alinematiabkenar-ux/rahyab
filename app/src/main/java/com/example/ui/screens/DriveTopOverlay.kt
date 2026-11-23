@@ -117,12 +117,12 @@ internal fun DriveTopOverlay(
                 distanceMeters = navState.distanceToNextManeuverMeters,
                 unit = settings.distanceUnit,
                 isRerouting = navState.isRerouting,
-                showLaneStrip = navState.showLaneStrip,
-                showJunctionPreview = navState.showJunctionPreview,
+                showLaneStrip = !navState.isWalkingMode && navState.showLaneStrip,
+                showJunctionPreview = !navState.isWalkingMode && navState.showJunctionPreview,
                 routeShape = navState.route?.shape.orEmpty(),
                 onDismissJunctionPreview = onDismissJunctionPreview,
                 isNightMode = isNightMode,
-                lanePulseTriggerKey = if (navState.lanePulseManeuverIndex == activeManeuver.index) {
+                lanePulseTriggerKey = if (!navState.isWalkingMode && navState.lanePulseManeuverIndex == activeManeuver.index) {
                     navState.lanePulseTriggerCount
                 } else 0
             )
@@ -134,7 +134,7 @@ internal fun DriveTopOverlay(
                 if (settings.simulateDriveEnabled || navState.isSimulatingDrive) {
                     SimulationModeBadge(label = strings.simulationModeBadge)
                 }
-                if (settings.showTrafficLights && aheadTrafficLightMeters != null) {
+                if (!navState.isWalkingMode && settings.showTrafficLights && aheadTrafficLightMeters != null) {
                     TrafficLightAheadPill(
                         distanceMeters = aheadTrafficLightMeters,
                         unit = settings.distanceUnit,
@@ -162,22 +162,24 @@ internal fun DriveTopOverlay(
                     onDismiss = onDismissCompassCalibration
                 )
             }
-            navState.activeAheadAlert?.let { alert ->
-                AheadAlertBanner(
-                    alert = alert,
-                    unit = settings.distanceUnit,
-                    onConfirmReport = onConfirmReport,
-                    onDismissReport = onDismissReport
-                )
-            }
-            weatherAlerts.firstOrNull()?.let { weatherAlert ->
-                SevereWeatherAlertBanner(
-                    alert = weatherAlert,
-                    untilPrefix = strings.weatherAlertBannerUntilPrefix,
-                    routeSuffix = strings.weatherAlertRouteSuffix,
-                    closeContentDescription = strings.close,
-                    onDismiss = { onDismissWeatherAlert(weatherAlert.id) }
-                )
+            if (!navState.isWalkingMode) {
+                navState.activeAheadAlert?.let { alert ->
+                    AheadAlertBanner(
+                        alert = alert,
+                        unit = settings.distanceUnit,
+                        onConfirmReport = onConfirmReport,
+                        onDismissReport = onDismissReport
+                    )
+                }
+                weatherAlerts.firstOrNull()?.let { weatherAlert ->
+                    SevereWeatherAlertBanner(
+                        alert = weatherAlert,
+                        untilPrefix = strings.weatherAlertBannerUntilPrefix,
+                        routeSuffix = strings.weatherAlertRouteSuffix,
+                        closeContentDescription = strings.close,
+                        onDismiss = { onDismissWeatherAlert(weatherAlert.id) }
+                    )
+                }
             }
         } else {
             // Floating Search Bar

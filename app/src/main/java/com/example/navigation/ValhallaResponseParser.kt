@@ -31,7 +31,7 @@ object ValhallaResponseParser {
             put("lat", origin.lat)
             put("lon", origin.lon)
             put("type", "break")
-            if (headingDegrees != null && headingDegrees in 0f..360f) {
+            if (!options.isPedestrian && headingDegrees != null && headingDegrees in 0f..360f) {
                 put("heading", headingDegrees.toInt())
                 put("heading_tolerance", 60)
             }
@@ -53,11 +53,15 @@ object ValhallaResponseParser {
 
         return JSONObject().apply {
             put("locations", JSONArray().put(originObj).put(destObj))
-            put("costing", "auto")
-            put("costing_options", JSONObject().put("auto", autoOptions))
+            if (options.isPedestrian) {
+                put("costing", "pedestrian")
+            } else {
+                put("costing", "auto")
+                put("costing_options", JSONObject().put("auto", autoOptions))
+            }
             put("units", "kilometers")
             put("language", "en-US")
-            put("alternates", alternatesCount.coerceIn(0, 2))
+            put("alternates", if (options.isPedestrian) 0 else alternatesCount.coerceIn(0, 2))
             put("directions_options", JSONObject().apply {
                 put("units", "kilometers")
                 put("narrative", true)

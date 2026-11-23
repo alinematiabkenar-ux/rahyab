@@ -516,6 +516,16 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         return utterance
     }
 
+    fun speakCustomText(text: String, language: AppLanguage): String {
+        if (text.isBlank()) return ""
+        val effectiveLanguage = resolveEffectiveLanguage(language)
+        _lastSpokenText.value = text
+        if (voiceEnabled && isInitialized) {
+            speakRaw(text, effectiveLanguage)
+        }
+        return text
+    }
+
     fun repeatLastInstruction(language: AppLanguage) {
         val text = _lastSpokenText.value
         if (text.isBlank() || !isInitialized) return

@@ -51,6 +51,9 @@ class RahYabApplication : Application() {
     private val networkStatusDelegate = lazy { NetworkStatusMonitor(this) }
     val networkStatusMonitor: NetworkStatusMonitor by networkStatusDelegate
 
+    private val navigationHubDelegate = lazy { com.example.navigation.RahYabNavigationHub(this) }
+    val navigationHub: com.example.navigation.RahYabNavigationHub by navigationHubDelegate
+
     val isPackManagerInitialized: Boolean get() = packManagerDelegate.isInitialized()
     val isCompassTrackerInitialized: Boolean get() = compassTrackerDelegate.isInitialized()
     val isVoiceGuidanceInitialized: Boolean get() = voiceGuidanceDelegate.isInitialized()

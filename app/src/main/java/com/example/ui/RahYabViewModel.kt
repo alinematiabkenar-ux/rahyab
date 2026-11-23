@@ -121,37 +121,40 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val _mismatchedBuildVersions = MutableStateFlow<List<String>>(emptyList())
     val mismatchedBuildVersions: StateFlow<List<String>> = _mismatchedBuildVersions.asStateFlow()
 
+    internal val navigationHub = app.navigationHub
+    private val navStore = navigationHub.stateStore
+
     internal val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
     internal val _searchResults = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
     val searchResults: StateFlow<List<PlaceSearchResult>> = _searchResults.asStateFlow()
     internal val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
-    internal val _selectedPlace = MutableStateFlow<PlaceSearchResult?>(null)
-    val selectedPlace: StateFlow<PlaceSearchResult?> = _selectedPlace.asStateFlow()
+    internal val _selectedPlace: MutableStateFlow<PlaceSearchResult?> = navStore._selectedPlace
+    val selectedPlace: StateFlow<PlaceSearchResult?> = navStore.selectedPlace
 
-    internal val _candidateRoutes = MutableStateFlow<List<OfflineRoute>>(emptyList())
-    val candidateRoutes: StateFlow<List<OfflineRoute>> = _candidateRoutes.asStateFlow()
-    internal val _selectedRouteIndex = MutableStateFlow(0)
-    val selectedRouteIndex: StateFlow<Int> = _selectedRouteIndex.asStateFlow()
-    internal val _isCalculatingRoute = MutableStateFlow(false)
-    val isCalculatingRoute: StateFlow<Boolean> = _isCalculatingRoute.asStateFlow()
-    internal val _routeError = MutableStateFlow<String?>(null)
-    val routeError: StateFlow<String?> = _routeError.asStateFlow()
-    internal val _missingStatesForRoute = MutableStateFlow<List<UsStateInfo>>(emptyList())
-    val missingStatesForRoute: StateFlow<List<UsStateInfo>> = _missingStatesForRoute.asStateFlow()
+    internal val _candidateRoutes: MutableStateFlow<List<OfflineRoute>> = navStore._candidateRoutes
+    val candidateRoutes: StateFlow<List<OfflineRoute>> = navStore.candidateRoutes
+    internal val _selectedRouteIndex: MutableStateFlow<Int> = navStore._selectedRouteIndex
+    val selectedRouteIndex: StateFlow<Int> = navStore.selectedRouteIndex
+    internal val _isCalculatingRoute: MutableStateFlow<Boolean> = navStore._isCalculatingRoute
+    val isCalculatingRoute: StateFlow<Boolean> = navStore.isCalculatingRoute
+    internal val _routeError: MutableStateFlow<String?> = navStore._routeError
+    val routeError: StateFlow<String?> = navStore.routeError
+    internal val _missingStatesForRoute: MutableStateFlow<List<UsStateInfo>> = navStore._missingStatesForRoute
+    val missingStatesForRoute: StateFlow<List<UsStateInfo>> = navStore.missingStatesForRoute
 
-    internal val _navigationState = MutableStateFlow(ActiveNavigationState())
-    val navigationState: StateFlow<ActiveNavigationState> = _navigationState.asStateFlow()
+    internal val _navigationState: MutableStateFlow<ActiveNavigationState> = navStore._navigationState
+    val navigationState: StateFlow<ActiveNavigationState> = navStore.navigationState
 
     internal val _cameraCommand = MutableStateFlow<CameraTargetCommand?>(null)
     val cameraCommand: StateFlow<CameraTargetCommand?> = _cameraCommand.asStateFlow()
     internal val _isCameraFollowing = MutableStateFlow(true)
     val isCameraFollowing: StateFlow<Boolean> = _isCameraFollowing.asStateFlow()
-    internal val _isHeadingUpMode = MutableStateFlow(true)
-    val isHeadingUpMode: StateFlow<Boolean> = _isHeadingUpMode.asStateFlow()
-    internal val _userHeadingDegrees = MutableStateFlow(0f)
-    val userHeadingDegrees: StateFlow<Float> = _userHeadingDegrees.asStateFlow()
+    internal val _isHeadingUpMode: MutableStateFlow<Boolean> = navStore._isHeadingUpMode
+    val isHeadingUpMode: StateFlow<Boolean> = navStore.isHeadingUpMode
+    internal val _userHeadingDegrees: MutableStateFlow<Float> = navStore._userHeadingDegrees
+    val userHeadingDegrees: StateFlow<Float> = navStore.userHeadingDegrees
     internal var hasHeadingSample = false
     internal var lastHeadingEmitElapsedMs = 0L
 
@@ -161,19 +164,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val lowStoragePromptStateCode: StateFlow<String?> = _lowStoragePromptStateCode.asStateFlow()
     internal val _showPersianTtsDialog = MutableStateFlow(false)
     val showPersianTtsDialog: StateFlow<Boolean> = _showPersianTtsDialog.asStateFlow()
-    internal val _simulationSpeedMultiplier = MutableStateFlow(1)
-    val simulationSpeedMultiplier: StateFlow<Int> = _simulationSpeedMultiplier.asStateFlow()
+    internal val _simulationSpeedMultiplier: MutableStateFlow<Int> = navStore._simulationSpeedMultiplier
+    val simulationSpeedMultiplier: StateFlow<Int> = navStore.simulationSpeedMultiplier
 
-    internal val _visibleCameras = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
-    val visibleCameras: StateFlow<List<RoadHazardPoint>> = _visibleCameras.asStateFlow()
-    internal val _visibleTrafficLights = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
-    val visibleTrafficLights: StateFlow<List<RoadHazardPoint>> = _visibleTrafficLights.asStateFlow()
-    internal val _visibleSpeedBumps = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
-    val visibleSpeedBumps: StateFlow<List<RoadHazardPoint>> = _visibleSpeedBumps.asStateFlow()
-    internal val _aheadTrafficLightMeters = MutableStateFlow<Double?>(null)
-    val aheadTrafficLightMeters: StateFlow<Double?> = _aheadTrafficLightMeters.asStateFlow()
-    internal val _freeDriveAheadAlert = MutableStateFlow<AheadAlert?>(null)
-    val freeDriveAheadAlert: StateFlow<AheadAlert?> = _freeDriveAheadAlert.asStateFlow()
+    internal val _visibleCameras: MutableStateFlow<List<RoadHazardPoint>> = navStore._visibleCameras
+    val visibleCameras: StateFlow<List<RoadHazardPoint>> = navStore.visibleCameras
+    internal val _visibleTrafficLights: MutableStateFlow<List<RoadHazardPoint>> = navStore._visibleTrafficLights
+    val visibleTrafficLights: StateFlow<List<RoadHazardPoint>> = navStore.visibleTrafficLights
+    internal val _visibleSpeedBumps: MutableStateFlow<List<RoadHazardPoint>> = navStore._visibleSpeedBumps
+    val visibleSpeedBumps: StateFlow<List<RoadHazardPoint>> = navStore.visibleSpeedBumps
+    internal val _aheadTrafficLightMeters: MutableStateFlow<Double?> = navStore._aheadTrafficLightMeters
+    val aheadTrafficLightMeters: StateFlow<Double?> = navStore.aheadTrafficLightMeters
+    internal val _freeDriveAheadAlert: MutableStateFlow<AheadAlert?> = navStore._freeDriveAheadAlert
+    val freeDriveAheadAlert: StateFlow<AheadAlert?> = navStore.freeDriveAheadAlert
 
     internal val _externalLinkMatchChoices = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
     val externalLinkMatchChoices: StateFlow<List<PlaceSearchResult>> = _externalLinkMatchChoices.asStateFlow()
@@ -186,8 +189,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
         _openMapsTabEvent.value = System.currentTimeMillis()
     }
 
-    internal val _cachedWeatherAlerts = MutableStateFlow<List<WeatherAlertItem>>(emptyList())
-    internal val _dismissedWeatherAlertIds = MutableStateFlow<Set<String>>(emptySet())
+    internal val _cachedWeatherAlerts: MutableStateFlow<List<WeatherAlertItem>> = navStore._cachedWeatherAlerts
+    internal val _dismissedWeatherAlertIds: MutableStateFlow<Set<String>> = navStore._dismissedWeatherAlertIds
     val activeWeatherAlerts: StateFlow<List<WeatherAlertItem>> = combine(
         _cachedWeatherAlerts,
         _dismissedWeatherAlertIds
@@ -217,7 +220,33 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var syntheticSimSpeedBumps: List<RoadHazardPoint> = emptyList()
     internal val speedBumpEvaluator = com.example.navigation.SpeedBumpAlertEvaluator()
 
+    private val hubDelegate = object : com.example.navigation.PhoneNavigationDelegate {
+        override fun onCalculateRoutesForPlace(place: PlaceSearchResult) {
+            selectPlace(place)
+        }
+        override fun onSelectCandidateRoute(index: Int) {
+            selectCandidateRoute(index)
+        }
+        override fun onStartNavigation(forceSimulate: Boolean?) {
+            startNavigation(forceSimulate)
+        }
+        override fun onStopNavigation() {
+            stopNavigation()
+        }
+        override fun onToggleSimulationForAutoDrive() {
+            if (_navigationState.value.isNavigating) {
+                startSimulationOnActiveRouteImpl()
+            } else if (_candidateRoutes.value.isNotEmpty() && _selectedPlace.value != null) {
+                startNavigation(forceSimulate = true)
+            }
+        }
+        override fun onReportRoadClosure() {
+            submitUserReport(ReportType.ROAD_CLOSURE)
+        }
+    }
+
     init {
+        navigationHub.attachPhoneDelegate(hubDelegate)
         initializeViewModel()
     }
 
@@ -360,6 +389,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        navigationHub.detachPhoneDelegate(hubDelegate)
         carBluetoothReceiver.unregister(app)
     }
 

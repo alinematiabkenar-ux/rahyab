@@ -198,8 +198,8 @@ fun DriveScreen(
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         )
 
-        // 3. Left / Start side: Speed Limit & Live Speedometer Cluster
-        if (navState.isNavigating || gpsFix != null) {
+        // 3. Left / Start side: Speed Limit & Live Speedometer Cluster (hidden in walking mode)
+        if (!navState.isWalkingMode && (navState.isNavigating || gpsFix != null)) {
             SpeedometerAndLimitCluster(
                 currentSpeedMps = navState.currentSpeedMps.takeIf { navState.isNavigating } ?: (gpsFix?.speedMps ?: 0f),
                 speedLimitMph = navState.currentSpeedLimitMph,

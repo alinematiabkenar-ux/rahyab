@@ -167,10 +167,14 @@ class NavigationSessionController {
             upcomingManeuver.timeSeconds * (distToNextManeuver / max(1.0, upcomingManeuver.lengthMeters)).coerceIn(0.0, 1.0)
         }
 
-        // 5. Arrival check
+        // 5. Arrival check (<=15 m in walking mode, <35 m driving)
         val destPoint = route.shape.last()
         val distToDest = OfflinePlaceSearchEngine.haversineMeters(snappedLoc.lat, snappedLoc.lon, destPoint.lat, destPoint.lon)
-        val hasArrived = distToDest < 35.0 && remainingDistance < 60.0
+        val hasArrived = if (currentState.isWalkingMode) {
+            distToDest <= 15.0
+        } else {
+            distToDest < 35.0 && remainingDistance < 60.0
+        }
 
         // 6. Speed-aware & road-class-aware voice timing with early lane-change warnings
         // Never speak maneuver prompts while moving under 2 mph, speak each stage only once per
@@ -197,6 +201,7 @@ class NavigationSessionController {
 
         val rawStageKey: String? = when {
             hasArrived -> STAGE_ARRIVED
+            currentState.isWalkingMode -> if (distToNextManeuver <= 35.0 && upcomingManeuver.type != ManeuverType.STRAIGHT) STAGE_CITY_NOW else null
             fix.speedMps < MIN_VOICE_SPEED_MPS -> null
             isHighway -> when {
                 distToNextManeuver <= max(110.0, speedLeadMeters) -> STAGE_HW_NOW
@@ -271,12 +276,14 @@ class NavigationSessionController {
         // 7. Lane guidance visibility from ~1 mile (~1.5 km in metric) on BOTH city streets and highways
         // Strictly hidden if `upcomingManeuver.lanes` is empty — NEVER invented!
         val laneWindowMeters = laneStripWindowMeters(unit)
-        val showLaneStrip = !hasArrived &&
+        val showLaneStrip = !currentState.isWalkingMode &&
+            !hasArrived &&
             upcomingManeuver.lanes.isNotEmpty() &&
             distToNextManeuver <= laneWindowMeters
 
         // Gently pulse highlighted lanes ONCE, synchronized with the half-mile (800 m) voice announcement
-        val triggeredHalfMilePulse = maneuverToSpeak != null &&
+        val triggeredHalfMilePulse = !currentState.isWalkingMode &&
+            maneuverToSpeak != null &&
             upcomingManeuver.lanes.isNotEmpty() &&
             (maneuverToSpeak.second == STAGE_HW_HALF_MI || maneuverToSpeak.second == STAGE_CITY_HALF_MI)
         val nextLanePulseManeuverIndex = if (triggeredHalfMilePulse) {
@@ -292,32 +299,42 @@ class NavigationSessionController {
 
         // 8. Phase 3: Enlarged Junction Preview (~0.5 mi / 850 m before highway exits & complex splits)
         val isDismissedForThisManeuver = currentState.dismissedJunctionManeuverIndex == upcomingManeuver.index
-        val showJunctionPreview = !hasArrived &&
+        val showJunctionPreview = !currentState.isWalkingMode &&
+            !hasArrived &&
             settings.junctionPreviewEnabled &&
             !isDismissedForThisManeuver &&
             upcomingManeuver.isHighwayExitOrSplit &&
             distToNextManeuver <= 850.0
 
         // 9. Phase 3: Speed limit (strictly null if OSM maxspeed is absent — NEVER guessed!)
-        val speedLimitMph = if (route.speedLimitsByShapeIndex.isNotEmpty()) {
+        val speedLimitMph = if (currentState.isWalkingMode) {
+            null
+        } else if (route.speedLimitsByShapeIndex.isNotEmpty()) {
             route.speedLimitsByShapeIndex[bestIdx]
         } else {
             val activeManeuver = route.maneuvers.getOrNull((upcomingManeuverIdx - 1).coerceAtLeast(0))
             activeManeuver?.speedLimitMph
         }
         val currentMph = fix.speedMps * 2.23694f
-        val isOverspeed = speedLimitMph != null && currentMph > (speedLimitMph + settings.speedWarningThresholdMph)
+        val isOverspeed = !currentState.isWalkingMode &&
+            speedLimitMph != null &&
+            currentMph > (speedLimitMph + settings.speedWarningThresholdMph)
 
         // 10. Phase 3 & 4: Ahead Alerts (filtered by user's individual alert switches)
-        val activeAheadAlert = findNearestAheadAlert(
-            fix = fix.copy(lat = snappedLoc.lat, lon = snappedLoc.lon, bearing = snappedBearing),
-            routeAlerts = route.roadAlerts,
-            dbHazards = dbHazards,
-            userReports = userReports,
-            settings = settings,
-            isHighway = isHighway
-        )
-        val alertToSpeak = if (activeAheadAlert != null &&
+        val activeAheadAlert = if (currentState.isWalkingMode) {
+            null
+        } else {
+            findNearestAheadAlert(
+                fix = fix.copy(lat = snappedLoc.lat, lon = snappedLoc.lon, bearing = snappedBearing),
+                routeAlerts = route.roadAlerts,
+                dbHazards = dbHazards,
+                userReports = userReports,
+                settings = settings,
+                isHighway = isHighway
+            )
+        }
+        val alertToSpeak = if (!currentState.isWalkingMode &&
+            activeAheadAlert != null &&
             activeAheadAlert.distanceMeters <= 550.0 &&
             lastSpokenAlertIds.add(activeAheadAlert.id)
         ) {

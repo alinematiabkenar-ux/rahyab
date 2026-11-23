@@ -168,7 +168,8 @@ data class RouteOptions(
     val avoidHighways: Boolean = false,
     val avoidFerries: Boolean = false,
     val preferShortest: Boolean = false,
-    val avoidLocations: List<LatLon> = emptyList() // Active user-reported road closures
+    val avoidLocations: List<LatLon> = emptyList(), // Active user-reported road closures
+    val isPedestrian: Boolean = false
 )
 
 class MissingStatesException(
@@ -203,7 +204,8 @@ data class ActiveNavigationState(
     val lanePulseManeuverIndex: Int = -1,
     val lanePulseTriggerCount: Int = 0,
     val showJunctionPreview: Boolean = false,
-    val dismissedJunctionManeuverIndex: Int = -1
+    val dismissedJunctionManeuverIndex: Int = -1,
+    val isWalkingMode: Boolean = false
 ) {
     val currentManeuver: RouteManeuver?
         get() = route?.maneuvers?.getOrNull(currentManeuverIndex)

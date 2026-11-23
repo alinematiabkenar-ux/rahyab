@@ -31,7 +31,7 @@ internal fun RahYabViewModel.initializeParkingSupportImpl() {
             val candidate = parkedCarManager.onGpsFix(
                 fix = fix,
                 isNavigating = nav.isNavigating,
-                isWalkingMode = false,
+                isWalkingMode = nav.isWalkingMode,
                 homeLat = home?.lat,
                 homeLon = home?.lon,
                 skipAtHomeEnabled = settings.value.skipParkingAtHome
@@ -119,29 +119,137 @@ private fun RahYabViewModel.persistParkedCandidateImpl(
 
 internal fun RahYabViewModel.startWalkToCarImpl() {
     val spot = parkedCar.value ?: return
-    val str = stringsFor(settings.value.language)
-    val ref = getEffectiveReferenceLocation()
+    val s = settings.value
+    val str = stringsFor(s.language)
+    val origin = getEffectiveReferenceLocation()
     val dist = com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
-        ref.lat,
-        ref.lon,
+        origin.lat,
+        origin.lon,
         spot.lat,
         spot.lon
     )
-    selectPlace(
-        com.example.data.search.PlaceSearchResult(
-            id = "parked_car",
-            name = str.parkedCarLabel,
-            brand = "",
-            category = "parking",
-            address = spot.note,
-            city = "",
-            stateCode = currentLocationStateCode.value.orEmpty(),
-            postcode = "",
-            lat = spot.lat,
-            lon = spot.lon,
-            distanceMeters = dist,
-            relevanceScore = 1.0,
-            source = "parked_car"
-        )
+    val parkedPlace = com.example.data.search.PlaceSearchResult(
+        id = "parked_car",
+        name = str.parkedCarLabel,
+        brand = "",
+        category = "parking",
+        address = spot.note,
+        city = "",
+        stateCode = currentLocationStateCode.value.orEmpty(),
+        postcode = "",
+        lat = spot.lat,
+        lon = spot.lon,
+        distanceMeters = dist,
+        relevanceScore = 1.0,
+        source = "parked_car"
     )
+    _selectedPlace.value = parkedPlace
+
+    viewModelScope.launch {
+        _isCalculatingRoute.value = true
+        _routeError.value = null
+        val res = routingEngine.calculateRoutes(
+            origin = origin,
+            destination = com.example.navigation.LatLon(spot.lat, spot.lon),
+            options = com.example.navigation.RouteOptions(isPedestrian = true),
+            headingDegrees = null,
+            allowDevOnlineFallback = s.devOnlineOregonMode
+        )
+        _isCalculatingRoute.value = false
+        res.onSuccess { routes ->
+            val route = routes.firstOrNull() ?: return@onSuccess
+            _candidateRoutes.value = listOf(route)
+            _selectedRouteIndex.value = 0
+            startWalkingNavigationSessionImpl(route, parkedPlace)
+        }.onFailure { err ->
+            _snackbarMessage.value = err.message ?: str.missingRoutingTiles
+        }
+    }
+}
+
+private fun RahYabViewModel.startWalkingNavigationSessionImpl(
+    route: com.example.navigation.OfflineRoute,
+    dest: com.example.data.search.PlaceSearchResult
+) {
+    val s = settings.value
+    stopInternalNavJobsImpl()
+    navController.reset()
+    speedBumpEvaluator.reset()
+    voiceManager.resetDeduplication()
+    locationTracker.setNavigationMode(true)
+    compassTracker.setNavigationMode(true)
+    _isCameraFollowing.value = true
+    lastGpsReceivedMs = System.currentTimeMillis()
+    _freeDriveAheadAlert.value = null
+    _aheadTrafficLightMeters.value = null
+
+    val initialManeuver = route.maneuvers.firstOrNull()
+    val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
+    val initialBearing = if (route.shape.size >= 2) {
+        com.example.navigation.ValhallaResponseParser.bearingDegrees(route.shape[0], route.shape[1]).toFloat()
+    } else {
+        _userHeadingDegrees.value
+    }
+
+    _navigationState.value = com.example.navigation.ActiveNavigationState(
+        isNavigating = true,
+        isWalkingMode = true,
+        route = route,
+        destinationName = dest.name,
+        destinationAddress = dest.address,
+        currentManeuverIndex = 0,
+        distanceToNextManeuverMeters = initialManeuver?.lengthMeters ?: route.distanceMeters,
+        timeToNextManeuverSeconds = initialManeuver?.timeSeconds ?: route.durationSeconds,
+        remainingDistanceMeters = route.distanceMeters,
+        remainingTimeSeconds = route.durationSeconds,
+        snappedLocation = startLoc,
+        snappedBearing = initialBearing,
+        currentSpeedLimitMph = null,
+        isSimulatingDrive = false,
+        showLaneStrip = false,
+        showJunctionPreview = false
+    )
+
+    val etaText = com.example.i18n.BilingualFormatter.formatDuration(route.durationSeconds, s.language)
+    com.example.service.NavigationForegroundService.startOrUpdate(
+        context = app,
+        title = "${dest.name} • $etaText",
+        body = initialManeuver?.instructionEn ?: dest.name
+    )
+
+    val spoken = voiceManager.speakStartInstruction(route, s.language)
+    if (spoken.isNotBlank()) {
+        navController.markExternalPromptSpoken()
+        _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
+    }
+
+    _cameraCommand.value = CameraTargetCommand(
+        lat = startLoc.lat,
+        lon = startLoc.lon,
+        zoom = 17.0,
+        tilt = 0.0,
+        bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
+    )
+    startGpsLossWatchdogImpl()
+}
+
+internal fun RahYabViewModel.triggerWalkingArrivalVibrationImpl() {
+    runCatching {
+        val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val vm = app.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+            vm?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            app.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+        } ?: return
+        if (!vibrator.hasVibrator()) return
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            vibrator.vibrate(
+                android.os.VibrationEffect.createOneShot(300L, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(300L)
+        }
+    }
 }

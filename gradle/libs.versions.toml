@@ -45,6 +45,7 @@ valhallaMobile = "0.6.4"
 valhallaModels = "0.5.2"
 sqliteBundled = "2.5.0"
 workRuntime = "2.10.0"
+carApp = "1.7.0"
 
 
 [libraries]
@@ -105,6 +106,8 @@ valhalla-models = { group = "io.github.rallista", name = "valhalla-models", vers
 valhalla-models-config = { group = "io.github.rallista", name = "valhalla-models-config", version.ref = "valhallaModels" }
 androidx-sqlite-bundled = { group = "androidx.sqlite", name = "sqlite-bundled", version.ref = "sqliteBundled" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workRuntime" }
+androidx-car-app = { group = "androidx.car.app", name = "app", version.ref = "carApp" }
+androidx-car-app-projected = { group = "androidx.car.app", name = "app-projected", version.ref = "carApp" }
 
 
 [plugins]

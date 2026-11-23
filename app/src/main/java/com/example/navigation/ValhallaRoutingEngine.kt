@@ -126,7 +126,7 @@ class ValhallaRoutingEngine(
                         ?: throw IllegalStateException("Valhalla routing engine could not initialize for installed tiles.")
                     val fastestRaw = engine.routeRaw(fastestRequestJson)
                     val fastestParsed = ValhallaResponseParser.parseRoutes(fastestRaw)
-                    val shortestParsed = runCatching {
+                    val shortestParsed = if (options.isPedestrian) null else runCatching {
                         ValhallaResponseParser.parseRoutes(engine.routeRaw(shortestRequestJson)).firstOrNull()
                     }.getOrNull()
                     val merged = ValhallaResponseParser.mergeFastestAndShortestRoutes(
@@ -138,7 +138,7 @@ class ValhallaRoutingEngine(
                         throw IllegalStateException("No offline route found between these locations.")
                     }
                     var anyTraceSucceeded = false
-                    val enriched = merged.map { route ->
+                    val enriched = if (options.isPedestrian) merged else merged.map { route ->
                         val traced = enrichRouteOffline(engine, route)
                         if (traced.speedLimitsByShapeIndex.size > route.speedLimitsByShapeIndex.size) {
                             anyTraceSucceeded = true
@@ -171,7 +171,7 @@ class ValhallaRoutingEngine(
         if (allowDevOnlineFallback) {
             return@withContext runCatching {
                 val fastestParsed = executeOnlineValhallaRequest(fastestRequestJson)
-                val shortestParsed = runCatching {
+                val shortestParsed = if (options.isPedestrian) null else runCatching {
                     executeOnlineValhallaRequest(shortestRequestJson).firstOrNull()
                 }.getOrNull()
                 val merged = ValhallaResponseParser.mergeFastestAndShortestRoutes(
@@ -183,7 +183,7 @@ class ValhallaRoutingEngine(
                     throw IllegalStateException("No route returned from public Valhalla test server.")
                 }
                 var anyTraceSucceeded = false
-                val enriched = merged.map { route ->
+                val enriched = if (options.isPedestrian) merged else merged.map { route ->
                     val traced = enrichRouteOnline(route)
                     if (traced.speedLimitsByShapeIndex.size > route.speedLimitsByShapeIndex.size) {
                         anyTraceSucceeded = true
