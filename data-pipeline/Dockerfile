@@ -31,6 +31,6 @@ WORKDIR /pipeline
 COPY requirements.txt /pipeline/requirements.txt
 RUN python3 -m pip install --no-cache-dir --break-system-packages -r /pipeline/requirements.txt
 
-COPY states.py build_state_pack.py /pipeline/
+COPY COPY *.py /pipeline/
 
 ENTRYPOINT ["python3", "/pipeline/build_state_pack.py"]
