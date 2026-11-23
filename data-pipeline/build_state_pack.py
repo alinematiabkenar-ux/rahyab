@@ -243,7 +243,7 @@ def verify_pbf_with_osmium(pbf_path: Path) -> tuple[bool, str]:
     if not osmium_bin:
         return True, "unknown (osmium not installed)"
     res = subprocess.run(
-        [osmium_bin, "fileinfo", "-e", str(pbf_path)],
+        [osmium_bin, "fileinfo", "-e", "-F", "pbf", str(pbf_path)],
         capture_output=True,
         text=True,
         errors="replace",
