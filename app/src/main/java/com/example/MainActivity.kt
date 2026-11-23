@@ -103,6 +103,7 @@ class MainActivity : ComponentActivity() {
     @Volatile
     private var isViewModelInitialized = false
     private var pendingExternalIntent: Intent? = null
+    private var pendingOpenMapsTab: Boolean = false
 
     private val navStopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -124,6 +125,9 @@ class MainActivity : ComponentActivity() {
 
         if (isExternalMapIntent(intent)) {
             pendingExternalIntent = intent
+        }
+        if (intent?.getStringExtra(com.example.data.packs.MapUpdateCheckWorker.EXTRA_OPEN_TAB) == RahYabRoutes.ROUTE_MAPS) {
+            pendingOpenMapsTab = true
         }
 
         ContextCompat.registerReceiver(
@@ -161,6 +165,10 @@ class MainActivity : ComponentActivity() {
                         pendingExternalIntent = null
                         vm.handleExternalMapIntent(extIntent)
                     }
+                    if (pendingOpenMapsTab) {
+                        pendingOpenMapsTab = false
+                        vm.requestOpenMapsTab()
+                    }
                 }
                 RahYabAppRoot(viewModel = vm)
             }
@@ -170,6 +178,13 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getStringExtra(com.example.data.packs.MapUpdateCheckWorker.EXTRA_OPEN_TAB) == RahYabRoutes.ROUTE_MAPS) {
+            if (isViewModelInitialized) {
+                viewModel.requestOpenMapsTab()
+            } else {
+                pendingOpenMapsTab = true
+            }
+        }
         if (isExternalMapIntent(intent)) {
             if (isViewModelInitialized) {
                 viewModel.handleExternalMapIntent(intent)
@@ -284,6 +299,7 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
     val snackbarMessage by viewModel.snackbarMessage.collectAsStateWithLifecycle()
     val showPersianTtsDialog by viewModel.showPersianTtsDialog.collectAsStateWithLifecycle()
     val openDriveTabEvent by viewModel.openDriveTabEvent.collectAsStateWithLifecycle()
+    val openMapsTabEvent by viewModel.openMapsTabEvent.collectAsStateWithLifecycle()
     val mapUpdatesCount by viewModel.mapPackUpdatesAvailableCount.collectAsStateWithLifecycle()
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
@@ -448,6 +464,12 @@ fun RahYabAppRoot(viewModel: RahYabViewModel) {
                     LaunchedEffect(openDriveTabEvent) {
                         if (openDriveTabEvent > 0L && currentRoute != RahYabRoutes.ROUTE_DRIVE) {
                             navigateTab(RahYabRoutes.ROUTE_DRIVE)
+                        }
+                    }
+
+                    LaunchedEffect(openMapsTabEvent) {
+                        if (openMapsTabEvent > 0L && currentRoute != RahYabRoutes.ROUTE_MAPS) {
+                            navigateTab(RahYabRoutes.ROUTE_MAPS)
                         }
                     }
 

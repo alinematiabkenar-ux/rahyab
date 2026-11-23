@@ -29,12 +29,12 @@
 
 ## F3. Monthly Map Updates (Pipeline + App)
 - [x] F3.1 Pipeline: `--resolve-matrix published` (stdlib urllib fetch `manifest.json`, resolve unique base states via `parentStateCode`, fallback to `or`, print resolved) + verify manifest merge preserves unbuilt states
-- [ ] F3.2 App: Add `androidx.work:work-runtime-ktx`, `MapUpdateCheckWorker.kt` (periodic 7-day check on connected network, version compare, low-importance `"Map updates"` channel notification opening Maps screen, 24h startup check + badge, optional Wi-Fi+charging auto-download toggle OFF by default)
-- [ ] F3.3 App: Smart per-component SHA-256 diff update (`MapUpdateSmartPlanner.kt`) downloading only changed components (pmtiles/valhalla/places) with real download size preview, postpone file swap while navigating, and record last check time/result in Diagnostics
+- [x] F3.2 App: Add `androidx.work:work-runtime-ktx`, `MapUpdateCheckWorker.kt` (periodic 7-day check on connected network, version compare, low-importance `"Map updates"` channel notification opening Maps screen, 24h startup check + badge, optional Wi-Fi+charging auto-download toggle OFF by default)
+- [x] F3.3 App: Smart per-component SHA-256 diff update (`MapUpdateSmartPlanner.kt`) downloading only changed components (pmtiles/valhalla/places) with real download size preview, postpone file swap while navigating, and record last check time/result in Diagnostics
 
 ## F4. Parked Car Location
-- [ ] F4.1 App: `ParkedCarEntity` / `ParkedCarDao` (Room migration, single latest row + optional note + Clear), `ParkedCarManager.kt` (auto-save on nav arrival <3 mph & acc <50 m, free-drive >15 mph 2 min then <3 mph 2 min, Home 150 m skip toggle ON by default, manual "I parked here" action)
-- [ ] F4.2 App: Optional Car Bluetooth disconnect detector (`CarBluetoothReceiver.kt` + Settings "Car Bluetooth device" picker requesting `BLUETOOTH_CONNECT` only when opened, hidden if denied, saves last good fix within 2 min on ACL disconnect)
+- [x] F4.1 App: `ParkedCarEntity` / `ParkedCarDao` (Room migration, single latest row + optional note + Clear), `ParkedCarManager.kt` (auto-save on nav arrival <3 mph & acc <50 m, free-drive >15 mph 2 min then <3 mph 2 min, Home 150 m skip toggle ON by default, manual "I parked here" action)
+- [x] F4.2 App: Optional Car Bluetooth disconnect detector (`CarBluetoothReceiver.kt` + Settings "Car Bluetooth device" picker requesting `BLUETOOTH_CONNECT` only when opened, hidden if denied, saves last good fix within 2 min on ACL disconnect)
 - [ ] F4.3 App: Connect existing map blue "P" marker, DriveScreen parked car card when >50 m away (EN/FA relative time & distance, note edit, Clear, Share `geo:` link), and Diagnostics entry (time & accuracy only)
 - [ ] F4.4 App: Offline "Walk to car" pedestrian Valhalla routing (`costing = pedestrian`), walking mode HUD (zoom 17, no speed limit/lanes/cameras/hazards, short turn voice prompts, arrival <=15 m with vibration & "You have reached your car" / "به ماشین رسیدید")
 

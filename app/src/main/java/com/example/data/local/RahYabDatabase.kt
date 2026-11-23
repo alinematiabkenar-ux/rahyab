@@ -101,8 +101,22 @@ data class InstalledPackEntity(
     val hasValhalla: Boolean = false,
     val hasPlacesDb: Boolean = false,
     val placesSource: String = "overture+osm",
+    val pmtilesSha256: String = "",
+    val valhallaSha256: String = "",
+    val placesSha256: String = "",
     val errorMessage: String? = null,
     val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "parked_car")
+data class ParkedCarEntity(
+    @PrimaryKey val id: Int = 1,
+    val lat: Double,
+    val lon: Double,
+    val accuracyMeters: Float,
+    val parkedAtEpochMs: Long,
+    val note: String = "",
+    val source: String = "manual"
 )
 
 @Dao
@@ -177,19 +191,39 @@ interface InstalledPackDao {
     suspend fun delete(stateCode: String)
 }
 
+@Dao
+interface ParkedCarDao {
+    @Query("SELECT * FROM parked_car WHERE id = 1 LIMIT 1")
+    fun observeLatest(): Flow<ParkedCarEntity?>
+
+    @Query("SELECT * FROM parked_car WHERE id = 1 LIMIT 1")
+    suspend fun getLatestOnce(): ParkedCarEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(spot: ParkedCarEntity)
+
+    @Query("UPDATE parked_car SET note = :note WHERE id = 1")
+    suspend fun updateNote(note: String)
+
+    @Query("DELETE FROM parked_car")
+    suspend fun clear()
+}
+
 @Database(
     entities = [
         SavedPlaceEntity::class,
         UserReportEntity::class,
-        InstalledPackEntity::class
+        InstalledPackEntity::class,
+        ParkedCarEntity::class
     ],
-    version = 3,
+    version = 5,
     exportSchema = false
 )
 abstract class RahYabDatabase : RoomDatabase() {
     abstract fun savedPlaceDao(): SavedPlaceDao
     abstract fun userReportDao(): UserReportDao
     abstract fun installedPackDao(): InstalledPackDao
+    abstract fun parkedCarDao(): ParkedCarDao
 
     companion object {
         @Volatile
@@ -203,6 +237,38 @@ abstract class RahYabDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE installed_packs ADD COLUMN pmtilesSha256 TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE installed_packs ADD COLUMN valhallaSha256 TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    "ALTER TABLE installed_packs ADD COLUMN placesSha256 TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS parked_car (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        lat REAL NOT NULL,
+                        lon REAL NOT NULL,
+                        accuracyMeters REAL NOT NULL,
+                        parkedAtEpochMs INTEGER NOT NULL,
+                        note TEXT NOT NULL DEFAULT '',
+                        source TEXT NOT NULL DEFAULT 'manual'
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): RahYabDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -210,8 +276,7 @@ abstract class RahYabDatabase : RoomDatabase() {
                     RahYabDatabase::class.java,
                     "rahyab_local.db"
                 )
-                    .addMigrations(MIGRATION_2_3)
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also {
                         instance = it

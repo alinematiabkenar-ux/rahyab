@@ -70,6 +70,8 @@ data class StatePackUiItem(
     val isCurrentLocationState: Boolean = false,
     val isQueued: Boolean = false,
     val placesSource: String = "overture+osm",
+    val smartUpdateDownloadBytes: Long = 0L,
+    val hasPendingDeferredSwap: Boolean = false,
     val errorMessage: String? = null
 ) {
     val progress: Float

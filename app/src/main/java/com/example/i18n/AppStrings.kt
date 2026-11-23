@@ -377,6 +377,37 @@ interface AppStrings {
     val overtureAttributionLinkLabel: String
     // F2: Speed bump alerts
     val alertToggleSpeedBump: String
+    // F3: Monthly & smart map updates
+    val mapUpdateChannelName: String
+    val mapUpdateSmartSizeNote: String
+    val mapUpdatePostponedNotice: String
+    val mapUpdateReadySwapApplied: String
+    val diagSectionMapUpdates: String
+    val diagLastUpdateCheckTime: String
+    val diagLastUpdateCheckResult: String
+    val diagNeverChecked: String
+    // F4: Parked car location & walk to car
+    val parkedCarMenuAction: String
+    val parkedCarSavedToast: String
+    val parkedCarClearedToast: String
+    val parkedCarWalkToCar: String
+    val parkedCarEditNote: String
+    val parkedCarNoteHint: String
+    val parkedCarShare: String
+    val parkedCarClear: String
+    val parkedCarLabel: String
+    val parkedCarArrivedVoice: String
+    val parkedCarWalkingModeBadge: String
+    val settingsSectionParking: String
+    val settingsSkipParkingAtHome: String
+    val settingsCarBluetoothLabel: String
+    val settingsCarBluetoothNone: String
+    val settingsCarBluetoothPickerTitle: String
+    val settingsCarBluetoothNoDevices: String
+    val diagSectionParkedCar: String
+    val diagParkedTime: String
+    val diagParkedAccuracy: String
+    val diagNoParkedCar: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

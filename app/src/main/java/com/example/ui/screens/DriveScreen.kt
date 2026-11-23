@@ -80,6 +80,7 @@ fun DriveScreen(
     val networkState by viewModel.networkState.collectAsStateWithLifecycle()
     val onlineSources by viewModel.onlineSourcesSummary.collectAsStateWithLifecycle()
     val weatherAlerts by viewModel.activeWeatherAlerts.collectAsStateWithLifecycle()
+    val parkedCar by viewModel.parkedCar.collectAsStateWithLifecycle()
     val isSimulationActive = navState.isSimulatingDrive || settings.simulateDriveEnabled
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
@@ -144,6 +145,7 @@ fun DriveScreen(
             cameras = visibleCameras,
             trafficLights = if (settings.showTrafficLights) visibleTrafficLights else emptyList(),
             speedBumps = visibleSpeedBumps,
+            parkedCarLocation = parkedCar?.let { com.example.navigation.LatLon(it.lat, it.lon) },
             show3DBuildings = settings.show3DBuildings,
             positionMarkerStyle = settings.positionMarkerStyle,
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),
@@ -235,8 +237,30 @@ fun DriveScreen(
                 .padding(end = 12.dp, bottom = bottomRailPadding)
         )
 
-        // 5. Required OpenStreetMap + Overture Maps attribution badge
-        if (!navState.isNavigating && selectedPlace == null) {
+        // 5. Required OpenStreetMap + Overture Maps attribution badge & Manual "I parked here" chip
+        val parkedCarDistanceMeters = remember(parkedCar, gpsFix) {
+            val spot = parkedCar ?: return@remember null
+            val ref = gpsFix?.let { com.example.navigation.LatLon(it.lat, it.lon) }
+                ?: viewModel.getEffectiveReferenceLocation()
+            com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
+                ref.lat,
+                ref.lon,
+                spot.lat,
+                spot.lon
+            )
+        }
+        val showParkedCarCard = !navState.isNavigating &&
+            selectedPlace == null &&
+            parkedCar != null &&
+            (parkedCarDistanceMeters ?: 0.0) > 50.0
+
+        if (!navState.isNavigating && selectedPlace == null && !showParkedCarCard) {
+            ManualParkHereChip(
+                onClick = { viewModel.parkCarHereManually() },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 12.dp, bottom = 42.dp)
+            )
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
@@ -293,6 +317,18 @@ fun DriveScreen(
                     viewModel.requestDownloadStatePack(stateCode)
                     onNavigateToMaps()
                 },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(12.dp)
+            )
+        } else if (showParkedCarCard && parkedCar != null && parkedCarDistanceMeters != null) {
+            ParkedCarCard(
+                spot = parkedCar!!,
+                distanceMeters = parkedCarDistanceMeters,
+                unit = settings.distanceUnit,
+                onWalkToCar = { viewModel.startWalkToCar() },
+                onUpdateNote = { viewModel.updateParkedCarNote(it) },
+                onClear = { viewModel.clearParkedCar() },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(12.dp)

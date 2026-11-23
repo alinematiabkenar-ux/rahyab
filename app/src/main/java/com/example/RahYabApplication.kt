@@ -70,6 +70,9 @@ class RahYabApplication : Application() {
         // All heavy subsystems (MapLibre, Room, PackManager, TTS, Compass, Valhalla) are
         // initialized lazily so that if a crash log is pending on next launch, MainActivity
         // can show the safe crash recovery screen without touching any of them.
+        if (CrashLogManager.readPendingCrashLog(this) == null) {
+            com.example.data.packs.MapUpdateCheckWorker.schedulePeriodic(this)
+        }
     }
 
     fun ensureMapLibreInitialized() {

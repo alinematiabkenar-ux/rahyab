@@ -74,6 +74,23 @@ internal fun RahYabViewModel.buildStatePacksFlow(): StateFlow<List<StatePackUiIt
             ?: inst?.totalBytes
             ?: 0L
 
+        val smartBytes = if (remote != null && status == PackInstallStatus.UPDATE_AVAILABLE && inst != null) {
+            val hashes = com.example.data.packs.InstalledComponentHashes(
+                pmtilesSha256 = inst.pmtilesSha256,
+                valhallaSha256 = inst.valhallaSha256,
+                placesSha256 = inst.placesSha256
+            )
+            com.example.data.packs.MapUpdateSmartPlanner.planSmartUpdate(
+                localHashes = hashes,
+                remote = remote,
+                hasLocalPmtiles = inst.hasPmtiles,
+                hasLocalValhalla = inst.hasValhalla,
+                hasLocalPlaces = inst.hasPlacesDb
+            ).downloadBytes.takeIf { it > 0L } ?: totalBytes
+        } else {
+            0L
+        }
+
         StatePackUiItem(
             stateCode = state.code,
             abbr = state.abbr,
@@ -94,6 +111,11 @@ internal fun RahYabViewModel.buildStatePacksFlow(): StateFlow<List<StatePackUiIt
             isCurrentLocationState = (state.code == locStateCode),
             isQueued = (status == PackInstallStatus.QUEUED),
             placesSource = inst?.placesSource?.takeIf { it.isNotBlank() } ?: remote?.placesSource ?: "overture+osm",
+            smartUpdateDownloadBytes = smartBytes,
+            hasPendingDeferredSwap = com.example.data.packs.MapUpdateSmartPlanner.hasPendingSwapForState(
+                packManager.packsRootDir,
+                state.code
+            ),
             errorMessage = inst?.errorMessage
         )
     }
@@ -119,11 +141,17 @@ internal fun RahYabViewModel.getInstalledDataBuildVersionImpl(): String {
 internal fun RahYabViewModel.refreshManifestImpl() {
     val url = settings.value.effectivePackBaseUrl
     viewModelScope.launch {
+        val nowMs = System.currentTimeMillis()
         val res = packManager.fetchManifest(url)
         res.onSuccess {
-            prefs.setLastManifestCheckEpochMs(System.currentTimeMillis())
+            val outdated = withContext(Dispatchers.IO) {
+                installedPackDao.getAllOnce().filter { it.status == PackInstallStatus.UPDATE_AVAILABLE.name }
+            }
+            val summary = if (outdated.isEmpty()) "Up to date" else "${outdated.size} update(s) available"
+            prefs.setLastMapUpdateCheck(nowMs, summary)
             updateMapUpdatesSourceStatus(OnlineSourceState.ACTIVE)
         }.onFailure { err ->
+            prefs.setLastMapUpdateCheck(nowMs, "Failed: ${err.message.orEmpty().take(60)}")
             updateMapUpdatesSourceStatus(OnlineSourceState.ERROR, err.message.orEmpty().take(60))
         }
     }
@@ -141,79 +169,56 @@ internal fun RahYabViewModel.checkDailyMapUpdatesIfDueImpl() {
     if (dailyManifestCheckJob?.isActive == true) return
 
     dailyManifestCheckJob = viewModelScope.launch {
+        val checkMs = System.currentTimeMillis()
         val res = packManager.fetchManifest(baseUrl)
         res.onSuccess {
-            prefs.setLastManifestCheckEpochMs(System.currentTimeMillis())
-            val outdatedCount = withContext(Dispatchers.IO) {
-                installedPackDao.getAllOnce().count {
+            val outdated = withContext(Dispatchers.IO) {
+                installedPackDao.getAllOnce().filter {
                     it.status == PackInstallStatus.UPDATE_AVAILABLE.name
                 }
             }
+            val summary = if (outdated.isEmpty()) {
+                "Up to date"
+            } else {
+                val codes = outdated.joinToString(", ") { it.stateCode.uppercase() }
+                "${outdated.size} update(s) available ($codes)"
+            }
+            prefs.setLastMapUpdateCheck(checkMs, summary)
             val str = stringsFor(settings.value.language)
             updateMapUpdatesSourceStatus(
                 OnlineSourceState.ACTIVE,
-                if (outdatedCount > 0) "$outdatedCount — ${str.mapUpdateNotificationTitle}" else ""
+                if (outdated.isNotEmpty()) "${outdated.size} — ${str.mapUpdateNotificationTitle}" else ""
             )
-            if (outdatedCount > 0) {
-                postMapUpdateNotificationImpl(outdatedCount)
+            if (outdated.isNotEmpty()) {
+                val lang = settings.value.language
+                val names = outdated.map { pack ->
+                    val info = UsStatesCatalog.byCode[pack.stateCode.lowercase()]
+                    if (lang == com.example.i18n.AppLanguage.PERSIAN) {
+                        info?.nameFa ?: pack.stateCode.uppercase()
+                    } else {
+                        info?.nameEn ?: pack.stateCode.uppercase()
+                    }
+                }
+                com.example.data.packs.MapUpdateCheckWorker.postMapUpdateNotification(
+                    getApplication<Application>(),
+                    names,
+                    lang
+                )
                 val latestSettings = settings.value
-                val latestNet = networkState.value
-                // Never download automatically unless "Update maps automatically on Wi-Fi" is ON and on Wi-Fi
-                if (latestSettings.autoUpdateMapsOnWifi && latestNet.isWifi) {
-                    packManager.updateAllOutdatedPacks(latestSettings.effectivePackBaseUrl)
+                // Only auto-download when ON AND on unmetered Wi-Fi while charging
+                if (latestSettings.autoUpdateMapsOnWifi) {
+                    val appContext = getApplication<Application>()
+                    if (com.example.data.packs.MapUpdateCheckWorker.isOnUnmeteredWifiAndCharging(appContext)) {
+                        packManager.updateAllOutdatedPacks(latestSettings.effectivePackBaseUrl)
+                    } else {
+                        com.example.data.packs.MapUpdateCheckWorker.enqueueAutoDownloadWhenUnmeteredCharging(appContext)
+                    }
                 }
             }
         }.onFailure { err ->
+            prefs.setLastMapUpdateCheck(checkMs, "Failed: ${err.message.orEmpty().take(60)}")
             updateMapUpdatesSourceStatus(OnlineSourceState.ERROR, err.message.orEmpty().take(60))
         }
-    }
-}
-
-private fun RahYabViewModel.postMapUpdateNotificationImpl(outdatedCount: Int) {
-    val appContext = getApplication<Application>()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        val granted = ContextCompat.checkSelfPermission(
-            appContext,
-            Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!granted) return
-    }
-    runCatching {
-        val channelId = "rahyab_map_updates"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            if (nm != null && nm.getNotificationChannel(channelId) == null) {
-                val channel = NotificationChannel(
-                    channelId,
-                    "Map Pack Updates",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-                nm.createNotificationChannel(channel)
-            }
-        }
-        val str = stringsFor(settings.value.language)
-        val countText = BilingualFormatter.formatNumber(outdatedCount, settings.value.language)
-        val body = str.mapUpdateNotificationBody.replace("%d", countText)
-        val launchIntent = appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)
-        val pendingIntent = if (launchIntent != null) {
-            PendingIntent.getActivity(
-                appContext,
-                4101,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else null
-        val notification = NotificationCompat.Builder(appContext, channelId)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(str.mapUpdateNotificationTitle)
-            .setContentText(body)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .apply { if (pendingIntent != null) setContentIntent(pendingIntent) }
-            .build()
-        NotificationManagerCompat.from(appContext).notify(4101, notification)
-    }.onFailure { err ->
-        CrashLogManager.logError(appContext, "RahYabViewModel", "Failed to post map update notification", err)
     }
 }
 
@@ -226,7 +231,12 @@ internal fun RahYabViewModel.requestDownloadStatePackImpl(stateCode: String) {
         return
     }
     val baseUrl = s.effectivePackBaseUrl
-    if (pack.totalSizeBytes > 0L && packManager.isLowStorageForPack(pack.totalSizeBytes)) {
+    val requiredSize = if (pack.status == PackInstallStatus.UPDATE_AVAILABLE && pack.smartUpdateDownloadBytes > 0L) {
+        pack.smartUpdateDownloadBytes
+    } else {
+        pack.totalSizeBytes
+    }
+    if (requiredSize > 0L && packManager.isLowStorageForPack(requiredSize)) {
         _lowStoragePromptStateCode.value = stateCode
     } else {
         packManager.startOrResumeDownload(stateCode, baseUrl)

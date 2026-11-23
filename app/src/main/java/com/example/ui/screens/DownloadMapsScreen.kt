@@ -607,14 +607,19 @@ private fun StatePackCard(
                 }
 
                 Column(horizontalAlignment = Alignment.End) {
-                    if (pack.totalSizeBytes > 0L) {
+                    val displaySizeBytes = if (pack.status == PackInstallStatus.UPDATE_AVAILABLE && pack.smartUpdateDownloadBytes > 0L) {
+                        pack.smartUpdateDownloadBytes
+                    } else {
+                        pack.totalSizeBytes
+                    }
+                    if (displaySizeBytes > 0L) {
                         Text(
-                            text = BilingualFormatter.formatBytes(pack.totalSizeBytes, language),
+                            text = BilingualFormatter.formatBytes(displaySizeBytes, language),
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (pack.status == PackInstallStatus.UPDATE_AVAILABLE) AlertAmber else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (pack.installedBytesOnDisk > 0L && pack.installedBytesOnDisk != pack.totalSizeBytes) {
+                    if (pack.installedBytesOnDisk > 0L && pack.installedBytesOnDisk != displaySizeBytes) {
                         Text(
                             text = BilingualFormatter.formatBytes(pack.installedBytesOnDisk, language),
                             style = MaterialTheme.typography.labelSmall,
@@ -743,15 +748,22 @@ private fun StatePackCard(
                         }
                     }
                     PackInstallStatus.UPDATE_AVAILABLE -> {
+                        val updateSize = pack.smartUpdateDownloadBytes.takeIf { it > 0L } ?: pack.totalSizeBytes
+                        val updateLabel = if (updateSize > 0L) {
+                            "${strings.actionUpdate} (${BilingualFormatter.formatBytes(updateSize, language)})"
+                        } else {
+                            strings.actionUpdate
+                        }
                         Button(
                             onClick = onDownloadOrResume,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
+                                .testTag("update_pack_${pack.stateCode}")
                         ) {
                             Icon(Icons.Filled.SystemUpdateAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.actionUpdate)
+                            Text(updateLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = onDelete,

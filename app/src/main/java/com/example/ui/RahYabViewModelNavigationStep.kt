@@ -81,6 +81,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     }
 
     if (state.hasArrived && !wasArrived) {
+        onNavigationArrivedForParkingImpl(isWalkingMode = false)
         val arrivalManeuverType = state.route?.maneuvers?.lastOrNull()?.type ?: ManeuverType.ARRIVE
         val spoken = voiceManager.speakArrival(arrivalManeuverType, state.destinationName, s.language)
         _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)

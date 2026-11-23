@@ -299,6 +299,12 @@ internal fun RahYabViewModel.stopNavigationImpl() {
         tilt = 0.0,
         bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
     )
+    viewModelScope.launch {
+        val applied = packManager.applyPendingSwapsIfIdle()
+        if (applied > 0) {
+            _snackbarMessage.value = com.example.i18n.stringsFor(settings.value.language).mapUpdateReadySwapApplied
+        }
+    }
 }
 
 internal fun RahYabViewModel.stopInternalNavJobsImpl() {

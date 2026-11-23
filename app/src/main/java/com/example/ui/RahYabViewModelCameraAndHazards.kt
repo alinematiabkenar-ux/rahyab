@@ -30,9 +30,15 @@ data class CameraTargetCommand(
 )
 
 internal fun RahYabViewModel.initializeViewModel() {
+    packManager.isNavigationActiveProvider = { _navigationState.value.isNavigating }
+    packManager.onUpdatePostponed = {
+        _snackbarMessage.value = com.example.i18n.stringsFor(settings.value.language).mapUpdatePostponedNotice
+    }
     viewModelScope.launch {
+        packManager.applyPendingSwapsIfIdle()
         packManager.auditInstalledPacks()
     }
+    initializeParkingSupportImpl()
 
     // Track build version alignment across installed packs and refresh nearby cameras
     viewModelScope.launch {

@@ -61,7 +61,12 @@ data class UserSettings(
     val autoCheckMapUpdatesEnabled: Boolean = true,
     val wifiOnlyLargeDownloads: Boolean = true,
     val autoUpdateMapsOnWifi: Boolean = false,
-    val lastManifestCheckEpochMs: Long = 0L
+    val lastManifestCheckEpochMs: Long = 0L,
+    val lastMapUpdateCheckResult: String = "",
+    // F4: Parked car location
+    val skipParkingAtHome: Boolean = true,
+    val carBluetoothDeviceAddress: String = "",
+    val carBluetoothDeviceName: String = ""
 ) {
     /**
      * Effective pack host base URL: uses explicit custom Base URL if entered,
@@ -127,6 +132,10 @@ class UserPreferencesRepository(private val context: Context) {
         val WIFI_ONLY_LARGE_DOWNLOADS = booleanPreferencesKey("wifi_only_large_downloads")
         val AUTO_UPDATE_MAPS_ON_WIFI = booleanPreferencesKey("auto_update_maps_on_wifi")
         val LAST_MANIFEST_CHECK_EPOCH_MS = longPreferencesKey("last_manifest_check_epoch_ms")
+        val LAST_MAP_UPDATE_CHECK_RESULT = stringPreferencesKey("last_map_update_check_result")
+        val SKIP_PARKING_AT_HOME = booleanPreferencesKey("skip_parking_at_home")
+        val CAR_BT_DEVICE_ADDRESS = stringPreferencesKey("car_bt_device_address")
+        val CAR_BT_DEVICE_NAME = stringPreferencesKey("car_bt_device_name")
     }
 
     val settingsFlow: Flow<UserSettings> = context.rahYabDataStore.data.map { prefs ->
@@ -170,7 +179,11 @@ class UserPreferencesRepository(private val context: Context) {
             autoCheckMapUpdatesEnabled = prefs[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] ?: true,
             wifiOnlyLargeDownloads = prefs[Keys.WIFI_ONLY_LARGE_DOWNLOADS] ?: true,
             autoUpdateMapsOnWifi = prefs[Keys.AUTO_UPDATE_MAPS_ON_WIFI] ?: false,
-            lastManifestCheckEpochMs = prefs[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] ?: 0L
+            lastManifestCheckEpochMs = prefs[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] ?: 0L,
+            lastMapUpdateCheckResult = prefs[Keys.LAST_MAP_UPDATE_CHECK_RESULT] ?: "",
+            skipParkingAtHome = prefs[Keys.SKIP_PARKING_AT_HOME] ?: true,
+            carBluetoothDeviceAddress = prefs[Keys.CAR_BT_DEVICE_ADDRESS] ?: "",
+            carBluetoothDeviceName = prefs[Keys.CAR_BT_DEVICE_NAME] ?: ""
         )
     }
 
@@ -322,6 +335,13 @@ class UserPreferencesRepository(private val context: Context) {
         context.rahYabDataStore.edit { it[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] = epochMs }
     }
 
+    suspend fun setLastMapUpdateCheck(epochMs: Long, result: String) {
+        context.rahYabDataStore.edit {
+            it[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] = epochMs
+            it[Keys.LAST_MAP_UPDATE_CHECK_RESULT] = result.take(120)
+        }
+    }
+
     suspend fun setShow3DBuildings(enabled: Boolean) {
         context.rahYabDataStore.edit { it[Keys.SHOW_3D_BUILDINGS] = enabled }
     }
@@ -329,5 +349,16 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setPositionMarkerStyle(style: String) {
         val safe = if (style == "car") "car" else "arrow"
         context.rahYabDataStore.edit { it[Keys.POSITION_MARKER_STYLE] = safe }
+    }
+
+    suspend fun setSkipParkingAtHome(enabled: Boolean) {
+        context.rahYabDataStore.edit { it[Keys.SKIP_PARKING_AT_HOME] = enabled }
+    }
+
+    suspend fun setCarBluetoothDevice(address: String, name: String) {
+        context.rahYabDataStore.edit {
+            it[Keys.CAR_BT_DEVICE_ADDRESS] = address.trim()
+            it[Keys.CAR_BT_DEVICE_NAME] = name.trim()
+        }
     }
 }

@@ -510,6 +510,15 @@ fun SettingsScreen(
             }
         }
 
+        // F4: Parked Car & Optional Car Bluetooth Settings
+        item {
+            SettingsParkingSectionCard(
+                settings = settings,
+                onToggleSkipAtHome = { viewModel.setSkipParkingAtHome(it) },
+                onSelectCarBluetoothDevice = { addr, name -> viewModel.setCarBluetoothDevice(addr, name) }
+            )
+        }
+
         // 4. Phase 5: GitHub Releases Map Pack Source + Optional Custom Base URL
         item {
             SettingsSectionCard(

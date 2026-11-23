@@ -109,6 +109,7 @@ fun DiagnosticsScreen(
     val compassAccuracy by viewModel.compassSensorAccuracy.collectAsStateWithLifecycle()
     val lastRouteDiag by viewModel.lastRouteDiagnostics.collectAsStateWithLifecycle()
     val ttsDiag by viewModel.ttsDiagnostics.collectAsStateWithLifecycle()
+    val parkedCar by viewModel.parkedCar.collectAsStateWithLifecycle()
 
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var errorLines by remember { mutableStateOf(viewModel.readLastErrorLogLines(20)) }
@@ -148,7 +149,10 @@ fun DiagnosticsScreen(
         lastRouteDiag,
         ttsDiag,
         errorLines,
-        language
+        language,
+        settings.lastManifestCheckEpochMs,
+        settings.lastMapUpdateCheckResult,
+        parkedCar
     ) {
         formatDiagnosticsReport(
             strings = strings,
@@ -161,7 +165,11 @@ fun DiagnosticsScreen(
             compassSensorAccuracy = compassAccuracy,
             lastRoute = lastRouteDiag,
             ttsInfo = ttsDiag,
-            errorLines = errorLines
+            errorLines = errorLines,
+            lastMapUpdateCheckEpochMs = settings.lastManifestCheckEpochMs,
+            lastMapUpdateCheckResult = settings.lastMapUpdateCheckResult,
+            parkedCarTimeEpochMs = parkedCar?.parkedAtEpochMs,
+            parkedCarAccuracyMeters = parkedCar?.accuracyMeters
         )
     }
 
@@ -289,6 +297,15 @@ fun DiagnosticsScreen(
                             }
                         }
                     }
+                    HorizontalDivider()
+                    DiagKeyValueRow(
+                        label = strings.diagLastUpdateCheckTime,
+                        value = formatCheckTimestamp(settings.lastManifestCheckEpochMs, strings, language)
+                    )
+                    DiagKeyValueRow(
+                        label = strings.diagLastUpdateCheckResult,
+                        value = settings.lastMapUpdateCheckResult.ifBlank { strings.diagNeverChecked }
+                    )
                 }
             }
 
@@ -329,6 +346,29 @@ fun DiagnosticsScreen(
                         label = strings.diagCompassAccuracy,
                         value = sensorAccuracyLabel(compassAccuracy, strings)
                     )
+                }
+            }
+
+            // 3b. Parked Car (time & accuracy only — no coordinates)
+            item {
+                DiagCard(title = strings.diagSectionParkedCar, icon = Icons.Filled.Map) {
+                    val spot = parkedCar
+                    if (spot == null) {
+                        Text(
+                            text = strings.diagNoParkedCar,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        DiagKeyValueRow(
+                            label = strings.diagParkedTime,
+                            value = formatCheckTimestamp(spot.parkedAtEpochMs, strings, language)
+                        )
+                        DiagKeyValueRow(
+                            label = strings.diagParkedAccuracy,
+                            value = String.format(Locale.US, "%.1f m", spot.accuracyMeters)
+                        )
+                    }
                 }
             }
 
@@ -602,6 +642,12 @@ private fun sensorAccuracyLabel(accuracy: Int, strings: AppStrings): String = wh
     else -> strings.diagSensorUnavailable
 }
 
+private fun formatCheckTimestamp(epochMs: Long, strings: AppStrings, language: AppLanguage): String {
+    if (epochMs <= 0L) return strings.diagNeverChecked
+    val formatted = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(java.util.Date(epochMs))
+    return BilingualFormatter.localizeDigits(formatted, language)
+}
+
 fun formatDiagnosticsReport(
     strings: AppStrings,
     language: AppLanguage,
@@ -613,7 +659,11 @@ fun formatDiagnosticsReport(
     compassSensorAccuracy: Int,
     lastRoute: LastRouteDiagnostics?,
     ttsInfo: VoiceGuidanceManager.TtsDiagnosticsInfo,
-    errorLines: List<String>
+    errorLines: List<String>,
+    lastMapUpdateCheckEpochMs: Long = 0L,
+    lastMapUpdateCheckResult: String = "",
+    parkedCarTimeEpochMs: Long? = null,
+    parkedCarAccuracyMeters: Float? = null
 ): String = buildString {
     appendLine("=== ${strings.appName} — ${strings.diagnosticsTitle} ===")
     appendLine()
@@ -631,6 +681,8 @@ fun formatDiagnosticsReport(
             appendLine("  PMTiles=${BilingualFormatter.formatBytes(p.fileSizes.pmtilesBytes, language)}, Valhalla=${BilingualFormatter.formatBytes(p.fileSizes.valhallaBytes, language)}, PlacesDB=${BilingualFormatter.formatBytes(p.fileSizes.placesDbBytes, language)}")
         }
     }
+    appendLine("${strings.diagLastUpdateCheckTime}: ${formatCheckTimestamp(lastMapUpdateCheckEpochMs, strings, language)}")
+    appendLine("${strings.diagLastUpdateCheckResult}: ${lastMapUpdateCheckResult.ifBlank { strings.diagNeverChecked }}")
     appendLine()
     appendLine("[${strings.diagSectionGpsCompass}]")
     if (gpsFix == null) {
@@ -644,6 +696,14 @@ fun formatDiagnosticsReport(
     appendLine("${strings.diagPreciseLocation}: ${if (hasFineLocationPermission) strings.diagGranted else strings.diagNotGranted}")
     appendLine("${strings.diagCompassHeading}: ${compassHeadingDegrees?.let { "${it.toInt()}°" } ?: "—"}")
     appendLine("${strings.diagCompassAccuracy}: ${sensorAccuracyLabel(compassSensorAccuracy, strings)}")
+    appendLine()
+    appendLine("[${strings.diagSectionParkedCar}]")
+    if (parkedCarTimeEpochMs == null || parkedCarAccuracyMeters == null) {
+        appendLine(strings.diagNoParkedCar)
+    } else {
+        appendLine("${strings.diagParkedTime}: ${formatCheckTimestamp(parkedCarTimeEpochMs, strings, language)}")
+        appendLine("${strings.diagParkedAccuracy}: ${String.format(Locale.US, "%.1f m", parkedCarAccuracyMeters)}")
+    }
     appendLine()
     appendLine("[${strings.diagSectionLastRoute}]")
     if (lastRoute == null) {

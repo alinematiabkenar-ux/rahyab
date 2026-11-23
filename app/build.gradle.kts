@@ -136,6 +136,7 @@ dependencies {
   implementation(libs.valhalla.models)
   implementation(libs.valhalla.models.config)
   implementation(libs.androidx.sqlite.bundled)
+  implementation(libs.androidx.work.runtime.ktx)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

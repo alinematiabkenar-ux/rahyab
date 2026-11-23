@@ -96,6 +96,19 @@ class StatePackManager(
     private val _indexingStatusMessage = MutableStateFlow<String?>(null)
     val indexingStatusMessage: StateFlow<String?> = _indexingStatusMessage.asStateFlow()
 
+    @Volatile
+    var isNavigationActiveProvider: () -> Boolean = { false }
+
+    @Volatile
+    var onUpdatePostponed: ((String) -> Unit)? = null
+
+    suspend fun applyPendingSwapsIfIdle(): Int = withContext(Dispatchers.IO) {
+        if (isNavigationActiveProvider()) return@withContext 0
+        val count = MapUpdateSmartPlanner.applyPendingSwaps(this@StatePackManager, installedPackDao)
+        if (count > 0) notifyPacksChanged()
+        count
+    }
+
     val packsRootDir: File
         get() = File(context.filesDir, "packs").apply { mkdirs() }
 
@@ -242,7 +255,9 @@ class StatePackManager(
                 pmValid && vhValid && dbValid -> {
                     // NEVER create indexes during startup audit — large places DBs (490+ MB) must open instantly
                     val manifestEntry = _manifest.value?.states?.find { it.stateCode.equals(code, true) }
-                    if (manifestEntry != null && record != null && record.installedVersion.isNotEmpty() && record.installedVersion != manifestEntry.version) {
+                    if (manifestEntry != null && record != null &&
+                        MapUpdateVersionHelper.isNewerVersion(record.installedVersion, manifestEntry.version)
+                    ) {
                         PackInstallStatus.UPDATE_AVAILABLE
                     } else {
                         PackInstallStatus.INSTALLED
@@ -270,6 +285,9 @@ class StatePackManager(
                         hasValhalla = vhValid,
                         hasPlacesDb = dbValid,
                         placesSource = record?.placesSource ?: "overture+osm",
+                        pmtilesSha256 = record?.pmtilesSha256.orEmpty(),
+                        valhallaSha256 = record?.valhallaSha256.orEmpty(),
+                        placesSha256 = record?.placesSha256.orEmpty(),
                         errorMessage = if (computedStatus == PackInstallStatus.CORRUPTED) {
                             buildMissingFilesNote(pmValid, vhValid, dbValid)
                         } else null,
@@ -312,7 +330,7 @@ class StatePackManager(
                     val remote = parsed.states.find { it.stateCode.equals(pack.stateCode, true) }
                     if (remote != null &&
                         pack.status == PackInstallStatus.INSTALLED.name &&
-                        pack.installedVersion != remote.version
+                        MapUpdateVersionHelper.isNewerVersion(pack.installedVersion, remote.version)
                     ) {
                         installedPackDao.upsert(
                             pack.copy(
@@ -403,29 +421,53 @@ class StatePackManager(
 
         for (attempt in 1..maxAttempts) {
             try {
-                installedPackDao.upsert(
-                    InstalledPackEntity(
-                        stateCode = code,
-                        status = PackInstallStatus.DOWNLOADING.name,
-                        installedVersion = installedPackDao.getByState(code)?.installedVersion ?: "",
-                        buildVersion = installedPackDao.getByState(code)?.buildVersion ?: "",
-                        availableVersion = entry.version,
-                        parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
-                        totalBytes = totalSize,
-                        downloadedBytes = computePartialBytes(code),
-                        placesSource = entry.placesSource,
-                        errorMessage = null
-                    )
+                val existingBefore = installedPackDao.getByState(code)
+                val localHashes = MapUpdateSmartPlanner.resolveLocalHashesForDownload(this, code, existingBefore)
+                val plan = MapUpdateSmartPlanner.planSmartUpdate(
+                    localHashes = localHashes,
+                    remote = entry,
+                    hasLocalPmtiles = isValidPmtilesFile(pmtilesFile(code)),
+                    hasLocalValhalla = valhallaTarFile(code).exists() && valhallaTarFile(code).length() > 512L,
+                    hasLocalPlaces = isValidPlacesDb(placesDbFile(code))
                 )
+                val effectiveDownloadBytes = plan.downloadBytes.takeIf { it > 0L } ?: totalSize
+                val deferSwap = isNavigationActiveProvider() &&
+                    existingBefore?.hasPmtiles == true &&
+                    existingBefore.hasValhalla &&
+                    existingBefore.hasPlacesDb
+
+                if (!deferSwap) {
+                    installedPackDao.upsert(
+                        InstalledPackEntity(
+                            stateCode = code,
+                            status = PackInstallStatus.DOWNLOADING.name,
+                            installedVersion = existingBefore?.installedVersion ?: "",
+                            buildVersion = existingBefore?.buildVersion ?: "",
+                            availableVersion = entry.version,
+                            parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
+                            totalBytes = effectiveDownloadBytes,
+                            downloadedBytes = 0L,
+                            hasPmtiles = existingBefore?.hasPmtiles ?: false,
+                            hasValhalla = existingBefore?.hasValhalla ?: false,
+                            hasPlacesDb = existingBefore?.hasPlacesDb ?: false,
+                            placesSource = entry.placesSource,
+                            pmtilesSha256 = existingBefore?.pmtilesSha256.orEmpty(),
+                            valhallaSha256 = existingBefore?.valhallaSha256.orEmpty(),
+                            placesSha256 = existingBefore?.placesSha256.orEmpty(),
+                            errorMessage = null
+                        )
+                    )
+                }
 
                 val effectiveBase = _manifest.value?.baseUrl?.takeIf { u -> u.isNotBlank() }
                     ?: baseUrl.trim().trimEnd('/')
 
-                val filesToFetch = listOf(
-                    entry.pmtiles to pmtilesFile(code),
-                    entry.valhalla to valhallaTarFile(code),
-                    entry.places to placesDbFile(code)
-                )
+                val pendingDir = if (deferSwap) MapUpdateSmartPlanner.pendingStateDir(packsRootDir, code) else null
+                val filesToFetch = buildList {
+                    if (plan.downloadPmtiles) add(entry.pmtiles to (if (deferSwap) File(pendingDir, "${code}.pmtiles") else pmtilesFile(code)))
+                    if (plan.downloadValhalla) add(entry.valhalla to (if (deferSwap) File(pendingDir, "${code}_valhalla.tar") else valhallaTarFile(code)))
+                    if (plan.downloadPlaces) add(entry.places to (if (deferSwap) File(pendingDir, "${code}_places.db") else placesDbFile(code)))
+                }
 
                 var completedPriorBytes = 0L
                 for ((fileEntry, targetFile) in filesToFetch) {
@@ -439,25 +481,29 @@ class StatePackManager(
                         effectiveBase = effectiveBase,
                         targetFile = targetFile,
                         onProgress = { currentFileBytes ->
-                            scope.launch {
-                                val current = installedPackDao.getByState(code)
-                                if (current != null && current.status == PackInstallStatus.DOWNLOADING.name) {
-                                    installedPackDao.upsert(
-                                        current.copy(
-                                            downloadedBytes = (completedPriorBytes + currentFileBytes).coerceAtMost(totalSize),
-                                            updatedAt = System.currentTimeMillis()
+                            if (!deferSwap) {
+                                scope.launch {
+                                    val current = installedPackDao.getByState(code)
+                                    if (current != null && current.status == PackInstallStatus.DOWNLOADING.name) {
+                                        installedPackDao.upsert(
+                                            current.copy(
+                                                downloadedBytes = (completedPriorBytes + currentFileBytes).coerceAtMost(effectiveDownloadBytes),
+                                                updatedAt = System.currentTimeMillis()
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
                         },
                         onVerifying = {
-                            scope.launch {
-                                val current = installedPackDao.getByState(code)
-                                if (current != null) {
-                                    installedPackDao.upsert(
-                                        current.copy(status = PackInstallStatus.VERIFYING.name)
-                                    )
+                            if (!deferSwap) {
+                                scope.launch {
+                                    val current = installedPackDao.getByState(code)
+                                    if (current != null) {
+                                        installedPackDao.upsert(
+                                            current.copy(status = PackInstallStatus.VERIFYING.name)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -465,7 +511,33 @@ class StatePackManager(
                     completedPriorBytes += targetFile.length()
                 }
 
-                // Validate integrity of downloaded pack files
+                val newPmSha = entry.pmtiles.sha256.ifBlank { localHashes.pmtilesSha256 }
+                val newVhSha = entry.valhalla.sha256.ifBlank { localHashes.valhallaSha256 }
+                val newDbSha = entry.places.sha256.ifBlank { localHashes.placesSha256 }
+
+                if (deferSwap && pendingDir != null) {
+                    MapUpdateSmartPlanner.writePendingMeta(
+                        pendingDir,
+                        PendingSwapMeta(
+                            stateCode = code,
+                            version = entry.version,
+                            buildVersion = entry.effectiveBuildVersion,
+                            placesSource = entry.placesSource,
+                            parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
+                            pmtilesSha256 = newPmSha,
+                            valhallaSha256 = newVhSha,
+                            placesSha256 = newDbSha,
+                            hasStagedPmtiles = plan.downloadPmtiles,
+                            hasStagedValhalla = plan.downloadValhalla,
+                            hasStagedPlaces = plan.downloadPlaces
+                        )
+                    )
+                    notifyPacksChanged()
+                    onUpdatePostponed?.invoke(code)
+                    return
+                }
+
+                // Validate integrity of live pack files
                 val pmValid = isValidPmtilesFile(pmtilesFile(code))
                 val dbValid = isValidPlacesDb(placesDbFile(code))
                 val vhValid = valhallaTarFile(code).exists() && valhallaTarFile(code).length() > 512L
@@ -473,8 +545,10 @@ class StatePackManager(
                     throw IllegalStateException(buildMissingFilesNote(pmValid, vhValid, dbValid))
                 }
 
-                // Extract Valhalla tar into unified tile directory for seamless cross-state routing
-                extractTarIntoDirectory(valhallaTarFile(code), unifiedValhallaTileDir)
+                // Re-extract Valhalla tar only when Valhalla actually changed or tiles are missing
+                if (plan.downloadValhalla || !hasAnyValidValhallaTiles()) {
+                    extractTarIntoDirectory(valhallaTarFile(code), unifiedValhallaTileDir)
+                }
 
                 val diskBytes = getStateDiskBytes(code)
                 installedPackDao.upsert(
@@ -491,13 +565,17 @@ class StatePackManager(
                         hasValhalla = true,
                         hasPlacesDb = true,
                         placesSource = entry.placesSource,
+                        pmtilesSha256 = newPmSha.ifBlank { sha256Of(pmtilesFile(code)) },
+                        valhallaSha256 = newVhSha.ifBlank { sha256Of(valhallaTarFile(code)) },
+                        placesSha256 = newDbSha.ifBlank { sha256Of(placesDbFile(code)) },
                         errorMessage = null,
                         updatedAt = System.currentTimeMillis()
                     )
                 )
                 notifyPacksChanged()
-                // Build optional spatial index once in background after install/update without blocking UI or DB
-                scheduleBackgroundPlacesIndexing(code, placesDbFile(code))
+                if (plan.downloadPlaces) {
+                    scheduleBackgroundPlacesIndexing(code, placesDbFile(code))
+                }
                 return
             } catch (ce: CancellationException) {
                 val existing = installedPackDao.getByState(code)

@@ -64,6 +64,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val savedPlaceDao = app.database.savedPlaceDao()
     internal val userReportDao = app.database.userReportDao()
     internal val installedPackDao = app.database.installedPackDao()
+    internal val parkedCarDao = app.database.parkedCarDao()
+    internal val parkedCarManager = com.example.navigation.ParkedCarManager()
+    internal val carBluetoothReceiver = com.example.navigation.CarBluetoothReceiver(
+        selectedAddressProvider = { settings.value.carBluetoothDeviceAddress },
+        onSelectedCarDisconnected = { onCarBluetoothDisconnected() }
+    )
     internal val navController = NavigationSessionController()
     internal val cameraFollowController = CameraFollowController()
 
@@ -96,6 +102,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     val savedPlaces: StateFlow<List<SavedPlaceEntity>> = savedPlaceDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val parkedCar: StateFlow<com.example.data.local.ParkedCarEntity?> = parkedCarDao.observeLatest()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     internal val _nowTick = MutableStateFlow(System.currentTimeMillis())
     val activeUserReports: StateFlow<List<UserReportEntity>> = combine(
@@ -170,6 +179,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val externalLinkMatchChoices: StateFlow<List<PlaceSearchResult>> = _externalLinkMatchChoices.asStateFlow()
     internal val _openDriveTabEvent = MutableStateFlow(0L)
     val openDriveTabEvent: StateFlow<Long> = _openDriveTabEvent.asStateFlow()
+    internal val _openMapsTabEvent = MutableStateFlow(0L)
+    val openMapsTabEvent: StateFlow<Long> = _openMapsTabEvent.asStateFlow()
+
+    fun requestOpenMapsTab() {
+        _openMapsTabEvent.value = System.currentTimeMillis()
+    }
 
     internal val _cachedWeatherAlerts = MutableStateFlow<List<WeatherAlertItem>>(emptyList())
     internal val _dismissedWeatherAlertIds = MutableStateFlow<Set<String>>(emptySet())
@@ -255,6 +270,17 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun repeatLastVoiceInstruction() = voiceManager.repeatLastInstruction(settings.value.language)
     fun stopNavigation() = stopNavigationImpl()
 
+    // --- PARKED CAR & WALK TO CAR (F4) ---
+    fun parkCarHereManually() = parkCarHereManuallyImpl()
+    fun updateParkedCarNote(note: String) = updateParkedCarNoteImpl(note)
+    fun clearParkedCar() = clearParkedCarImpl()
+    fun startWalkToCar() = startWalkToCarImpl()
+    fun onCarBluetoothDisconnected() = onCarBluetoothDisconnectedImpl()
+    fun setSkipParkingAtHome(enabled: Boolean) { viewModelScope.launch { prefs.setSkipParkingAtHome(enabled) } }
+    fun setCarBluetoothDevice(address: String, name: String) {
+        viewModelScope.launch { prefs.setCarBluetoothDevice(address, name) }
+    }
+
     // --- DRIVING REPORTS & BACKUP ---
     fun submitUserReport(type: ReportType) = submitUserReportImpl(type)
     fun confirmUserReport(reportId: Long) = confirmUserReportImpl(reportId)
@@ -331,6 +357,11 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun readLastErrorLogLines(maxLines: Int = 20): List<String> = CrashLogManager.readLastErrorLines(app, maxLines)
     fun showSnackbar(message: String) { _snackbarMessage.value = message }
     fun consumeSnackbar() { _snackbarMessage.value = null }
+
+    override fun onCleared() {
+        super.onCleared()
+        carBluetoothReceiver.unregister(app)
+    }
 
     companion object {
         const val EUGENE_OR_LAT = 44.0521
