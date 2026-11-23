@@ -87,7 +87,7 @@ class OfflinePlaceSearchEngine(
         limit: Int = 30
     ): List<PlaceSearchResult> {
         val parsedAddress = AddressNormalizer.parseAddressQuery(query)
-        val addressResults = if (parsedAddress.isAddressLike || parsedAddress.normalizedStreet.isNotBlank()) {
+        val addressResults = if (OfflineAddressSearchEngine.shouldRunAddressSearch(parsedAddress)) {
             addressSearchEngine.searchAcrossDatabases(
                 parsed = parsedAddress,
                 userLat = userLat,

@@ -27,7 +27,7 @@ object AddressNormalizer {
         "drive" to "dr", "dr" to "dr", "drv" to "dr",
         "boulevard" to "blvd", "blvd" to "blvd", "boul" to "blvd",
         "lane" to "ln", "ln" to "ln",
-        "court" to "ct", "ct" to "ct",
+        "court" to "ct", "crt" to "ct", "ct" to "ct",
         "place" to "pl", "pl" to "pl",
         "highway" to "hwy", "hwy" to "hwy",
         "parkway" to "pkwy", "pkwy" to "pkwy", "pky" to "pkwy",
@@ -86,26 +86,34 @@ object AddressNormalizer {
     }
 
     /**
-     * Normalizes US street suffixes and directional words (matching `address_utils.normalize_street`).
+     * Normalizes US street suffixes and directional words identically to Python
+     * `data-pipeline/address_utils.normalize_street`:
+     * - Persian/Arabic digits -> ASCII 0-9, lowercased
+     * - All non-word characters (and underscores) become spaces
+     * - Suffix words abbreviated at ANY position after the first token (`idx > 0`)
+     * - Directionals abbreviated at start, end, or immediately before a trailing suffix
      */
     fun normalizeStreet(street: String): String {
-        val cleaned = normalizeDigits(street)
-            .lowercase()
-            .replace(Regex("""[.,#/]+"""), " ")
-            .replace(Regex("""\s+"""), " ")
+        val raw = normalizeDigits(street).trim().lowercase()
+        if (raw.isEmpty()) return ""
+        val tokens = raw
+            .replace('_', ' ')
+            .replace(Regex("""[^\p{L}\p{N}]+"""), " ")
             .trim()
-        if (cleaned.isEmpty()) return ""
-        val tokens = cleaned.split(' ')
-        val out = ArrayList<String>(tokens.size)
+            .split(' ')
+            .filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return ""
+        val n = tokens.size
+        val out = ArrayList<String>(n)
         for ((idx, tok) in tokens.withIndex()) {
             val mapped = when {
-                directionalMap.containsKey(tok) && (idx == 0 || idx == tokens.lastIndex) ->
+                directionalMap.containsKey(tok) && (idx == 0 || idx == n - 1) ->
                     directionalMap.getValue(tok)
-                streetSuffixMap.containsKey(tok) && idx == tokens.lastIndex ->
+                streetSuffixMap.containsKey(tok) && idx > 0 ->
                     streetSuffixMap.getValue(tok)
-                streetSuffixMap.containsKey(tok) && idx == tokens.lastIndex - 1 &&
-                    directionalMap.containsKey(tokens.last()) ->
-                    streetSuffixMap.getValue(tok)
+                directionalMap.containsKey(tok) && idx > 0 && idx == n - 2 &&
+                    streetSuffixMap.containsKey(tokens.last()) ->
+                    directionalMap.getValue(tok)
                 else -> tok
             }
             out.add(mapped)

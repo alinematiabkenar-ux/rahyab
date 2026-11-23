@@ -56,6 +56,7 @@ internal fun RahYabViewModel.evaluateSpeedBumpForNavigationImpl(
 ) {
     val s = settings.value
     val navPos = state.snappedLocation ?: fallbackLoc ?: return
+    voiceManager.updateUserMotionForAlerts(navPos.lat, navPos.lon, state.snappedBearing)
     if (!state.isNavigating || state.hasArrived || !s.alertSpeedBumpEnabled) return
     refreshNearbySpeedBumpsImpl(navPos.lat, navPos.lon)
 
@@ -84,6 +85,7 @@ internal fun RahYabViewModel.evaluateSpeedBumpForFreeDriveImpl(fix: GpsFix) {
     refreshNearbySpeedBumpsImpl(fix.lat, fix.lon)
     if (!s.alertSpeedBumpEnabled) return
     val heading = if (fix.hasBearing && fix.speedMps > 1.3f) fix.bearing else _userHeadingDegrees.value
+    voiceManager.updateUserMotionForAlerts(fix.lat, fix.lon, heading)
     val (bannerAlert, speakAlert) = speedBumpEvaluator.evaluate(
         userLat = fix.lat,
         userLon = fix.lon,

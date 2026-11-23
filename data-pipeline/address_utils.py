@@ -62,6 +62,8 @@ STREET_SUFFIX_MAP: dict[str, str] = {
     "ter": "ter",
     "trail": "trl",
     "trl": "trl",
+    "way": "way",
+    "wy": "way",
 }
 
 ADDRESS_DEDUP_MAX_DISTANCE_M = 30.0
@@ -161,3 +163,50 @@ def deduplicate_addresses(
             grid.setdefault((norm_num, norm_st, clat, clon), []).append(idx)
 
     return kept, removed
+
+
+def populate_addresses_fts(conn, batch_size: int = 25_000) -> int:
+    """
+    Populate `addresses_fts` from `addresses` using separate read and write cursors
+    with `fetchmany(batch_size)` so Python sqlite3 never resets the read cursor mid-loop.
+    Asserts that the number of rows inserted into `addresses_fts` equals `COUNT(*) FROM addresses`.
+    """
+    read_cur = conn.cursor()
+    write_cur = conn.cursor()
+    read_cur.execute("SELECT id, number, street, city, postcode FROM addresses")
+
+    inserted = 0
+    while True:
+        rows = read_cur.fetchmany(batch_size)
+        if not rows:
+            break
+        batch = [
+            (
+                row_id,
+                normalize_house_number(num),
+                normalize_street(st),
+                (city_val or "").strip(),
+                (postcode_val or "").strip(),
+            )
+            for row_id, num, st, city_val, postcode_val in rows
+        ]
+        write_cur.executemany(
+            "INSERT INTO addresses_fts(rowid, number, street, city, postcode) VALUES (?, ?, ?, ?, ?)",
+            batch,
+        )
+        inserted += len(batch)
+
+    total_addresses = write_cur.execute("SELECT COUNT(*) FROM addresses").fetchone()[0]
+    read_cur.close()
+    write_cur.close()
+
+    print(
+        f"[sqlite] addresses_fts populated: inserted={inserted:,}, addresses_table={total_addresses:,}.",
+        flush=True,
+    )
+    if inserted != total_addresses:
+        raise AssertionError(
+            f"addresses_fts row count mismatch: inserted {inserted} != addresses table {total_addresses}"
+        )
+    return inserted
+

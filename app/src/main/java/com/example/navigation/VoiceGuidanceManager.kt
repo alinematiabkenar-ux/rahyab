@@ -96,6 +96,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private val speechGeneration = AtomicLong(0L)
     private val sequenceLock = Any()
     private val pendingSegments = ArrayDeque<SpeechSegment>()
+    private val pendingLowPriorityAlerts = PendingLowPriorityAlertQueue()
     @Volatile
     private var activeSequenceGeneration: Long = 0L
 
@@ -535,9 +536,14 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         return text
     }
 
+    fun updateUserMotionForAlerts(lat: Double, lon: Double, headingDegrees: Float) {
+        pendingLowPriorityAlerts.updateUserMotion(lat, lon, headingDegrees)
+    }
+
     /**
      * Speaks a lower-priority alert (such as a speed bump) WITHOUT interrupting an active
-     * turn or lane instruction: appends segments to the queue if TTS is currently speaking.
+     * turn/lane or standalone utterance. Keeps at most one pending alert and speaks it once
+     * the current utterance finishes, dropping it if >8s old or already behind the user.
      */
     fun speakQueuedAlert(
         alert: AheadAlert,
@@ -547,26 +553,20 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         val effectiveLanguage = resolveEffectiveLanguage(language)
         val text = formatAlertAnnouncement(alert, effectiveLanguage, unit)
         if (!voiceEnabled || !isInitialized || text.isBlank()) return text
-        val segments = if (effectiveLanguage == AppLanguage.PERSIAN) {
-            splitPersianAndEnglishSegments(text)
-        } else {
-            listOf(SpeechSegment(text = text, isEnglish = true))
-        }
-        if (segments.isEmpty()) return text
         val isBusy = runCatching {
             (tts?.isSpeaking == true) ||
                 (activeEnglishEngine()?.isSpeaking == true) ||
                 (activePersianEngine()?.isSpeaking == true)
         }.getOrDefault(false)
-        val queuedBehindActive = synchronized(sequenceLock) {
-            if (isBusy || pendingSegments.isNotEmpty()) {
-                segments.forEach { pendingSegments.addLast(it) }
-                true
-            } else {
-                false
-            }
-        }
-        if (!queuedBehindActive) {
+        val hasPendingSegments = synchronized(sequenceLock) { pendingSegments.isNotEmpty() }
+        if (isBusy || hasPendingSegments) {
+            pendingLowPriorityAlerts.offer(
+                text = text,
+                effectiveLanguage = effectiveLanguage,
+                targetLat = alert.lat,
+                targetLon = alert.lon
+            )
+        } else {
             speakRaw(text, effectiveLanguage)
         }
         return text
@@ -672,9 +672,20 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             ?.substringBefore("_")
             ?.toLongOrNull()
         if (gen == null || gen != activeSequenceGeneration) {
+            val isStillPending = synchronized(sequenceLock) { pendingSegments.isNotEmpty() }
+            if (!isStillPending) {
+                speakPendingLowPriorityAlertIfReady()
+            }
             return
         }
         dispatchNextSegment(gen)
+    }
+
+    private fun speakPendingLowPriorityAlertIfReady(): Boolean {
+        val nextAlert = pendingLowPriorityAlerts.pollIfStillValid() ?: return false
+        if (!voiceEnabled || !isInitialized) return false
+        speakRaw(nextAlert.text, nextAlert.effectiveLanguage)
+        return true
     }
 
     private fun dispatchNextSegment(gen: Long) {
@@ -684,7 +695,9 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             else pendingSegments.removeFirst()
         }
         if (next == null) {
-            abandonDuckingFocus()
+            if (!speakPendingLowPriorityAlertIfReady()) {
+                abandonDuckingFocus()
+            }
             return
         }
 

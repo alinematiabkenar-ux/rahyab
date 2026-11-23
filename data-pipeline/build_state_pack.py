@@ -24,6 +24,7 @@ Automatic safeguards for free GitHub Releases:
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import datetime
 import hashlib
 import json
@@ -36,6 +37,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.request
 from pathlib import Path
 
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
@@ -47,6 +49,7 @@ from address_utils import (
     deduplicate_addresses,
     normalize_house_number,
     normalize_street,
+    populate_addresses_fts,
 )
 from states import ALL_PACK_CATALOG, US_STATES, resolve_pack_targets
 
@@ -78,9 +81,45 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+PROTOMAPS_BUILDS_METADATA_URL = "https://build-metadata.protomaps.dev/builds.json"
+
+
+class CommandFailedError(RuntimeError):
+    def __init__(self, cmd: list[str], returncode: int, tail_lines: list[str]):
+        self.cmd = cmd
+        self.returncode = returncode
+        self.tail_lines = tail_lines
+        super().__init__(f"Command exited with code {returncode}: {' '.join(cmd)}")
+
+
 def run_cmd(cmd: list[str], cwd: Path | None = None) -> None:
     print(f"[cmd] {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
+    tail: deque[str] = deque(maxlen=30)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        tail.append(line.rstrip("\r\n"))
+    returncode = proc.wait()
+    if returncode != 0:
+        tail_list = list(tail)
+        print(
+            f"[cmd-error] Command failed (exit {returncode}): {' '.join(cmd)}",
+            flush=True,
+        )
+        if tail_list:
+            print("[cmd-error] Last 30 lines of output:", flush=True)
+            for tl in tail_list:
+                print(f"  | {tl}", flush=True)
+        raise CommandFailedError(cmd, returncode, tail_list)
 
 
 def expand_bbox(bbox: tuple[float, float, float, float], pad_lon: float, pad_lat: float) -> tuple[float, float, float, float]:
@@ -160,52 +199,274 @@ def resolve_geofabrik_urls(slug: str) -> list[str]:
     return urls
 
 
-def download_geofabrik_pbf(slug: str, cache_dir: Path) -> Path:
+def generate_geofabrik_dated_urls(
+    candidate_urls: list[str],
+    today: datetime.date | None = None,
+) -> list[str]:
+    """
+    Generate dated Geofabrik PBF fallback URLs in the same folder as each `-latest.osm.pbf`
+    candidate: each of the last 10 days (newest first) plus the 1st of the current and previous month.
+    """
+    ref_day = today or datetime.date.today()
+    dates: list[datetime.date] = []
+    for offset in range(10):
+        d = ref_day - datetime.timedelta(days=offset)
+        if d not in dates:
+            dates.append(d)
+    first_of_current = ref_day.replace(day=1)
+    first_of_prev = (first_of_current - datetime.timedelta(days=1)).replace(day=1)
+    for special in (first_of_current, first_of_prev):
+        if special not in dates:
+            dates.append(special)
+
+    dated_urls: list[str] = []
+    seen: set[str] = set()
+    suffix = "-latest.osm.pbf"
+    for url in candidate_urls:
+        if not url.endswith(suffix) or "/" not in url:
+            continue
+        folder, filename = url.rsplit("/", 1)
+        base_name = filename[: -len(suffix)]
+        if not base_name:
+            continue
+        for d in dates:
+            candidate = f"{folder}/{base_name}-{d.strftime('%y%m%d')}.osm.pbf"
+            if candidate not in seen:
+                seen.add(candidate)
+                dated_urls.append(candidate)
+    return dated_urls
+
+
+def verify_pbf_with_osmium(pbf_path: Path) -> tuple[bool, str]:
+    """Verify PBF integrity with `osmium fileinfo -e` and extract its header timestamp."""
+    osmium_bin = shutil.which("osmium")
+    if not osmium_bin:
+        return True, "unknown (osmium not installed)"
+    res = subprocess.run(
+        [osmium_bin, "fileinfo", "-e", str(pbf_path)],
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    if res.returncode != 0:
+        err_tail = "\n".join((res.stderr or res.stdout or "").splitlines()[-10:])
+        print(f"[warn] osmium fileinfo failed for {pbf_path.name}: {err_tail}", flush=True)
+        return False, ""
+
+    timestamp = "unknown"
+    combined = (res.stdout or "") + "\n" + (res.stderr or "")
+    for pattern in (
+        r"osmosis_replication_timestamp=([^\s]+)",
+        r"Timestamp:\s*([^\s]+)",
+        r"Last Timestamp:\s*([^\s]+)",
+    ):
+        m = re.search(pattern, combined)
+        if m:
+            timestamp = m.group(1).strip()
+            break
+    return True, timestamp
+
+
+def _download_pbf_candidate(url: str, tmp_path: Path, head_first: bool = False) -> bool:
+    """
+    Attempt to download a single PBF candidate URL to `tmp_path`.
+    - Does NOT retry on HTTP errors (404, 403, 5xx).
+    - Retries up to 3 times only on network errors and timeouts.
+    - When `head_first=True`, performs a HEAD check to skip missing dated files quickly.
+    """
     import requests
 
+    if head_first:
+        try:
+            hr = requests.head(url, allow_redirects=True, timeout=20)
+            if hr.status_code != 200:
+                return False
+        except requests.RequestException:
+            return False
+
+    for attempt in range(1, 4):
+        try:
+            print(f"[download] Fetching OSM PBF ({attempt}/3): {url}", flush=True)
+            with requests.get(url, stream=True, timeout=120) as r:
+                r.raise_for_status()
+                with tmp_path.open("wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+            if tmp_path.exists() and tmp_path.stat().st_size > 100_000:
+                return True
+            tmp_path.unlink(missing_ok=True)
+            return False
+        except requests.HTTPError as exc:
+            tmp_path.unlink(missing_ok=True)
+            status = exc.response.status_code if exc.response is not None else "HTTP"
+            print(f"[warn] HTTP {status} for {url} — skipping without retry.", flush=True)
+            return False
+        except (requests.Timeout, requests.ConnectionError, requests.ChunkedEncodingError, OSError) as exc:
+            tmp_path.unlink(missing_ok=True)
+            print(f"[warn] Network/timeout error ({attempt}/3) for {url}: {exc}", flush=True)
+            if attempt < 3:
+                time.sleep(2 * attempt)
+        except Exception as exc:
+            tmp_path.unlink(missing_ok=True)
+            print(f"[warn] Unexpected download error for {url}: {exc}", flush=True)
+            return False
+    return False
+
+
+def download_geofabrik_pbf(
+    slug: str,
+    cache_dir: Path,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> Path:
     dest = cache_dir / f"{slug}-latest.osm.pbf"
     if dest.exists() and dest.stat().st_size > 100_000:
-        print(f"[cache] Reusing {dest}", flush=True)
-        return dest
+        valid, ts = verify_pbf_with_osmium(dest)
+        if valid:
+            print(f"[cache] Reusing verified PBF {dest} (header timestamp: {ts})", flush=True)
+            return dest
+        print(f"[warn] Cached PBF {dest} failed verification; removing and re-downloading.", flush=True)
+        dest.unlink(missing_ok=True)
 
-    candidate_urls = resolve_geofabrik_urls(slug)
+    latest_urls = resolve_geofabrik_urls(slug)
+    dated_urls = generate_geofabrik_dated_urls(latest_urls)
     tmp = dest.with_suffix(".pbf.part")
+    tried_urls: list[str] = []
 
-    for url in candidate_urls:
-        for attempt in range(1, 4):
-            try:
-                print(f"[download] Fetching Geofabrik extract ({attempt}/3): {url}", flush=True)
-                with requests.get(url, stream=True, timeout=120) as r:
-                    r.raise_for_status()
-                    with tmp.open("wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024 * 1024):
-                            if chunk:
-                                f.write(chunk)
+    # 1) Geofabrik latest URLs, then 2) Geofabrik dated fallback URLs (HEAD-checked first)
+    for url, head_first in [(u, False) for u in latest_urls] + [(u, True) for u in dated_urls]:
+        tried_urls.append(url)
+        if _download_pbf_candidate(url, tmp, head_first=head_first):
+            valid, ts = verify_pbf_with_osmium(tmp)
+            if valid:
                 tmp.rename(dest)
+                print(f"[download] PBF ready from {url} (header timestamp: {ts})", flush=True)
                 return dest
-            except Exception as exc:
-                tmp.unlink(missing_ok=True)
-                print(f"[warn] Download failed ({attempt}/3) for {url}: {exc}", flush=True)
-                if attempt < 3:
-                    time.sleep(2 * attempt)
+            print(f"[warn] Downloaded PBF from {url} is corrupt; deleting and trying next candidate.", flush=True)
+            tmp.unlink(missing_ok=True)
 
-    tried_str = ", ".join(candidate_urls)
-    raise SystemExit(
-        f"RAHYAB ERROR: Failed to download Geofabrik OSM extract for '{slug}' after 3 attempts per URL. URLs tried: {tried_str}"
+    # 3) Fallback to download.openstreetmap.fr
+    is_ca_sub = slug in ("norcal", "socal")
+    osm_fr_slug = "california" if is_ca_sub else slug
+    osm_fr_url = f"https://download.openstreetmap.fr/extracts/north-america/us/{osm_fr_slug}-latest.osm.pbf"
+    tried_urls.append(osm_fr_url)
+    if is_ca_sub:
+        print(
+            f"[warn] Geofabrik failed for '{slug}'; falling back to openstreetmap.fr California extract "
+            f"and clipping to pack bbox.",
+            flush=True,
+        )
+    if _download_pbf_candidate(osm_fr_url, tmp, head_first=False):
+        valid, ts = verify_pbf_with_osmium(tmp)
+        if valid:
+            if is_ca_sub and bbox is not None:
+                osmium_bin = shutil.which("osmium")
+                if not osmium_bin:
+                    tmp.unlink(missing_ok=True)
+                    raise RuntimeError("osmium CLI required to clip openstreetmap.fr California extract")
+                buffered = expand_bbox(bbox, BORDER_BUFFER_DEG_LON, BORDER_BUFFER_DEG_LAT)
+                bbox_str = f"{buffered[0]:.4f},{buffered[1]:.4f},{buffered[2]:.4f},{buffered[3]:.4f}"
+                clipped_tmp = dest.with_suffix(".clipped.pbf")
+                run_cmd([
+                    osmium_bin, "extract",
+                    "-b", bbox_str,
+                    "--strategy=smart",
+                    "-O", "-o", str(clipped_tmp),
+                    str(tmp),
+                ])
+                tmp.unlink(missing_ok=True)
+                clip_ok, clip_ts = verify_pbf_with_osmium(clipped_tmp)
+                if clip_ok:
+                    clipped_tmp.rename(dest)
+                    print(
+                        f"[download] PBF ready from {osm_fr_url} (clipped for {slug}, header timestamp: {clip_ts})",
+                        flush=True,
+                    )
+                    return dest
+                clipped_tmp.unlink(missing_ok=True)
+            else:
+                tmp.rename(dest)
+                print(f"[download] PBF ready from {osm_fr_url} (header timestamp: {ts})", flush=True)
+                return dest
+        else:
+            print(f"[warn] Downloaded PBF from {osm_fr_url} is corrupt; deleting.", flush=True)
+            tmp.unlink(missing_ok=True)
+
+    raise RuntimeError(
+        f"Failed to download valid OSM PBF for '{slug}' after trying {len(tried_urls)} URL(s); "
+        f"latest tried: {', '.join(latest_urls[:3])}, osm.fr: {osm_fr_url}"
     )
+
+
+def _fetch_previous_protomaps_urls(failed_url: str, limit: int = 3) -> list[str]:
+    """Fetch previous Protomaps daily build URLs (newest first) from builds.json."""
+    failed_key = failed_url.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        req = urllib.request.Request(
+            PROTOMAPS_BUILDS_METADATA_URL,
+            headers={"User-Agent": "RahYab-Pipeline/21"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        keys: list[str] = []
+        if isinstance(payload, list):
+            for entry in payload:
+                key = entry.get("key") if isinstance(entry, dict) else None
+                if isinstance(key, str) and key.endswith(".pmtiles"):
+                    keys.append(key.strip())
+        keys = sorted(set(keys), reverse=True)
+        out = [f"https://build.protomaps.com/{k}" for k in keys if k != failed_key]
+        return out[:limit]
+    except Exception as exc:
+        print(f"[warn] Could not read {PROTOMAPS_BUILDS_METADATA_URL}: {exc}", flush=True)
+        return []
 
 
 def extract_pmtiles(pack_code: str, bbox: tuple[float, float, float, float], protomaps_url: str, out_file: Path) -> None:
     buffered = expand_bbox(bbox, 0.15, 0.12)
     bbox_str = f"{buffered[0]:.4f},{buffered[1]:.4f},{buffered[2]:.4f},{buffered[3]:.4f}"
-    print(f"[pmtiles] Extracting {pack_code.upper()} ({bbox_str}) from {protomaps_url}", flush=True)
-    run_cmd([
-        "pmtiles", "extract",
-        protomaps_url,
-        str(out_file),
-        f"--bbox={bbox_str}",
-        "--maxzoom=15",
-    ])
+
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            print(f"[pmtiles] Extracting {pack_code.upper()} ({bbox_str}) ({attempt}/3) from {protomaps_url}", flush=True)
+            out_file.unlink(missing_ok=True)
+            run_cmd([
+                "pmtiles", "extract",
+                protomaps_url,
+                str(out_file),
+                f"--bbox={bbox_str}",
+                "--maxzoom=15",
+            ])
+            print(f"[pmtiles] Worked URL for {pack_code.upper()}: {protomaps_url}", flush=True)
+            return
+        except Exception as exc:
+            last_exc = exc
+            out_file.unlink(missing_ok=True)
+            print(f"[warn] pmtiles extract attempt {attempt}/3 failed for {protomaps_url}: {exc}", flush=True)
+            if attempt < 3:
+                time.sleep(3 * attempt)
+
+    fallback_urls = _fetch_previous_protomaps_urls(protomaps_url, limit=3)
+    for fb_url in fallback_urls:
+        try:
+            print(f"[pmtiles] Trying fallback Protomaps build for {pack_code.upper()}: {fb_url}", flush=True)
+            out_file.unlink(missing_ok=True)
+            run_cmd([
+                "pmtiles", "extract",
+                fb_url,
+                str(out_file),
+                f"--bbox={bbox_str}",
+                "--maxzoom=15",
+            ])
+            print(f"[pmtiles] Worked URL for {pack_code.upper()}: {fb_url}", flush=True)
+            return
+        except Exception as exc:
+            last_exc = exc
+            out_file.unlink(missing_ok=True)
+            print(f"[warn] Fallback pmtiles extract failed for {fb_url}: {exc}", flush=True)
+
+    raise last_exc or RuntimeError(f"pmtiles extract failed for {pack_code}")
 
 
 def prepare_buffered_routing_pbf(
@@ -1314,29 +1575,8 @@ def build_places_fts5_db(
         );
     """)
 
-    # Populate addresses_fts with normalized number & normalized street while addresses stores original text
-    addr_fts_batch: list[tuple] = []
-    for row_id, num, st, city_val, postcode_val in cur.execute(
-        "SELECT id, number, street, city, postcode FROM addresses"
-    ):
-        addr_fts_batch.append((
-            row_id,
-            normalize_house_number(num),
-            normalize_street(st),
-            (city_val or "").strip(),
-            (postcode_val or "").strip(),
-        ))
-        if len(addr_fts_batch) >= 25_000:
-            cur.executemany(
-                "INSERT INTO addresses_fts(rowid, number, street, city, postcode) VALUES (?, ?, ?, ?, ?)",
-                addr_fts_batch,
-            )
-            addr_fts_batch.clear()
-    if addr_fts_batch:
-        cur.executemany(
-            "INSERT INTO addresses_fts(rowid, number, street, city, postcode) VALUES (?, ?, ?, ?, ?)",
-            addr_fts_batch,
-        )
+    # Populate addresses_fts with separate read/write cursors + fetchmany(25_000) & count assertion
+    populate_addresses_fts(conn, batch_size=25_000)
     cur.executescript("""
         INSERT INTO addresses_fts(addresses_fts) VALUES('optimize');
         ANALYZE;
@@ -1611,6 +1851,21 @@ def resolve_published_state_codes(manifest_url: str = PUBLISHED_MANIFEST_URL) ->
     return ["or"]
 
 
+def _run_pack_stage(stage_name: str, fn):
+    try:
+        return fn()
+    except Exception as exc:
+        print(
+            f"[FATAL] stage {stage_name} failed: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        if isinstance(exc, CommandFailedError) and exc.tail_lines:
+            print(f"[FATAL] last {len(exc.tail_lines)} output lines from stage {stage_name}:", flush=True)
+            for tl in exc.tail_lines:
+                print(f"  | {tl}", flush=True)
+        sys.exit(1)
+
+
 def build_pack(
     pack_code: str,
     output_dir: Path,
@@ -1630,22 +1885,37 @@ def build_pack(
 
     meta = ALL_PACK_CATALOG[code]
     print(f"\n========== Building RahYab Pack: {meta['name']} ({code.upper()}) ==========", flush=True)
-    primary_pbf = download_geofabrik_pbf(meta["slug"], cache_dir)
+    primary_pbf = _run_pack_stage(
+        "download",
+        lambda: download_geofabrik_pbf(meta["slug"], cache_dir, bbox=meta["bbox"]),
+    )
 
     if not skip_pmtiles:
-        extract_pmtiles(code, meta["bbox"], protomaps_url, output_dir / f"{code}.pmtiles")
+        _run_pack_stage(
+            "pmtiles",
+            lambda: extract_pmtiles(code, meta["bbox"], protomaps_url, output_dir / f"{code}.pmtiles"),
+        )
 
     if not skip_valhalla:
-        buffered_pbf = prepare_buffered_routing_pbf(code, meta, primary_pbf, cache_dir)
-        build_valhalla_tiles(code, buffered_pbf, cache_dir, output_dir / f"{code}_valhalla.tar")
+        buffered_pbf = _run_pack_stage(
+            "buffered_pbf",
+            lambda: prepare_buffered_routing_pbf(code, meta, primary_pbf, cache_dir),
+        )
+        _run_pack_stage(
+            "valhalla",
+            lambda: build_valhalla_tiles(code, buffered_pbf, cache_dir, output_dir / f"{code}_valhalla.tar"),
+        )
         if buffered_pbf != primary_pbf:
             buffered_pbf.unlink(missing_ok=True)
 
     places_source = "overture+osm"
     address_count = 0
     if not skip_places:
-        places_source, address_count = build_places_fts5_db(
-            code, meta["abbr"], meta["bbox"], primary_pbf, overture_release, output_dir / f"{code}_places.db"
+        places_source, address_count = _run_pack_stage(
+            "places",
+            lambda: build_places_fts5_db(
+                code, meta["abbr"], meta["bbox"], primary_pbf, overture_release, output_dir / f"{code}_places.db"
+            ),
         )
 
     return write_pack_manifest_entry(
