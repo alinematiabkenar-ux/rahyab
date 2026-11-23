@@ -281,7 +281,7 @@ fun ParkedCarCard(
                         showNoteDialog = false
                     }
                 ) {
-                    Text(strings.saveButton)
+                    Text(strings.saveNote)
                 }
             },
             dismissButton = {

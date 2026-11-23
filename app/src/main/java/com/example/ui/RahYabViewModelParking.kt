@@ -120,15 +120,28 @@ private fun RahYabViewModel.persistParkedCandidateImpl(
 internal fun RahYabViewModel.startWalkToCarImpl() {
     val spot = parkedCar.value ?: return
     val str = stringsFor(settings.value.language)
+    val ref = getEffectiveReferenceLocation()
+    val dist = com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
+        ref.lat,
+        ref.lon,
+        spot.lat,
+        spot.lon
+    )
     selectPlace(
         com.example.data.search.PlaceSearchResult(
-            id = -9901L,
+            id = "parked_car",
             name = str.parkedCarLabel,
+            brand = "",
             category = "parking",
             address = spot.note,
+            city = "",
+            stateCode = currentLocationStateCode.value.orEmpty(),
+            postcode = "",
             lat = spot.lat,
             lon = spot.lon,
-            stateCode = currentLocationStateCode.value.orEmpty()
+            distanceMeters = dist,
+            relevanceScore = 1.0,
+            source = "parked_car"
         )
     )
 }
