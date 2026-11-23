@@ -31,6 +31,7 @@ import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapLibreMapOptions
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import kotlin.math.ln
@@ -143,7 +144,7 @@ class CarMapSurfaceRenderer(
 
             val pres = Presentation(carContext, vd.display)
             val root = FrameLayout(carContext)
-            val mv = MapView(carContext).apply {
+            val mv = MapView(pres.context, MapLibreMapOptions.createFromAttributes(pres.context).textureMode(true)).apply {
                 onCreate(null)
                 onStart()
                 onResume()
