@@ -4,7 +4,7 @@
 - [x] W1 Verify AndroidAutoUnitTest.kt, run unit tests, mark AA9/FINAL.2/FINAL.3 DONE in AUTO_STATUS.md & FEATURES_V19_STATUS.md — PASSED
 
 ## Phase R — Refactor (all resulting files < 400 lines, no behavior change)
-- [ ] R1 Split `navigation/VoiceGuidanceManager.kt`
+- [x] R1 Split `navigation/VoiceGuidanceManager.kt` (`VoiceTtsEngineSelector.kt`, `VoiceSpeechQueue.kt`, `VoicePhraseBuilder.kt`, `VoicePersianPhraseBuilder.kt`)
 - [ ] R2 Split `map/MapStyleBuilder.kt`
 - [ ] R3 Split `data/packs/StatePackManager.kt`
 - [ ] R4 Split `navigation/ValhallaResponseParser.kt`

@@ -48,7 +48,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private var lastCameraChimeMs: Long = 0L
 
     private lateinit var speechQueue: VoiceSpeechQueue
-    private val engineSelector = VoiceTtsEngineSelector(
+    private val engineSelector: VoiceTtsEngineSelector = VoiceTtsEngineSelector(
         appContext = appContext,
         onUtteranceStarted = { requestDuckingFocus() },
         onUtteranceFinished = { id -> speechQueue.handleUtteranceFinished(id) }
@@ -65,7 +65,9 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         engineSelector.createBaseEngine(this)
     }
 
-    private fun requestDuckingFocus() = engineSelector.requestDuckingFocus()
+    private fun requestDuckingFocus() {
+        engineSelector.requestDuckingFocus()
+    }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
