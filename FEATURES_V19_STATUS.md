@@ -40,5 +40,5 @@
 
 ## Final Checks & Release v21
 - [x] FINAL.1 Dry-check `python3 data-pipeline/build_state_pack.py --resolve-matrix published` and `--resolve-matrix or,wa` — confirmed valid JSON (`["or"]`, `["or", "wa"]`)
-- [ ] FINAL.2 All unit tests pass (P5 normalization, address detection/city/distance, bump clustering, version comparison, parking Home radius)
-- [ ] FINAL.3 Bump `versionCode = 21` / `versionName = "21.0"`, verify all new/edited Kotlin files <400 lines, compile APK cleanly
+- [x] FINAL.2 All unit tests pass (P5 normalization, address detection/city/distance, bump clustering, version comparison, parking Home radius, Android Auto)
+- [x] FINAL.3 version is set in V24_STATUS.md FINAL

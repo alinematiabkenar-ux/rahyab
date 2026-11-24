@@ -9,9 +9,9 @@ import com.example.i18n.EnglishStrings
 import com.example.i18n.PersianStrings
 import com.example.navigation.ActiveNavigationState
 import com.example.navigation.AheadAlert
+import com.example.navigation.HighwaySignpost
 import com.example.navigation.LaneDirection
 import com.example.navigation.LatLon
-import com.example.navigation.ManeuverSignpost
 import com.example.navigation.ManeuverType
 import com.example.navigation.OfflineRoute
 import com.example.navigation.RoadAlertKind
@@ -134,13 +134,17 @@ class AndroidAutoUnitTest {
             index = 1,
             type = ManeuverType.EXIT_RIGHT,
             instructionEn = "Take exit 194B onto I-105 W",
-            instructionFa = "خروجی ۱۹۴B به سمت I-105 W",
             streetNames = listOf("I-105 W"),
             lengthMeters = 650.0,
             timeSeconds = 30.0,
             beginShapeIndex = 0,
             endShapeIndex = 5,
-            signpost = ManeuverSignpost(exitNumbers = "194B", primaryRoadNumbers = "I-105 W")
+            lat = 44.058,
+            lon = -123.095,
+            signpost = HighwaySignpost(
+                exitNumbers = listOf("194B"),
+                exitBranches = listOf("I-105 W")
+            )
         )
         assertEquals("I-105 W", CarManeuverMapper.formatCarStepCue(exitManeuver, AppLanguage.ENGLISH))
         val faCue = CarManeuverMapper.formatCarStepCue(exitManeuver, AppLanguage.PERSIAN)
@@ -155,8 +159,7 @@ class AndroidAutoUnitTest {
 
         val route = OfflineRoute(
             id = "route_aa_test",
-            labelEn = "Fastest",
-            labelFa = "سریع‌ترین",
+            summaryLabel = "Fastest",
             distanceMeters = 5_000.0,
             durationSeconds = 420.0,
             shape = listOf(LatLon(44.0521, -123.0868), LatLon(44.0600, -123.0900)),
@@ -165,12 +168,13 @@ class AndroidAutoUnitTest {
                     index = 0,
                     type = ManeuverType.RIGHT,
                     instructionEn = "Turn right onto Willamette St",
-                    instructionFa = "به راست بپیچید وارد Willamette St",
                     streetNames = listOf("Willamette St"),
                     lengthMeters = 800.0,
                     timeSeconds = 60.0,
                     beginShapeIndex = 0,
-                    endShapeIndex = 1
+                    endShapeIndex = 1,
+                    lat = 44.0521,
+                    lon = -123.0868
                 )
             )
         )
@@ -200,6 +204,8 @@ class AndroidAutoUnitTest {
         store._freeDriveAheadAlert.value = AheadAlert(
             id = "cam_1",
             kind = RoadAlertKind.SPEED_CAMERA,
+            lat = 44.055,
+            lon = -123.088,
             distanceMeters = 180.0,
             titleEn = "Speed camera ahead",
             titleFa = "دوربین کنترل سرعت"
