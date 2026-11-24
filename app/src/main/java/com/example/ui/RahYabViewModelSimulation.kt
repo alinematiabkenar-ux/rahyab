@@ -133,6 +133,9 @@ internal fun RahYabViewModel.startSimulationOnActiveRouteImpl() {
         isRerouting = false,
         isGpsSignalLost = false,
         hasArrived = false,
+        showJunctionPreview = false,
+        activeJunctionManeuverIndex = -1,
+        dismissedJunctionManeuverIndex = -1,
         showLaneStrip = firstManeuver?.lanes?.isNotEmpty() == true &&
             initialDist <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)
     )

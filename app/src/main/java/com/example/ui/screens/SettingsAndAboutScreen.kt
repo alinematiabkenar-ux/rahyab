@@ -316,7 +316,7 @@ fun SettingsScreen(
                 icon = Icons.Filled.NotificationsActive
             ) {
                 SettingsToggleRow(
-                    label = strings.junctionPreviewSetting,
+                    label = strings.settingsJunctionViewTitle,
                     checked = settings.junctionPreviewEnabled,
                     onCheckedChange = { viewModel.setJunctionPreviewEnabled(it) },
                     testTag = "switch_junction_preview"
@@ -366,6 +366,12 @@ fun SettingsScreen(
                     checked = settings.alertRailroadEnabled,
                     onCheckedChange = { viewModel.setAlertRailroadEnabled(it) },
                     testTag = "switch_alert_railroad"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleSteepGrade,
+                    checked = settings.alertSteepGradeEnabled,
+                    onCheckedChange = { viewModel.setAlertSteepGradeEnabled(it) },
+                    testTag = "switch_alert_steep_grade"
                 )
                 SettingsToggleRow(
                     label = strings.alertToggleSchoolZone,
@@ -587,6 +593,17 @@ fun SettingsScreen(
                     Text(strings.saveBaseUrl)
                 }
             }
+        }
+
+        // 4b. M6: Travel Modes (Default Mode, Walking Speed, Cycling Speed, Avoid Hills)
+        item {
+            SettingsTravelModeSectionCard(
+                settings = settings,
+                onSelectDefaultMode = { viewModel.setDefaultTravelMode(it) },
+                onSelectWalkingSpeed = { viewModel.setWalkingSpeedPreset(it) },
+                onSelectCyclingSpeed = { viewModel.setCyclingSpeedPreset(it) },
+                onToggleAvoidHills = { viewModel.setAvoidHillsWhenCycling(it) }
+            )
         }
 
         // 5. Routing Defaults
@@ -888,6 +905,7 @@ fun SettingsScreen(
                 Text(strings.osmAttributionFull, style = MaterialTheme.typography.bodyMedium)
                 Text(strings.overtureAttributionFull, style = MaterialTheme.typography.bodyMedium)
                 Text(strings.overtureAddressesAttributionFull, style = MaterialTheme.typography.bodyMedium)
+                Text(strings.extrasAttributionFull, style = MaterialTheme.typography.bodyMedium)
                 OutlinedButton(
                     onClick = {
                         runCatching {

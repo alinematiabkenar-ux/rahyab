@@ -5,6 +5,8 @@ import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
+import androidx.car.app.model.CarIcon
+import androidx.car.app.model.MessageTemplate
 import androidx.car.app.model.Template
 import androidx.car.app.navigation.NavigationManager
 import androidx.car.app.navigation.NavigationManagerCallback
@@ -13,6 +15,7 @@ import androidx.car.app.navigation.model.NavigationTemplate
 import androidx.car.app.navigation.model.RoutingInfo
 import androidx.car.app.navigation.model.Step
 import androidx.car.app.navigation.model.Trip
+import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.R
@@ -20,6 +23,10 @@ import com.example.RahYabApplication
 import com.example.data.preferences.UserSettings
 import com.example.i18n.stringsFor
 import com.example.navigation.ActiveNavigationState
+import com.example.navigation.JunctionScene
+import com.example.navigation.JunctionSceneBuilder
+import com.example.navigation.TravelMode
+import com.example.ui.components.JunctionViewRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,6 +60,8 @@ class CarNavigationScreen(
     private var hasShownArrival: Boolean = false
     private var lastTripPushElapsedMs: Long = 0L
     private var lastReportedManeuverIdx: Int = -1
+    private var cachedJunctionKey: Pair<JunctionScene, Boolean>? = null
+    private var cachedJunctionIcon: CarIcon? = null
 
     private val navCallback = object : NavigationManagerCallback {
         override fun onStopNavigation() {
@@ -100,6 +109,12 @@ class CarNavigationScreen(
                             return@collectLatest
                         }
 
+                        if (nav.effectiveTravelMode != TravelMode.DRIVE) {
+                            endNavManagerSession()
+                            invalidate()
+                            return@collectLatest
+                        }
+
                         if (!isNavStartedReported) {
                             runCatching { navigationManager.navigationStarted() }
                             isNavStartedReported = true
@@ -108,7 +123,7 @@ class CarNavigationScreen(
                         if (nav.hasArrived && !hasShownArrival) {
                             hasShownArrival = true
                             alertHelper.showArrivalAlert(nav.destinationName, settings.language)
-                        } else if (!nav.isWalkingMode) {
+                        } else if (nav.effectiveTravelMode == TravelMode.DRIVE) {
                             alertHelper.showAheadAlertIfNew(
                                 alert = nav.activeAheadAlert,
                                 unit = settings.distanceUnit,
@@ -172,7 +187,38 @@ class CarNavigationScreen(
         runCatching { navigationManager.updateTrip(trip) }
     }
 
-    private fun buildCurrentStep(nav: ActiveNavigationState): Step? {
+    private fun buildJunctionCarIcon(nav: ActiveNavigationState): CarIcon? {
+        if (nav.effectiveTravelMode != TravelMode.DRIVE ||
+            !settings.junctionPreviewEnabled ||
+            !nav.showJunctionPreview
+        ) {
+            return null
+        }
+        val maneuver = nav.activeJunctionManeuver ?: nav.currentManeuver ?: return null
+        val scene = JunctionSceneBuilder.build(maneuver) ?: return null
+        val isNight = carContext.isDarkMode
+        val key = scene to isNight
+        if (cachedJunctionKey == key && cachedJunctionIcon != null) {
+            return cachedJunctionIcon
+        }
+        val bmp = runCatching {
+            JunctionViewRenderer.render(
+                scene = scene,
+                widthPx = 500,
+                heightPx = 260,
+                isNightMode = isNight
+            )
+        }.getOrNull() ?: return null
+        val icon = CarIcon.Builder(IconCompat.createWithBitmap(bmp)).build()
+        cachedJunctionKey = key
+        cachedJunctionIcon = icon
+        return icon
+    }
+
+    private fun buildCurrentStep(
+        nav: ActiveNavigationState,
+        suppressLanes: Boolean = false
+    ): Step? {
         val maneuver = nav.currentManeuver ?: return null
         val cue = CarManeuverMapper.formatCarStepCue(maneuver, settings.language)
         val stepBuilder = Step.Builder(cue)
@@ -184,7 +230,7 @@ class CarNavigationScreen(
             stepBuilder.setRoad(roadName)
         }
 
-        if (!nav.isWalkingMode && nav.showLaneStrip && maneuver.lanes.isNotEmpty()) {
+        if (!suppressLanes && !nav.isWalkingMode && nav.showLaneStrip && maneuver.lanes.isNotEmpty()) {
             CarManeuverMapper.toCarLanes(maneuver.lanes).forEach { lane ->
                 stepBuilder.addLane(lane)
             }
@@ -229,6 +275,14 @@ class CarNavigationScreen(
             }
             .build()
 
+        if (nav.isNavigating && nav.effectiveTravelMode != TravelMode.DRIVE) {
+            return MessageTemplate.Builder(str.carWalkBikePhoneOnlyNotice)
+                .setTitle(str.appName)
+                .setHeaderAction(Action.BACK)
+                .addAction(stopAction)
+                .build()
+        }
+
         val actionStrip = ActionStrip.Builder()
             .addAction(stopAction)
             .addAction(voiceAction)
@@ -247,13 +301,17 @@ class CarNavigationScreen(
         if (nav.isRerouting) {
             templateBuilder.setNavigationInfo(RoutingInfo.Builder().setLoading(true).build())
         } else {
-            val step = buildCurrentStep(nav)
+            val junctionIcon = buildJunctionCarIcon(nav)
+            val step = buildCurrentStep(nav, suppressLanes = junctionIcon != null)
             if (step != null) {
                 val routingBuilder = RoutingInfo.Builder()
                     .setCurrentStep(
                         step,
                         CarMapActionsHelper.toCarDistance(nav.distanceToNextManeuverMeters, settings.distanceUnit)
                     )
+                if (junctionIcon != null) {
+                    runCatching { routingBuilder.setJunctionImage(junctionIcon) }
+                }
                 val thenManeuver = nav.thenManeuver
                 if (thenManeuver != null) {
                     val nextStep = Step.Builder(CarManeuverMapper.formatCarStepCue(thenManeuver, settings.language))

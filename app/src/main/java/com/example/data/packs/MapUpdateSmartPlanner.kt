@@ -233,6 +233,11 @@ object MapUpdateSmartPlanner {
                 true
             } else false
 
+            val stagedExtras = File(dir, "${code}_extras.db")
+            if (stagedExtras.exists() && stagedExtras.length() > 1024L) {
+                runCatching { moveAtomic(stagedExtras, packManager.extrasDbFile(code)) }
+            }
+
             val pmOk = packManager.isValidPmtilesFile(packManager.pmtilesFile(code))
             val vhOk = packManager.valhallaTarFile(code).exists() && packManager.valhallaTarFile(code).length() > 512L
             val dbOk = packManager.isValidPlacesDb(packManager.placesDbFile(code))

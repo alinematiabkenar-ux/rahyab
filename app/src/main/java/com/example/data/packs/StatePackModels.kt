@@ -35,7 +35,9 @@ data class StateManifestEntry(
     val totalSizeBytes: Long,
     val pmtiles: PackFileEntry,
     val valhalla: PackFileEntry,
-    val places: PackFileEntry
+    val places: PackFileEntry,
+    val extras: PackFileEntry? = null,
+    val optionalSizeBytes: Long = 0L
 ) {
     val effectiveBuildVersion: String
         get() = buildVersion.ifBlank { version }

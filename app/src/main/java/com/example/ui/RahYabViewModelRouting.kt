@@ -13,12 +13,31 @@ import com.example.navigation.NavigationSessionController
 import com.example.navigation.OfflineRoute
 import com.example.navigation.RouteOptions
 import com.example.navigation.RoutePreference
+import com.example.navigation.TravelMode
 import com.example.navigation.ValhallaResponseParser
 import com.example.service.NavigationForegroundService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-internal fun RahYabViewModel.buildCurrentRouteOptionsImpl(s: UserSettings): RouteOptions {
+internal fun formatModeNotificationTitle(
+    mode: TravelMode,
+    primaryText: String,
+    etaText: String,
+    language: com.example.i18n.AppLanguage
+): String {
+    val s = stringsFor(language)
+    val modeLabel = when (mode) {
+        TravelMode.DRIVE -> s.travelModeDrive
+        TravelMode.WALK -> s.travelModeWalk
+        TravelMode.BIKE -> s.travelModeBike
+    }
+    return "$modeLabel • $primaryText • $etaText"
+}
+
+internal fun RahYabViewModel.buildCurrentRouteOptionsImpl(
+    s: UserSettings,
+    travelMode: com.example.navigation.TravelMode = _selectedTravelMode.value
+): RouteOptions {
     val now = System.currentTimeMillis()
     // Automatically avoid active user-reported Road Closures in Valhalla routing
     val closedLocations = activeUserReports.value
@@ -30,51 +49,16 @@ internal fun RahYabViewModel.buildCurrentRouteOptionsImpl(s: UserSettings): Rout
         avoidHighways = s.avoidHighways,
         avoidFerries = s.avoidFerries,
         preferShortest = (s.routePreference == RoutePreference.SHORTEST),
-        avoidLocations = closedLocations
+        avoidLocations = closedLocations,
+        travelMode = travelMode,
+        walkingSpeedKmh = s.walkingSpeedPreset.speedKmh,
+        cyclingSpeedKmh = s.cyclingSpeedPreset.speedKmh,
+        avoidHillsWhenCycling = s.avoidHillsWhenCycling
     )
 }
 
 internal fun RahYabViewModel.calculateRoutesToSelectedPlaceImpl() {
-    val dest = _selectedPlace.value ?: return
-    val origin = getEffectiveReferenceLocation()
-    val s = settings.value
-    val options = buildCurrentRouteOptionsImpl(s)
-    // Only send GPS bearing when moving > 3 mph with a fresh (< 10 s) bearing; never send compass heading
-    val routingHeading = LocationTracker.resolveRoutingHeadingDegrees(currentGpsFix.value)
-
-    viewModelScope.launch {
-        _isCalculatingRoute.value = true
-        _routeError.value = null
-        _missingStatesForRoute.value = emptyList()
-        val result = routingEngine.calculateRoutes(
-            origin = origin,
-            destination = LatLon(dest.lat, dest.lon),
-            options = options,
-            headingDegrees = routingHeading,
-            allowDevOnlineFallback = s.devOnlineOregonMode
-        )
-        _isCalculatingRoute.value = false
-        result.onSuccess { routes ->
-            _candidateRoutes.value = routes
-            _selectedRouteIndex.value = 0
-            autoRecenterJob?.cancel()
-            _isCameraFollowing.value = false
-            routes.firstOrNull()?.shape?.let { pts ->
-                if (pts.isNotEmpty()) {
-                    val mid = pts[pts.size / 2]
-                    _cameraCommand.value = CameraTargetCommand(mid.lat, mid.lon, zoom = 12.0, anchorLowerThird = false)
-                }
-            }
-            refreshWeatherAlertsIfEligibleImpl(explicitRoute = routes.firstOrNull())
-        }.onFailure { err ->
-            if (err is MissingStatesException) {
-                _missingStatesForRoute.value = err.missingStates
-                _routeError.value = err.message
-            } else {
-                _routeError.value = err.message ?: stringsFor(s.language).missingRoutingTiles
-            }
-        }
-    }
+    calculateAllTravelModePreviewsImpl()
 }
 
 internal fun RahYabViewModel.selectCandidateRouteImpl(index: Int) {
@@ -101,8 +85,12 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
         ?: newRoute.shape.firstOrNull()
         ?: getEffectiveReferenceLocation()
 
+    val mode = newRoute.travelMode
+    val isDriveMode = mode == TravelMode.DRIVE
     _navigationState.value = _navigationState.value.copy(
         route = newRoute,
+        travelMode = mode,
+        isWalkingMode = (mode == TravelMode.WALK),
         currentManeuverIndex = 0,
         snappedShapeIndex = 0,
         isOffRoute = false,
@@ -112,9 +100,10 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
         remainingDistanceMeters = newRoute.distanceMeters,
         remainingTimeSeconds = newRoute.durationSeconds,
         snappedLocation = startLoc,
-        currentSpeedLimitMph = initialManeuver?.speedLimitMph,
-        showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true &&
+        currentSpeedLimitMph = if (isDriveMode) initialManeuver?.speedLimitMph else null,
+        showLaneStrip = isDriveMode && initialManeuver?.lanes?.isNotEmpty() == true &&
             (initialManeuver.lengthMeters <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)),
+        showJunctionPreview = false,
         lanePulseManeuverIndex = -1,
         dismissedJunctionManeuverIndex = -1
     )
@@ -125,7 +114,7 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
     val etaText = BilingualFormatter.formatDuration(newRoute.durationSeconds, s.language)
     NavigationForegroundService.updateNotification(
         context = app,
-        title = "${dest.name} • $etaText",
+        title = formatModeNotificationTitle(mode, dest.name, etaText, s.language),
         body = firstInstruction,
         force = true
     )
@@ -154,6 +143,11 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
         _simulationSpeedMultiplier.value = 1
     }
 
+    val mode = route.travelMode
+    val isDriveMode = mode == TravelMode.DRIVE
+    if (mode == TravelMode.BIKE) {
+        _isHeadingUpMode.value = true
+    }
     val initialManeuver = route.maneuvers.firstOrNull()
     val initialDist = initialManeuver?.lengthMeters ?: route.distanceMeters
     val startLoc = route.shape.firstOrNull() ?: getEffectiveReferenceLocation()
@@ -164,6 +158,8 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
     }
     _navigationState.value = ActiveNavigationState(
         isNavigating = true,
+        isWalkingMode = (mode == TravelMode.WALK),
+        travelMode = mode,
         route = route,
         destinationName = dest.name,
         destinationAddress = dest.formattedAddress,
@@ -174,9 +170,9 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
         remainingTimeSeconds = route.durationSeconds,
         snappedLocation = startLoc,
         snappedBearing = initialBearing,
-        currentSpeedLimitMph = route.speedLimitsByShapeIndex[0] ?: initialManeuver?.speedLimitMph,
+        currentSpeedLimitMph = if (isDriveMode) (route.speedLimitsByShapeIndex[0] ?: initialManeuver?.speedLimitMph) else null,
         isSimulatingDrive = shouldSimulate,
-        showLaneStrip = initialManeuver?.lanes?.isNotEmpty() == true &&
+        showLaneStrip = isDriveMode && initialManeuver?.lanes?.isNotEmpty() == true &&
             initialDist <= NavigationSessionController.laneStripWindowMeters(s.distanceUnit)
     )
 
@@ -204,17 +200,18 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
     // Start foreground service ONLY once when navigation begins; if already running, only update notification
     val firstInstruction = initialManeuver?.instructionEn ?: dest.name
     val etaText = BilingualFormatter.formatDuration(route.durationSeconds, s.language)
+    val notifTitle = formatModeNotificationTitle(mode, dest.name, etaText, s.language)
     if (wasAlreadyNavigating) {
         NavigationForegroundService.updateNotification(
             context = app,
-            title = "${dest.name} • $etaText",
+            title = notifTitle,
             body = firstInstruction,
             force = true
         )
     } else {
         NavigationForegroundService.startOrUpdate(
             context = app,
-            title = "${dest.name} • $etaText",
+            title = notifTitle,
             body = firstInstruction
         )
     }
@@ -226,13 +223,19 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
         _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
     }
 
-    // Switch camera to driving view
+    // Switch camera to mode-appropriate view
+    val initialZoom = when (mode) {
+        TravelMode.WALK -> 17.0
+        TravelMode.BIKE -> 16.0
+        TravelMode.DRIVE -> 16.8
+    }
+    val initialTilt = if (isDriveMode && s.is3DView) 55.0 else 0.0
     _cameraCommand.value = CameraTargetCommand(
         lat = startLoc.lat,
         lon = startLoc.lon,
-        zoom = 16.8,
-        tilt = if (s.is3DView) 55.0 else 0.0,
-        bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
+        zoom = initialZoom,
+        tilt = initialTilt,
+        bearing = if (mode == TravelMode.BIKE || _isHeadingUpMode.value) initialBearing.toDouble() else 0.0
     )
 
     if (shouldSimulate) {
@@ -271,10 +274,12 @@ internal fun RahYabViewModel.startGpsLossWatchdogImpl() {
 }
 
 internal fun RahYabViewModel.dismissJunctionPreviewImpl() {
-    val currentIdx = _navigationState.value.currentManeuver?.index ?: return
-    _navigationState.value = _navigationState.value.copy(
+    val nav = _navigationState.value
+    val targetIdx = nav.activeJunctionManeuverIndex.takeIf { it >= 0 } ?: nav.currentManeuver?.index ?: return
+    _navigationState.value = nav.copy(
         showJunctionPreview = false,
-        dismissedJunctionManeuverIndex = currentIdx
+        activeJunctionManeuverIndex = -1,
+        dismissedJunctionManeuverIndex = targetIdx
     )
 }
 

@@ -59,6 +59,7 @@ import com.example.i18n.LocalAppStrings
 import com.example.navigation.ActiveNavigationState
 import com.example.navigation.AheadAlert
 import com.example.navigation.GpsFix
+import com.example.navigation.TravelMode
 import com.example.ui.components.AheadAlertBanner
 import com.example.ui.components.TurnByTurnTopHud
 import com.example.ui.theme.AlertAmber
@@ -111,20 +112,22 @@ internal fun DriveTopOverlay(
     ) {
         if (navState.isNavigating && navState.currentManeuver != null) {
             val activeManeuver = navState.currentManeuver!!
+            val isDriveMode = navState.effectiveTravelMode == TravelMode.DRIVE
             TurnByTurnTopHud(
                 maneuver = activeManeuver,
                 thenManeuver = navState.thenManeuver,
                 distanceMeters = navState.distanceToNextManeuverMeters,
                 unit = settings.distanceUnit,
                 isRerouting = navState.isRerouting,
-                showLaneStrip = !navState.isWalkingMode && navState.showLaneStrip,
-                showJunctionPreview = !navState.isWalkingMode && navState.showJunctionPreview,
+                showLaneStrip = isDriveMode && navState.showLaneStrip,
+                showJunctionPreview = isDriveMode && navState.showJunctionPreview,
                 routeShape = navState.route?.shape.orEmpty(),
                 onDismissJunctionPreview = onDismissJunctionPreview,
                 isNightMode = isNightMode,
-                lanePulseTriggerKey = if (!navState.isWalkingMode && navState.lanePulseManeuverIndex == activeManeuver.index) {
+                lanePulseTriggerKey = if (isDriveMode && navState.lanePulseManeuverIndex == activeManeuver.index) {
                     navState.lanePulseTriggerCount
-                } else 0
+                } else 0,
+                junctionManeuver = navState.activeJunctionManeuver ?: activeManeuver
             )
 
             Row(
@@ -134,7 +137,7 @@ internal fun DriveTopOverlay(
                 if (settings.simulateDriveEnabled || navState.isSimulatingDrive) {
                     SimulationModeBadge(label = strings.simulationModeBadge)
                 }
-                if (!navState.isWalkingMode && settings.showTrafficLights && aheadTrafficLightMeters != null) {
+                if (isDriveMode && settings.showTrafficLights && aheadTrafficLightMeters != null) {
                     TrafficLightAheadPill(
                         distanceMeters = aheadTrafficLightMeters,
                         unit = settings.distanceUnit,

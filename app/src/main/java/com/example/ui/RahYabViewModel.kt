@@ -143,6 +143,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val routeError: StateFlow<String?> = navStore.routeError
     internal val _missingStatesForRoute: MutableStateFlow<List<UsStateInfo>> = navStore._missingStatesForRoute
     val missingStatesForRoute: StateFlow<List<UsStateInfo>> = navStore.missingStatesForRoute
+    internal val _selectedTravelMode = MutableStateFlow(com.example.navigation.TravelMode.DRIVE)
+    val selectedTravelMode: StateFlow<com.example.navigation.TravelMode> = _selectedTravelMode.asStateFlow()
+    internal val _modePreviewSummaries = MutableStateFlow<Map<com.example.navigation.TravelMode, com.example.ui.screens.ModePreviewSummary>>(emptyMap())
+    val modePreviewSummaries: StateFlow<Map<com.example.navigation.TravelMode, com.example.ui.screens.ModePreviewSummary>> = _modePreviewSummaries.asStateFlow()
 
     internal val _navigationState: MutableStateFlow<ActiveNavigationState> = navStore._navigationState
     val navigationState: StateFlow<ActiveNavigationState> = navStore.navigationState
@@ -206,6 +210,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var gpsWatchdogJob: Job? = null
     internal var simulationJob: Job? = null
     internal var arrivalEndJob: Job? = null
+    internal var multiModePreviewJob: Job? = null
     internal var autoRecenterJob: Job? = null
     internal var cameraFetchJob: Job? = null
     internal var trafficLightFetchJob: Job? = null
@@ -222,12 +227,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     private val hubDelegate = object : com.example.navigation.PhoneNavigationDelegate {
         override fun onCalculateRoutesForPlace(place: PlaceSearchResult) {
+            _selectedTravelMode.value = com.example.navigation.TravelMode.DRIVE
             selectPlace(place)
         }
         override fun onSelectCandidateRoute(index: Int) {
             selectCandidateRoute(index)
         }
         override fun onStartNavigation(forceSimulate: Boolean?) {
+            if (_selectedTravelMode.value != com.example.navigation.TravelMode.DRIVE) {
+                selectTravelMode(com.example.navigation.TravelMode.DRIVE)
+            }
             startNavigation(forceSimulate)
         }
         override fun onStopNavigation() {
@@ -288,6 +297,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- ROUTING, NAVIGATION & SIMULATION ---
     fun calculateRoutesToSelectedPlace() = calculateRoutesToSelectedPlaceImpl()
+    fun selectTravelMode(mode: com.example.navigation.TravelMode) = selectTravelModeImpl(mode)
     fun selectCandidateRoute(index: Int) = selectCandidateRouteImpl(index)
     fun startNavigation(forceSimulate: Boolean? = null) = startNavigationImpl(forceSimulate)
     fun toggleSimulationFromMap() = toggleSimulationFromMapImpl()
@@ -359,6 +369,14 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setAlertSpeedCameraEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedCameraEnabled(enabled) } }
     fun setAlertRedLightCameraEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertRedLightCameraEnabled(enabled) } }
     fun setAlertSpeedBumpEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedBumpEnabled(enabled) } }
+    fun setAlertSteepGradeEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSteepGradeEnabled(enabled) } }
+    fun setDefaultTravelMode(mode: com.example.navigation.TravelMode) {
+        _selectedTravelMode.value = mode
+        viewModelScope.launch { prefs.setDefaultTravelMode(mode); prefs.setLastTravelMode(mode) }
+    }
+    fun setWalkingSpeedPreset(preset: com.example.navigation.WalkingSpeedPreset) { viewModelScope.launch { prefs.setWalkingSpeedPreset(preset) } }
+    fun setCyclingSpeedPreset(preset: com.example.navigation.CyclingSpeedPreset) { viewModelScope.launch { prefs.setCyclingSpeedPreset(preset) } }
+    fun setAvoidHillsWhenCycling(avoid: Boolean) { viewModelScope.launch { prefs.setAvoidHillsWhenCycling(avoid) } }
     fun setShowTrafficLights(enabled: Boolean) = setShowTrafficLightsImpl(enabled)
     fun setShow3DBuildings(enabled: Boolean) { viewModelScope.launch { prefs.setShow3DBuildings(enabled) } }
     fun setPositionMarkerStyle(style: String) { viewModelScope.launch { prefs.setPositionMarkerStyle(style) } }

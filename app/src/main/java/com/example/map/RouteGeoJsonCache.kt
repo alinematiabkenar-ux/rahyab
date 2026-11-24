@@ -35,6 +35,8 @@ class RouteGeoJsonCache(
         return buildString {
             append(route.id)
             append('|')
+            append(route.travelMode.code)
+            append('|')
             append(route.shape.size)
             append('|')
             append(route.distanceMeters.toLong())
@@ -79,6 +81,7 @@ class RouteGeoJsonCache(
             }
 
             val feature = Feature.fromGeometry(line).apply {
+                addStringProperty("mode", route.travelMode.code)
                 if (colorHex != null) {
                     addStringProperty("color", colorHex)
                 }

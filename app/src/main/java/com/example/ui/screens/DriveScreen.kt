@@ -63,6 +63,8 @@ fun DriveScreen(
     val isCalculatingRoute by viewModel.isCalculatingRoute.collectAsStateWithLifecycle()
     val routeError by viewModel.routeError.collectAsStateWithLifecycle()
     val missingStatesForRoute by viewModel.missingStatesForRoute.collectAsStateWithLifecycle()
+    val selectedTravelMode by viewModel.selectedTravelMode.collectAsStateWithLifecycle()
+    val modePreviewSummaries by viewModel.modePreviewSummaries.collectAsStateWithLifecycle()
     val navState by viewModel.navigationState.collectAsStateWithLifecycle()
     val activeReports by viewModel.activeUserReports.collectAsStateWithLifecycle()
     val cameraCmd by viewModel.cameraCommand.collectAsStateWithLifecycle()
@@ -288,6 +290,7 @@ fun DriveScreen(
                 remainingTimeSeconds = navState.remainingTimeSeconds,
                 hasArrived = navState.hasArrived,
                 unit = settings.distanceUnit,
+                travelMode = navState.effectiveTravelMode,
                 onEndNavigation = { viewModel.stopNavigation() },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -317,6 +320,9 @@ fun DriveScreen(
                     viewModel.requestDownloadStatePack(stateCode)
                     onNavigateToMaps()
                 },
+                selectedTravelMode = selectedTravelMode,
+                modePreviewSummaries = modePreviewSummaries,
+                onSelectTravelMode = { viewModel.selectTravelMode(it) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(12.dp)

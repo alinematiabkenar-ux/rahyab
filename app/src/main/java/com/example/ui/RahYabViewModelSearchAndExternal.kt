@@ -150,6 +150,8 @@ internal fun RahYabViewModel.selectPlaceImpl(place: PlaceSearchResult) {
         zoom = 15.0,
         anchorLowerThird = false
     )
+    _selectedTravelMode.value = settings.value.lastTravelMode
+    calculateAllTravelModePreviewsImpl()
     viewModelScope.launch {
         savedPlaceDao.insert(
             SavedPlaceEntity(
@@ -167,6 +169,8 @@ internal fun RahYabViewModel.selectPlaceImpl(place: PlaceSearchResult) {
 }
 
 internal fun RahYabViewModel.clearSelectedPlaceImpl() {
+    multiModePreviewJob?.cancel()
+    _modePreviewSummaries.value = emptyMap()
     _selectedPlace.value = null
     _candidateRoutes.value = emptyList()
     _routeError.value = null

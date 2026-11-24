@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.RoundaboutRight
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material.icons.filled.Traffic
 import androidx.compose.material.icons.filled.Train
@@ -134,13 +135,18 @@ fun TurnByTurnTopHud(
     onDismissJunctionPreview: () -> Unit,
     modifier: Modifier = Modifier,
     isNightMode: Boolean = false,
-    lanePulseTriggerKey: Int = 0
+    lanePulseTriggerKey: Int = 0,
+    junctionManeuver: RouteManeuver = maneuver
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
     val distText = BilingualFormatter.formatDistance(distanceMeters, unit, language)
     val signpost = maneuver.signpost
     val useHighwayGreen = signpost != null || maneuver.isHighwayExitOrSplit
+    val junctionScene = androidx.compose.runtime.remember(junctionManeuver, showJunctionPreview) {
+        if (showJunctionPreview) com.example.navigation.JunctionSceneBuilder.build(junctionManeuver) else null
+    }
+    val showingJunctionCard = showJunctionPreview && junctionScene != null
 
     val bannerBg = when {
         useHighwayGreen && isNightMode -> Color(0xFF004B3B)
@@ -218,8 +224,8 @@ fun TurnByTurnTopHud(
                     }
                 }
 
-                // Integrated lane guidance directly inside the top maneuver banner (hidden if no real lane data)
-                if (showLaneStrip && maneuver.lanes.isNotEmpty()) {
+                // Integrated lane guidance (replaced by Highway Junction View while junction card is visible)
+                if (showLaneStrip && !showingJunctionCard && maneuver.lanes.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(10.dp))
                     LaneGuidanceBannerRow(
                         lanes = maneuver.lanes,
@@ -271,21 +277,21 @@ fun TurnByTurnTopHud(
             }
         }
 
-        // Phase 3: Real-Geometry Enlarged Junction Preview (tap anywhere on card to close early)
+        // J3: Sygic-style Highway Junction View (replaces small lane strip, tap to dismiss for current maneuver)
         AnimatedVisibility(
-            visible = showJunctionPreview,
+            visible = showingJunctionCard,
             enter = fadeIn(),
             exit = fadeOut()
         ) {
-            EnlargedJunctionPreviewCard(
-                maneuver = maneuver,
-                distanceText = distText,
-                routeShape = routeShape,
-                onDismiss = onDismissJunctionPreview,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("junction_preview_card")
-            )
+            junctionScene?.let { scene ->
+                JunctionViewCard(
+                    scene = scene,
+                    distanceText = distText,
+                    isNightMode = isNightMode,
+                    onDismiss = onDismissJunctionPreview,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
@@ -641,6 +647,7 @@ fun AheadAlertBanner(
         RoadAlertKind.USER_STALLED_VEHICLE -> Icons.Filled.DirectionsCar
         RoadAlertKind.USER_OBJECT_ON_ROAD -> Icons.Filled.ReportProblem
         RoadAlertKind.RAILROAD_CROSSING -> Icons.Filled.Train
+        RoadAlertKind.STEEP_GRADE -> Icons.Filled.Terrain
         RoadAlertKind.SCHOOL_ZONE -> Icons.Filled.School
         RoadAlertKind.TOLL_BOOTH -> Icons.Filled.Toll
         RoadAlertKind.TRAFFIC_SIGNAL -> Icons.Filled.Traffic

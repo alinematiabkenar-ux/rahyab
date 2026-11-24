@@ -118,6 +118,7 @@ enum class RoadAlertKind {
     SPEED_CAMERA,
     RED_LIGHT_CAMERA,
     SPEED_BUMP,
+    STEEP_GRADE,
     USER_POLICE,
     USER_HAZARD,
     USER_CRASH,
@@ -160,7 +161,8 @@ data class OfflineRoute(
     val statesCrossed: List<String> = emptyList(),
     val hasTolls: Boolean = false,
     val isFastestRoute: Boolean = false,
-    val isShortestRoute: Boolean = false
+    val isShortestRoute: Boolean = false,
+    val travelMode: TravelMode = TravelMode.DRIVE
 )
 
 data class RouteOptions(
@@ -169,8 +171,19 @@ data class RouteOptions(
     val avoidFerries: Boolean = false,
     val preferShortest: Boolean = false,
     val avoidLocations: List<LatLon> = emptyList(), // Active user-reported road closures
-    val isPedestrian: Boolean = false
-)
+    val travelMode: TravelMode = TravelMode.DRIVE,
+    val walkingSpeedKmh: Double = WalkingSpeedPreset.NORMAL.speedKmh,
+    val cyclingSpeedKmh: Double = CyclingSpeedPreset.NORMAL.speedKmh,
+    val avoidHillsWhenCycling: Boolean = false
+) {
+    val isPedestrian: Boolean
+        get() = travelMode == TravelMode.WALK
+
+    /** Backward-compatible constructor so existing `RouteOptions(isPedestrian = true)` calls work unchanged. */
+    constructor(isPedestrian: Boolean) : this(
+        travelMode = if (isPedestrian) TravelMode.WALK else TravelMode.DRIVE
+    )
+}
 
 class MissingStatesException(
     val missingStates: List<UsStateInfo>,
@@ -204,11 +217,17 @@ data class ActiveNavigationState(
     val lanePulseManeuverIndex: Int = -1,
     val lanePulseTriggerCount: Int = 0,
     val showJunctionPreview: Boolean = false,
+    val activeJunctionManeuverIndex: Int = -1,
     val dismissedJunctionManeuverIndex: Int = -1,
-    val isWalkingMode: Boolean = false
+    val travelMode: TravelMode = TravelMode.DRIVE,
+    val isWalkingMode: Boolean = (travelMode == TravelMode.WALK)
 ) {
+    val effectiveTravelMode: TravelMode
+        get() = if (isWalkingMode) TravelMode.WALK else travelMode
     val currentManeuver: RouteManeuver?
         get() = route?.maneuvers?.getOrNull(currentManeuverIndex)
+    val activeJunctionManeuver: RouteManeuver?
+        get() = route?.maneuvers?.firstOrNull { it.index == activeJunctionManeuverIndex } ?: currentManeuver
 
     /**
      * Secondary "Then ..." maneuver preview shown below the top banner when the subsequent turn

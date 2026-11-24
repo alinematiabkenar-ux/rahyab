@@ -12,84 +12,14 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
+import com.example.navigation.CyclingSpeedPreset
 import com.example.navigation.RoutePreference
+import com.example.navigation.TravelMode
+import com.example.navigation.WalkingSpeedPreset
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.rahYabDataStore: DataStore<Preferences> by preferencesDataStore(name = "rahyab_prefs")
-
-data class UserSettings(
-    val language: AppLanguage = AppLanguage.ENGLISH,
-    val distanceUnit: DistanceUnit = DistanceUnit.IMPERIAL,
-    val themeMode: MapThemeMode = MapThemeMode.AUTO,
-    val voiceGuidanceEnabled: Boolean = true,
-    val speedWarningAudioEnabled: Boolean = true,
-    val speedWarningThresholdMph: Int = 5, // 0, 5, or 10 mph (converted automatically for km/h)
-    val junctionPreviewEnabled: Boolean = true,
-    // Individual Phase 3 Road Alerts toggles
-    val alertSpeedDropEnabled: Boolean = true,
-    val alertSharpCurveEnabled: Boolean = true,
-    val alertTollBoothEnabled: Boolean = true,
-    val alertRailroadEnabled: Boolean = true,
-    val alertSchoolZoneEnabled: Boolean = true,
-    val alertStopSignEnabled: Boolean = false, // Optional — OFF by default
-    val alertSpeedCameraEnabled: Boolean = true,
-    val alertRedLightCameraEnabled: Boolean = true,
-    val alertSpeedBumpEnabled: Boolean = true,
-    val showTrafficLights: Boolean = true,
-    val show3DBuildings: Boolean = true,
-    val positionMarkerStyle: String = "arrow", // "arrow" or "car"
-    val is3DView: Boolean = true,
-    val routePreference: RoutePreference = RoutePreference.FASTEST,
-    val avoidTolls: Boolean = false,
-    val avoidHighways: Boolean = false,
-    val avoidFerries: Boolean = false,
-    // Phase 5: GitHub Releases default pack source + optional custom URL override
-    val githubOwner: String = DEFAULT_GITHUB_OWNER,
-    val githubRepo: String = DEFAULT_GITHUB_REPO,
-    val packBaseUrl: String = "",
-    // Onboarding & Developer Testing
-    val onboardingCompleted: Boolean = false,
-    val devOnlineOregonMode: Boolean = false,
-    val simulateDriveEnabled: Boolean = false,
-    val persianTtsNoticeShown: Boolean = false,
-    val useEnglishVoiceInPersianMode: Boolean = false,
-    // Offline-first, online-when-available controls
-    val onlineFeaturesEnabled: Boolean = true,
-    val onlineWeatherAlertsEnabled: Boolean = true,
-    val onlineSearchFallbackEnabled: Boolean = true,
-    val autoCheckMapUpdatesEnabled: Boolean = true,
-    val wifiOnlyLargeDownloads: Boolean = true,
-    val autoUpdateMapsOnWifi: Boolean = false,
-    val lastManifestCheckEpochMs: Long = 0L,
-    val lastMapUpdateCheckResult: String = "",
-    // F4: Parked car location
-    val skipParkingAtHome: Boolean = true,
-    val carBluetoothDeviceAddress: String = "",
-    val carBluetoothDeviceName: String = ""
-) {
-    /**
-     * Effective pack host base URL: uses explicit custom Base URL if entered,
-     * otherwise derives the GitHub Release latest download URL from `githubOwner` / `githubRepo`.
-     */
-    val effectivePackBaseUrl: String
-        get() {
-            val custom = packBaseUrl.trim().trimEnd('/')
-            if (custom.isNotEmpty()) return custom
-            val owner = githubOwner.trim()
-            val repo = githubRepo.trim()
-            return if (owner.isNotEmpty() && repo.isNotEmpty()) {
-                "https://github.com/$owner/$repo/releases/latest/download"
-            } else {
-                ""
-            }
-        }
-
-    companion object {
-        const val DEFAULT_GITHUB_OWNER = "alinematiabkenar-ux"
-        const val DEFAULT_GITHUB_REPO = "rahyab"
-    }
-}
 
 class UserPreferencesRepository(private val context: Context) {
     private object Keys {
@@ -109,6 +39,7 @@ class UserPreferencesRepository(private val context: Context) {
         val ALERT_SPEED_CAMERA = booleanPreferencesKey("alert_speed_camera")
         val ALERT_RED_LIGHT_CAMERA = booleanPreferencesKey("alert_red_light_camera")
         val ALERT_SPEED_BUMP = booleanPreferencesKey("alert_speed_bump")
+        val ALERT_STEEP_GRADE = booleanPreferencesKey("alert_steep_grade")
         val SHOW_TRAFFIC_LIGHTS = booleanPreferencesKey("show_traffic_lights")
         val SHOW_3D_BUILDINGS = booleanPreferencesKey("show_3d_buildings")
         val POSITION_MARKER_STYLE = stringPreferencesKey("position_marker_style")
@@ -117,6 +48,11 @@ class UserPreferencesRepository(private val context: Context) {
         val AVOID_TOLLS = booleanPreferencesKey("avoid_tolls")
         val AVOID_HIGHWAYS = booleanPreferencesKey("avoid_highways")
         val AVOID_FERRIES = booleanPreferencesKey("avoid_ferries")
+        val DEFAULT_TRAVEL_MODE = stringPreferencesKey("default_travel_mode")
+        val LAST_TRAVEL_MODE = stringPreferencesKey("last_travel_mode")
+        val WALKING_SPEED_PRESET = stringPreferencesKey("walking_speed_preset")
+        val CYCLING_SPEED_PRESET = stringPreferencesKey("cycling_speed_preset")
+        val AVOID_HILLS_WHEN_CYCLING = booleanPreferencesKey("avoid_hills_when_cycling")
         val GITHUB_OWNER = stringPreferencesKey("github_owner")
         val GITHUB_REPO = stringPreferencesKey("github_repo")
         val PACK_BASE_URL = stringPreferencesKey("pack_base_url")
@@ -139,6 +75,7 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     val settingsFlow: Flow<UserSettings> = context.rahYabDataStore.data.map { prefs ->
+        val defaultMode = TravelMode.fromCode(prefs[Keys.DEFAULT_TRAVEL_MODE])
         UserSettings(
             language = AppLanguage.entries.find { it.code == prefs[Keys.LANGUAGE] } ?: AppLanguage.ENGLISH,
             distanceUnit = DistanceUnit.entries.find { it.code == prefs[Keys.DISTANCE_UNIT] } ?: DistanceUnit.IMPERIAL,
@@ -156,6 +93,7 @@ class UserPreferencesRepository(private val context: Context) {
             alertSpeedCameraEnabled = prefs[Keys.ALERT_SPEED_CAMERA] ?: true,
             alertRedLightCameraEnabled = prefs[Keys.ALERT_RED_LIGHT_CAMERA] ?: true,
             alertSpeedBumpEnabled = prefs[Keys.ALERT_SPEED_BUMP] ?: true,
+            alertSteepGradeEnabled = prefs[Keys.ALERT_STEEP_GRADE] ?: true,
             showTrafficLights = prefs[Keys.SHOW_TRAFFIC_LIGHTS] ?: true,
             show3DBuildings = prefs[Keys.SHOW_3D_BUILDINGS] ?: true,
             positionMarkerStyle = prefs[Keys.POSITION_MARKER_STYLE]?.takeIf { it == "car" || it == "arrow" } ?: "arrow",
@@ -165,6 +103,11 @@ class UserPreferencesRepository(private val context: Context) {
             avoidTolls = prefs[Keys.AVOID_TOLLS] ?: false,
             avoidHighways = prefs[Keys.AVOID_HIGHWAYS] ?: false,
             avoidFerries = prefs[Keys.AVOID_FERRIES] ?: false,
+            defaultTravelMode = defaultMode,
+            lastTravelMode = prefs[Keys.LAST_TRAVEL_MODE]?.let { TravelMode.fromCode(it) } ?: defaultMode,
+            walkingSpeedPreset = WalkingSpeedPreset.fromCode(prefs[Keys.WALKING_SPEED_PRESET]),
+            cyclingSpeedPreset = CyclingSpeedPreset.fromCode(prefs[Keys.CYCLING_SPEED_PRESET]),
+            avoidHillsWhenCycling = prefs[Keys.AVOID_HILLS_WHEN_CYCLING] ?: false,
             githubOwner = prefs[Keys.GITHUB_OWNER]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_OWNER,
             githubRepo = prefs[Keys.GITHUB_REPO]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_REPO,
             packBaseUrl = prefs[Keys.PACK_BASE_URL] ?: "",
@@ -187,93 +130,34 @@ class UserPreferencesRepository(private val context: Context) {
         )
     }
 
-    suspend fun setLanguage(language: AppLanguage) {
-        context.rahYabDataStore.edit { it[Keys.LANGUAGE] = language.code }
-    }
-
-    suspend fun setDistanceUnit(unit: DistanceUnit) {
-        context.rahYabDataStore.edit { it[Keys.DISTANCE_UNIT] = unit.code }
-    }
-
-    suspend fun setThemeMode(mode: MapThemeMode) {
-        context.rahYabDataStore.edit { it[Keys.THEME_MODE] = mode.code }
-    }
-
-    suspend fun setVoiceGuidanceEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.VOICE_ENABLED] = enabled }
-    }
-
-    suspend fun setSpeedWarningAudioEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.SPEED_AUDIO_ENABLED] = enabled }
-    }
-
-    suspend fun setSpeedWarningThresholdMph(thresholdMph: Int) {
-        context.rahYabDataStore.edit { it[Keys.SPEED_THRESHOLD_MPH] = thresholdMph.coerceIn(0, 15) }
-    }
-
-    suspend fun setJunctionPreviewEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.JUNCTION_PREVIEW_ENABLED] = enabled }
-    }
-
-    suspend fun setAlertSpeedDropEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_DROP] = enabled }
-    }
-
-    suspend fun setAlertSharpCurveEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_SHARP_CURVE] = enabled }
-    }
-
-    suspend fun setAlertTollBoothEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_TOLL_BOOTH] = enabled }
-    }
-
-    suspend fun setAlertRailroadEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_RAILROAD] = enabled }
-    }
-
-    suspend fun setAlertSchoolZoneEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_SCHOOL_ZONE] = enabled }
-    }
-
-    suspend fun setAlertStopSignEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_STOP_SIGN] = enabled }
-    }
-
-    suspend fun setAlertSpeedCameraEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_CAMERA] = enabled }
-    }
-
-    suspend fun setAlertRedLightCameraEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_RED_LIGHT_CAMERA] = enabled }
-    }
-
-    suspend fun setAlertSpeedBumpEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_BUMP] = enabled }
-    }
-
-    suspend fun setShowTrafficLights(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.SHOW_TRAFFIC_LIGHTS] = enabled }
-    }
-
-    suspend fun set3DView(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.IS_3D_VIEW] = enabled }
-    }
-
-    suspend fun setRoutePreference(preference: RoutePreference) {
-        context.rahYabDataStore.edit { it[Keys.ROUTE_PREFERENCE] = preference.code }
-    }
-
-    suspend fun setAvoidTolls(avoid: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.AVOID_TOLLS] = avoid }
-    }
-
-    suspend fun setAvoidHighways(avoid: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.AVOID_HIGHWAYS] = avoid }
-    }
-
-    suspend fun setAvoidFerries(avoid: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.AVOID_FERRIES] = avoid }
-    }
+    suspend fun setLanguage(language: AppLanguage) { context.rahYabDataStore.edit { it[Keys.LANGUAGE] = language.code } }
+    suspend fun setDistanceUnit(unit: DistanceUnit) { context.rahYabDataStore.edit { it[Keys.DISTANCE_UNIT] = unit.code } }
+    suspend fun setThemeMode(mode: MapThemeMode) { context.rahYabDataStore.edit { it[Keys.THEME_MODE] = mode.code } }
+    suspend fun setVoiceGuidanceEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.VOICE_ENABLED] = enabled } }
+    suspend fun setSpeedWarningAudioEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SPEED_AUDIO_ENABLED] = enabled } }
+    suspend fun setSpeedWarningThresholdMph(thresholdMph: Int) { context.rahYabDataStore.edit { it[Keys.SPEED_THRESHOLD_MPH] = thresholdMph.coerceIn(0, 15) } }
+    suspend fun setJunctionPreviewEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.JUNCTION_PREVIEW_ENABLED] = enabled } }
+    suspend fun setAlertSpeedDropEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_DROP] = enabled } }
+    suspend fun setAlertSharpCurveEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SHARP_CURVE] = enabled } }
+    suspend fun setAlertTollBoothEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_TOLL_BOOTH] = enabled } }
+    suspend fun setAlertRailroadEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_RAILROAD] = enabled } }
+    suspend fun setAlertSchoolZoneEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SCHOOL_ZONE] = enabled } }
+    suspend fun setAlertStopSignEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_STOP_SIGN] = enabled } }
+    suspend fun setAlertSpeedCameraEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_CAMERA] = enabled } }
+    suspend fun setAlertRedLightCameraEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_RED_LIGHT_CAMERA] = enabled } }
+    suspend fun setAlertSpeedBumpEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_BUMP] = enabled } }
+    suspend fun setAlertSteepGradeEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_STEEP_GRADE] = enabled } }
+    suspend fun setShowTrafficLights(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SHOW_TRAFFIC_LIGHTS] = enabled } }
+    suspend fun set3DView(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.IS_3D_VIEW] = enabled } }
+    suspend fun setRoutePreference(preference: RoutePreference) { context.rahYabDataStore.edit { it[Keys.ROUTE_PREFERENCE] = preference.code } }
+    suspend fun setAvoidTolls(avoid: Boolean) { context.rahYabDataStore.edit { it[Keys.AVOID_TOLLS] = avoid } }
+    suspend fun setAvoidHighways(avoid: Boolean) { context.rahYabDataStore.edit { it[Keys.AVOID_HIGHWAYS] = avoid } }
+    suspend fun setAvoidFerries(avoid: Boolean) { context.rahYabDataStore.edit { it[Keys.AVOID_FERRIES] = avoid } }
+    suspend fun setDefaultTravelMode(mode: TravelMode) { context.rahYabDataStore.edit { it[Keys.DEFAULT_TRAVEL_MODE] = mode.code } }
+    suspend fun setLastTravelMode(mode: TravelMode) { context.rahYabDataStore.edit { it[Keys.LAST_TRAVEL_MODE] = mode.code } }
+    suspend fun setWalkingSpeedPreset(preset: WalkingSpeedPreset) { context.rahYabDataStore.edit { it[Keys.WALKING_SPEED_PRESET] = preset.code } }
+    suspend fun setCyclingSpeedPreset(preset: CyclingSpeedPreset) { context.rahYabDataStore.edit { it[Keys.CYCLING_SPEED_PRESET] = preset.code } }
+    suspend fun setAvoidHillsWhenCycling(avoid: Boolean) { context.rahYabDataStore.edit { it[Keys.AVOID_HILLS_WHEN_CYCLING] = avoid } }
 
     suspend fun setGitHubRepository(owner: String, repo: String) {
         context.rahYabDataStore.edit {
@@ -287,53 +171,18 @@ class UserPreferencesRepository(private val context: Context) {
         context.rahYabDataStore.edit { it[Keys.PACK_BASE_URL] = cleaned }
     }
 
-    suspend fun setOnboardingCompleted(completed: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ONBOARDING_COMPLETED] = completed }
-    }
-
-    suspend fun setDevOnlineOregonMode(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.DEV_ONLINE_OREGON] = enabled }
-    }
-
-    suspend fun setSimulateDriveEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.SIMULATE_DRIVE] = enabled }
-    }
-
-    suspend fun markPersianTtsNoticeShown() {
-        context.rahYabDataStore.edit { it[Keys.PERSIAN_TTS_NOTICE_SHOWN] = true }
-    }
-
-    suspend fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] = enabled }
-    }
-
-    suspend fun setOnlineFeaturesEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ONLINE_FEATURES_ENABLED] = enabled }
-    }
-
-    suspend fun setOnlineWeatherAlertsEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ONLINE_WEATHER_ALERTS_ENABLED] = enabled }
-    }
-
-    suspend fun setOnlineSearchFallbackEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] = enabled }
-    }
-
-    suspend fun setAutoCheckMapUpdatesEnabled(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] = enabled }
-    }
-
-    suspend fun setWifiOnlyLargeDownloads(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.WIFI_ONLY_LARGE_DOWNLOADS] = enabled }
-    }
-
-    suspend fun setAutoUpdateMapsOnWifi(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.AUTO_UPDATE_MAPS_ON_WIFI] = enabled }
-    }
-
-    suspend fun setLastManifestCheckEpochMs(epochMs: Long) {
-        context.rahYabDataStore.edit { it[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] = epochMs }
-    }
+    suspend fun setOnboardingCompleted(completed: Boolean) { context.rahYabDataStore.edit { it[Keys.ONBOARDING_COMPLETED] = completed } }
+    suspend fun setDevOnlineOregonMode(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.DEV_ONLINE_OREGON] = enabled } }
+    suspend fun setSimulateDriveEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SIMULATE_DRIVE] = enabled } }
+    suspend fun markPersianTtsNoticeShown() { context.rahYabDataStore.edit { it[Keys.PERSIAN_TTS_NOTICE_SHOWN] = true } }
+    suspend fun setUseEnglishVoiceInPersianMode(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] = enabled } }
+    suspend fun setOnlineFeaturesEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_FEATURES_ENABLED] = enabled } }
+    suspend fun setOnlineWeatherAlertsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_WEATHER_ALERTS_ENABLED] = enabled } }
+    suspend fun setOnlineSearchFallbackEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] = enabled } }
+    suspend fun setAutoCheckMapUpdatesEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] = enabled } }
+    suspend fun setWifiOnlyLargeDownloads(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.WIFI_ONLY_LARGE_DOWNLOADS] = enabled } }
+    suspend fun setAutoUpdateMapsOnWifi(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.AUTO_UPDATE_MAPS_ON_WIFI] = enabled } }
+    suspend fun setLastManifestCheckEpochMs(epochMs: Long) { context.rahYabDataStore.edit { it[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] = epochMs } }
 
     suspend fun setLastMapUpdateCheck(epochMs: Long, result: String) {
         context.rahYabDataStore.edit {
@@ -342,18 +191,14 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun setShow3DBuildings(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.SHOW_3D_BUILDINGS] = enabled }
-    }
+    suspend fun setShow3DBuildings(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SHOW_3D_BUILDINGS] = enabled } }
 
     suspend fun setPositionMarkerStyle(style: String) {
         val safe = if (style == "car") "car" else "arrow"
         context.rahYabDataStore.edit { it[Keys.POSITION_MARKER_STYLE] = safe }
     }
 
-    suspend fun setSkipParkingAtHome(enabled: Boolean) {
-        context.rahYabDataStore.edit { it[Keys.SKIP_PARKING_AT_HOME] = enabled }
-    }
+    suspend fun setSkipParkingAtHome(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SKIP_PARKING_AT_HOME] = enabled } }
 
     suspend fun setCarBluetoothDevice(address: String, name: String) {
         context.rahYabDataStore.edit {

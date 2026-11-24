@@ -373,7 +373,8 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             avoidHighways = s.avoidHighways,
             avoidFerries = s.avoidFerries,
             preferShortest = s.routePreference == RoutePreference.SHORTEST,
-            avoidLocations = closures
+            avoidLocations = closures,
+            travelMode = TravelMode.DRIVE
         )
     }
 }

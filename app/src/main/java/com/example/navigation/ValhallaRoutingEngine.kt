@@ -126,20 +126,22 @@ class ValhallaRoutingEngine(
                         ?: throw IllegalStateException("Valhalla routing engine could not initialize for installed tiles.")
                     val fastestRaw = engine.routeRaw(fastestRequestJson)
                     val fastestParsed = ValhallaResponseParser.parseRoutes(fastestRaw)
-                    val shortestParsed = if (options.isPedestrian) null else runCatching {
-                        ValhallaResponseParser.parseRoutes(engine.routeRaw(shortestRequestJson)).firstOrNull()
+                        .map { it.copy(travelMode = options.travelMode) }
+                    val shortestParsed = if (options.travelMode != TravelMode.DRIVE) null else runCatching {
+                        ValhallaResponseParser.parseRoutes(engine.routeRaw(shortestRequestJson))
+                            .firstOrNull()?.copy(travelMode = options.travelMode)
                     }.getOrNull()
                     val merged = ValhallaResponseParser.mergeFastestAndShortestRoutes(
                         fastestRoutes = fastestParsed,
                         shortestRoute = shortestParsed,
                         preferShortest = options.preferShortest
-                    )
+                    ).map { it.copy(travelMode = options.travelMode) }
                     if (merged.isEmpty()) {
                         throw IllegalStateException("No offline route found between these locations.")
                     }
                     var anyTraceSucceeded = false
-                    val enriched = if (options.isPedestrian) merged else merged.map { route ->
-                        val traced = enrichRouteOffline(engine, route)
+                    val enriched = merged.map { route ->
+                        val traced = enrichRouteOffline(engine, route, options.travelMode)
                         if (traced.speedLimitsByShapeIndex.size > route.speedLimitsByShapeIndex.size) {
                             anyTraceSucceeded = true
                         }
@@ -171,20 +173,22 @@ class ValhallaRoutingEngine(
         if (allowDevOnlineFallback) {
             return@withContext runCatching {
                 val fastestParsed = executeOnlineValhallaRequest(fastestRequestJson)
-                val shortestParsed = if (options.isPedestrian) null else runCatching {
-                    executeOnlineValhallaRequest(shortestRequestJson).firstOrNull()
+                    .map { it.copy(travelMode = options.travelMode) }
+                val shortestParsed = if (options.travelMode != TravelMode.DRIVE) null else runCatching {
+                    executeOnlineValhallaRequest(shortestRequestJson)
+                        .firstOrNull()?.copy(travelMode = options.travelMode)
                 }.getOrNull()
                 val merged = ValhallaResponseParser.mergeFastestAndShortestRoutes(
                     fastestRoutes = fastestParsed,
                     shortestRoute = shortestParsed,
                     preferShortest = options.preferShortest
-                )
+                ).map { it.copy(travelMode = options.travelMode) }
                 if (merged.isEmpty()) {
                     throw IllegalStateException("No route returned from public Valhalla test server.")
                 }
                 var anyTraceSucceeded = false
-                val enriched = if (options.isPedestrian) merged else merged.map { route ->
-                    val traced = enrichRouteOnline(route)
+                val enriched = merged.map { route ->
+                    val traced = enrichRouteOnline(route, options.travelMode)
                     if (traced.speedLimitsByShapeIndex.size > route.speedLimitsByShapeIndex.size) {
                         anyTraceSucceeded = true
                     }
@@ -205,11 +209,15 @@ class ValhallaRoutingEngine(
         )
     }
 
-    private fun enrichRouteOffline(engine: Valhalla, route: OfflineRoute): OfflineRoute {
+    private fun enrichRouteOffline(
+        engine: Valhalla,
+        route: OfflineRoute,
+        travelMode: TravelMode = TravelMode.DRIVE
+    ): OfflineRoute {
         if (route.shape.size < 2) return route
         return runCatching {
             val encoded = ValhallaResponseParser.encodePolyline6(route.shape)
-            val traceReq = ValhallaResponseParser.buildTraceAttributesRequestJson(encoded)
+            val traceReq = ValhallaResponseParser.buildTraceAttributesRequestJson(encoded, travelMode)
             val traceRaw = engine.traceAttributesRaw(traceReq)
             ValhallaResponseParser.enrichRouteWithTraceAttributes(route, traceRaw)
         }.onFailure { err ->
@@ -217,11 +225,14 @@ class ValhallaRoutingEngine(
         }.getOrDefault(route)
     }
 
-    private fun enrichRouteOnline(route: OfflineRoute): OfflineRoute {
+    private fun enrichRouteOnline(
+        route: OfflineRoute,
+        travelMode: TravelMode = TravelMode.DRIVE
+    ): OfflineRoute {
         if (route.shape.size < 2) return route
         return runCatching {
             val encoded = ValhallaResponseParser.encodePolyline6(route.shape)
-            val traceReq = ValhallaResponseParser.buildTraceAttributesRequestJson(encoded)
+            val traceReq = ValhallaResponseParser.buildTraceAttributesRequestJson(encoded, travelMode)
             val mediaType = "application/json; charset=utf-8".toMediaType()
             val req = Request.Builder()
                 .url(DEV_PUBLIC_VALHALLA_TRACE_URL)

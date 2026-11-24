@@ -75,9 +75,12 @@ class CameraFollowController {
         isNavigating: Boolean,
         simulationSpeedMultiplier: Int = 1,
         forceImmediate: Boolean = false,
-        isWalkingMode: Boolean = false
+        isWalkingMode: Boolean = false,
+        travelMode: TravelMode = if (isWalkingMode) TravelMode.WALK else TravelMode.DRIVE
     ): CameraFollowUpdate? {
-        val targetBearing = if (isHeadingUpMode) {
+        val effectiveMode = if (isWalkingMode) TravelMode.WALK else travelMode
+        val effectiveHeadingUp = if (effectiveMode == TravelMode.BIKE) true else isHeadingUpMode
+        val targetBearing = if (effectiveHeadingUp) {
             CompassTracker.normalizeAngle(headingDegrees)
         } else {
             0f
@@ -95,19 +98,23 @@ class CameraFollowController {
             abs(CompassTracker.shortestAngleDelta(lastAnimatedBearing, targetBearing))
         }
 
-        val modeChanged = lastAnimatedHeadingUp != isHeadingUpMode
+        val modeChanged = lastAnimatedHeadingUp != effectiveHeadingUp
 
         if (!forceImmediate && !modeChanged && movedMeters < MIN_MOVE_METERS && bearingDelta < MIN_BEARING_CHANGE_DEG) {
             return null
         }
 
-        val targetZoom = if (isWalkingMode) 17.0 else targetZoomForSpeedMps(speedMps, isNavigating)
+        val targetZoom = when (effectiveMode) {
+            TravelMode.WALK -> 17.0
+            TravelMode.BIKE -> 16.0
+            TravelMode.DRIVE -> targetZoomForSpeedMps(speedMps, isNavigating)
+        }
         val nextZoom = smoothZoom(targetZoom, forceImmediate)
 
         val tilt = when {
-            isWalkingMode -> 0.0
+            effectiveMode != TravelMode.DRIVE -> 0.0
             !is3DView -> 0.0
-            isHeadingUpMode -> if (isNavigating) 55.0 else 45.0
+            effectiveHeadingUp -> if (isNavigating) 55.0 else 45.0
             else -> 0.0
         }
 

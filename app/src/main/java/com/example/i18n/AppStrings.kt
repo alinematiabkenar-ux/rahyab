@@ -431,6 +431,32 @@ interface AppStrings {
     val carArrivedTitle: String
     val carReroutingTitle: String
     val carAlertDismiss: String
+    // Phase M: Walking & Bicycle routing
+    val travelModeDrive: String
+    val travelModeWalk: String
+    val travelModeBike: String
+    val travelModeTooFar: String
+    val settingsSectionTravelModes: String
+    val settingsDefaultTravelMode: String
+    val settingsWalkingSpeed: String
+    val settingsWalkSlow: String
+    val settingsWalkNormal: String
+    val settingsWalkFast: String
+    val settingsCyclingSpeed: String
+    val settingsBikeRelaxed: String
+    val settingsBikeNormal: String
+    val settingsBikeFast: String
+    val settingsAvoidHillsCycling: String
+    val carWalkBikePhoneOnlyNotice: String
+    // Phase J & X: Junction view, steep grades, FRA & HPMS
+    val settingsJunctionViewTitle: String
+    val alertToggleSteepGrade: String
+    val fraWithGates: String
+    val fraLightsOnly: String
+    val fraNoGatesOrLights: String
+    val diagSpeedLimitSourceLabel: String
+    val diagExtrasDbStatusLabel: String
+    val extrasAttributionFull: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

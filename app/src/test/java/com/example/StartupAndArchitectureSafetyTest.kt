@@ -292,4 +292,17 @@ class StartupAndArchitectureSafetyTest {
         assertFalse(freshApp.isCompassTrackerInitialized)
         assertFalse(freshApp.isRoutingEngineInitialized)
     }
+
+    /**
+     * R15 architectural guardrail: fails if any non-exempt Kotlin source file under
+     * `app/src/main/java` exceeds 450 lines. Exempts i18n string tables and DEFERRED R6–R14 files.
+     */
+    @Test
+    fun noNonExemptKotlinSourceExceeds450Lines() {
+        val violations = ArchitectureLineCountTest.findLineCountViolations()
+        assertTrue(
+            "Found non-exempt Kotlin source files exceeding 450 lines:\n${violations.joinToString("\n")}",
+            violations.isEmpty()
+        )
+    }
 }

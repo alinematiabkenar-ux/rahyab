@@ -51,6 +51,11 @@ from address_utils import (
     normalize_street,
     populate_addresses_fts,
 )
+from extras_builder import (
+    build_elevation_tiles,
+    build_extras_db,
+    verify_valhalla_test_route,
+)
 from states import ALL_PACK_CATALOG, US_STATES, resolve_pack_targets
 
 GEOFABRIK_INDEX_URL = "https://download.geofabrik.de/index-v1-nogeom.json"
@@ -537,26 +542,65 @@ def prepare_buffered_routing_pbf(
     return merged_pbf
 
 
-def build_valhalla_tiles(pack_code: str, pbf_path: Path, work_dir: Path, out_tar: Path) -> None:
+def build_valhalla_tiles(
+    pack_code: str,
+    pbf_path: Path,
+    work_dir: Path,
+    out_tar: Path,
+    bbox: tuple[float, float, float, float] | None = None,
+) -> None:
     tile_dir = work_dir / f"valhalla_tiles_{pack_code}"
-    if tile_dir.exists():
-        shutil.rmtree(tile_dir)
-    tile_dir.mkdir(parents=True, exist_ok=True)
-
     config_path = work_dir / f"valhalla_{pack_code}.json"
-    print(f"[valhalla] Generating Valhalla config at {config_path}", flush=True)
-    with config_path.open("w") as cfg_file:
-        subprocess.run([
+    elevation_dir = work_dir / f"valhalla_elevation_{pack_code}"
+
+    def _run_valhalla_build(active_elevation_dir: Path | None) -> None:
+        if tile_dir.exists():
+            shutil.rmtree(tile_dir)
+        tile_dir.mkdir(parents=True, exist_ok=True)
+        cfg_cmd = [
             "valhalla_build_config",
             "--mjolnir-tile-dir", str(tile_dir),
             "--mjolnir-tile-extract", "",
             "--mjolnir-traffic-extract", "",
             "--mjolnir-admin", "",
             "--mjolnir-timezone", "",
-        ], stdout=cfg_file, check=True)
+        ]
+        if active_elevation_dir is not None:
+            cfg_cmd.extend(["--additional-data-elevation", str(active_elevation_dir)])
+        print(f"[valhalla] Generating Valhalla config at {config_path}", flush=True)
+        with config_path.open("w") as cfg_file:
+            subprocess.run(cfg_cmd, stdout=cfg_file, check=True)
+        print(f"[valhalla] Building routing tiles for {pack_code.upper()} from {pbf_path.name}", flush=True)
+        run_cmd(["valhalla_build_tiles", "-c", str(config_path), str(pbf_path)])
 
-    print(f"[valhalla] Building routing tiles for {pack_code.upper()} from {pbf_path.name}", flush=True)
-    run_cmd(["valhalla_build_tiles", "-c", str(config_path), str(pbf_path)])
+    used_elevation_dir: Path | None = None
+    if bbox is not None:
+        try:
+            used_elevation_dir = build_elevation_tiles(pack_code, bbox, elevation_dir)
+        except Exception as exc:
+            print(f"[warn] extras step elevation skipped: {exc}", flush=True)
+            used_elevation_dir = None
+
+    built_ok = False
+    if used_elevation_dir is not None:
+        try:
+            _run_valhalla_build(used_elevation_dir)
+            if verify_valhalla_test_route(pack_code, config_path):
+                built_ok = True
+            else:
+                print(
+                    "[warn] extras step elevation skipped: test route check failed with elevation; rebuilding without elevation",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(
+                f"[warn] extras step elevation skipped: build with elevation failed ({exc}); rebuilding without elevation",
+                flush=True,
+            )
+
+    if not built_ok:
+        _run_valhalla_build(None)
+        verify_valhalla_test_route(pack_code, config_path)
 
     print(f"[valhalla] Packing routing tiles into {out_tar}", flush=True)
     with tarfile.open(out_tar, "w") as tar:
@@ -567,6 +611,7 @@ def build_valhalla_tiles(pack_code: str, pbf_path: Path, work_dir: Path, out_tar
                 tar.add(full, arcname=str(rel))
 
     shutil.rmtree(tile_dir, ignore_errors=True)
+    shutil.rmtree(elevation_dir, ignore_errors=True)
 
 
 def _duckdb_struct_has_field(col_type: str, field_name: str) -> bool:
@@ -1769,6 +1814,11 @@ def write_pack_manifest_entry(
         "valhalla": vh_e,
         "places": db_e,
     }
+    extras_db = output_dir / f"{pack_code}_extras.db"
+    if extras_db.is_file() and extras_db.stat().st_size > 0:
+        ex_e = split_file_if_needed(extras_db, base_url)
+        entry["extras"] = ex_e
+        entry["optionalSizeBytes"] = ex_e["sizeBytes"]
     single_manifest = output_dir / f"manifest_{pack_code}.json"
     single_manifest.write_text(json.dumps(entry, indent=2), encoding="utf-8")
     return entry
@@ -1903,7 +1953,13 @@ def build_pack(
         )
         _run_pack_stage(
             "valhalla",
-            lambda: build_valhalla_tiles(code, buffered_pbf, cache_dir, output_dir / f"{code}_valhalla.tar"),
+            lambda: build_valhalla_tiles(
+                code,
+                buffered_pbf,
+                cache_dir,
+                output_dir / f"{code}_valhalla.tar",
+                bbox=meta["bbox"],
+            ),
         )
         if buffered_pbf != primary_pbf:
             buffered_pbf.unlink(missing_ok=True)
@@ -1917,6 +1973,11 @@ def build_pack(
                 code, meta["abbr"], meta["bbox"], primary_pbf, overture_release, output_dir / f"{code}_places.db"
             ),
         )
+
+    try:
+        build_extras_db(code, meta["abbr"], meta["bbox"], output_dir / f"{code}_extras.db")
+    except Exception as exc:
+        print(f"[warn] extras step build_extras_db skipped: {exc}", flush=True)
 
     return write_pack_manifest_entry(
         code,

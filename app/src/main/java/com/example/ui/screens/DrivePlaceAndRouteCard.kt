@@ -97,6 +97,9 @@ internal fun PlaceAndRoutePreviewCard(
     onToggleAvoidFerries: (Boolean) -> Unit,
     onSaveAs: (SavedPlaceType) -> Unit,
     onDownloadMissingState: (String) -> Unit,
+    selectedTravelMode: com.example.navigation.TravelMode = com.example.navigation.TravelMode.DRIVE,
+    modePreviewSummaries: Map<com.example.navigation.TravelMode, ModePreviewSummary> = emptyMap(),
+    onSelectTravelMode: (com.example.navigation.TravelMode) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -137,6 +140,13 @@ internal fun PlaceAndRoutePreviewCard(
                 }
             }
 
+            // M3: Drive / Walk / Bike mode chips with offline duration & arrival time
+            TravelModeChipsRow(
+                selectedMode = selectedTravelMode,
+                summaries = modePreviewSummaries,
+                onSelectMode = onSelectTravelMode
+            )
+
             // Save shortcuts (Home / Work / Favorite)
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 item {
@@ -165,16 +175,18 @@ internal fun PlaceAndRoutePreviewCard(
                 }
             }
 
-            // Route avoid options
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                item {
-                    FilterChip(selected = avoidTolls, onClick = { onToggleAvoidTolls(!avoidTolls) }, label = { Text(strings.avoidTolls, fontSize = 12.sp) })
-                }
-                item {
-                    FilterChip(selected = avoidHighways, onClick = { onToggleAvoidHighways(!avoidHighways) }, label = { Text(strings.avoidHighways, fontSize = 12.sp) })
-                }
-                item {
-                    FilterChip(selected = avoidFerries, onClick = { onToggleAvoidFerries(!avoidFerries) }, label = { Text(strings.avoidFerries, fontSize = 12.sp) })
+            // Route avoid options (Drive mode only)
+            if (selectedTravelMode == com.example.navigation.TravelMode.DRIVE) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    item {
+                        FilterChip(selected = avoidTolls, onClick = { onToggleAvoidTolls(!avoidTolls) }, label = { Text(strings.avoidTolls, fontSize = 12.sp) })
+                    }
+                    item {
+                        FilterChip(selected = avoidHighways, onClick = { onToggleAvoidHighways(!avoidHighways) }, label = { Text(strings.avoidHighways, fontSize = 12.sp) })
+                    }
+                    item {
+                        FilterChip(selected = avoidFerries, onClick = { onToggleAvoidFerries(!avoidFerries) }, label = { Text(strings.avoidFerries, fontSize = 12.sp) })
+                    }
                 }
             }
 

@@ -287,6 +287,7 @@ fun MapLibreMapContainer(
                     }
                     val rem = if (remPts.size >= 2) {
                         val feat = Feature.fromGeometry(LineString.fromLngLats(remPts)).apply {
+                            addStringProperty("mode", activeNavRoute.travelMode.code)
                             addStringProperty("color", MapStyleBuilder.ROUTE_COLOR_0)
                         }
                         FeatureCollection.fromFeature(feat)

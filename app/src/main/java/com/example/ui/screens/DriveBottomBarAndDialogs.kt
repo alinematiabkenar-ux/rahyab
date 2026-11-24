@@ -14,7 +14,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -63,6 +67,7 @@ internal fun ActiveNavigationBottomBar(
     remainingTimeSeconds: Double,
     hasArrived: Boolean,
     unit: DistanceUnit,
+    travelMode: com.example.navigation.TravelMode = com.example.navigation.TravelMode.DRIVE,
     onEndNavigation: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -104,9 +109,25 @@ internal fun ActiveNavigationBottomBar(
             } else {
                 Row(
                     modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val modeIcon = when (travelMode) {
+                        com.example.navigation.TravelMode.DRIVE -> Icons.Filled.DirectionsCar
+                        com.example.navigation.TravelMode.WALK -> Icons.AutoMirrored.Filled.DirectionsWalk
+                        com.example.navigation.TravelMode.BIKE -> Icons.AutoMirrored.Filled.DirectionsBike
+                    }
+                    val modeDesc = when (travelMode) {
+                        com.example.navigation.TravelMode.DRIVE -> strings.travelModeDrive
+                        com.example.navigation.TravelMode.WALK -> strings.travelModeWalk
+                        com.example.navigation.TravelMode.BIKE -> strings.travelModeBike
+                    }
+                    Icon(
+                        imageVector = modeIcon,
+                        contentDescription = modeDesc,
+                        tint = CyanBeacon,
+                        modifier = Modifier.size(22.dp)
+                    )
                     Column {
                         Text(
                             text = BilingualFormatter.formatDuration(remainingTimeSeconds, language),

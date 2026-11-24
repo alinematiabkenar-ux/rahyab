@@ -31,7 +31,7 @@ internal fun RahYabViewModel.initializeParkingSupportImpl() {
             val candidate = parkedCarManager.onGpsFix(
                 fix = fix,
                 isNavigating = nav.isNavigating,
-                isWalkingMode = nav.isWalkingMode,
+                isWalkingMode = nav.effectiveTravelMode != com.example.navigation.TravelMode.DRIVE,
                 homeLat = home?.lat,
                 homeLon = home?.lon,
                 skipAtHomeEnabled = settings.value.skipParkingAtHome
@@ -44,7 +44,7 @@ internal fun RahYabViewModel.initializeParkingSupportImpl() {
 }
 
 internal fun RahYabViewModel.onNavigationArrivedForParkingImpl(isWalkingMode: Boolean) {
-    if (isWalkingMode || _navigationState.value.isSimulatingDrive) return
+    if (isWalkingMode || _navigationState.value.effectiveTravelMode != com.example.navigation.TravelMode.DRIVE || _navigationState.value.isSimulatingDrive) return
     val home = findHomeSavedPlace()
     val candidate = parkedCarManager.onNavigationArrived(
         currentFix = currentGpsFix.value,
@@ -194,6 +194,7 @@ private fun RahYabViewModel.startWalkingNavigationSessionImpl(
     _navigationState.value = com.example.navigation.ActiveNavigationState(
         isNavigating = true,
         isWalkingMode = true,
+        travelMode = com.example.navigation.TravelMode.WALK,
         route = route,
         destinationName = dest.name,
         destinationAddress = dest.address,
@@ -213,7 +214,12 @@ private fun RahYabViewModel.startWalkingNavigationSessionImpl(
     val etaText = com.example.i18n.BilingualFormatter.formatDuration(route.durationSeconds, s.language)
     com.example.service.NavigationForegroundService.startOrUpdate(
         context = app,
-        title = "${dest.name} • $etaText",
+        title = formatModeNotificationTitle(
+            com.example.navigation.TravelMode.WALK,
+            dest.name,
+            etaText,
+            s.language
+        ),
         body = initialManeuver?.instructionEn ?: dest.name
     )
 

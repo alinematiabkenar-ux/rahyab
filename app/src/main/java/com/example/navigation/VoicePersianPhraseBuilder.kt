@@ -180,4 +180,69 @@ internal object VoicePersianPhraseBuilder {
         5 -> "پنجم"
         else -> "${n}م"
     }
+
+    fun formatSpokenDistance(
+        meters: Double,
+        unit: com.example.i18n.DistanceUnit,
+        language: com.example.i18n.AppLanguage
+    ): String {
+        if (meters < 75.0) return ""
+        return when (unit) {
+            com.example.i18n.DistanceUnit.IMPERIAL -> {
+                val miles = meters / 1609.344
+                val feet = meters * 3.28084
+                if (language == com.example.i18n.AppLanguage.PERSIAN) {
+                    when {
+                        miles in 1.80..2.25 -> "دو مایلی"
+                        miles in 0.88..1.15 -> "یک مایلی"
+                        miles in 0.44..0.58 -> "نیم مایلی"
+                        miles in 0.21..0.31 -> "یک‌چهارم مایلی"
+                        miles >= 0.31 -> "${String.format(java.util.Locale.US, "%.1f", miles).removeSuffix(".0")} مایلی"
+                        feet in 850.0..1150.0 -> "هزار فوتی"
+                        else -> "${((feet / 100.0).let { kotlin.math.round(it).toInt() } * 100).coerceAtLeast(100)} فوتی"
+                    }
+                } else {
+                    when {
+                        miles in 1.80..2.25 -> "2 miles"
+                        miles in 0.88..1.15 -> "1 mile"
+                        miles in 0.44..0.58 -> "half a mile"
+                        miles in 0.21..0.31 -> "a quarter mile"
+                        miles >= 0.31 -> {
+                            val formatted = String.format(java.util.Locale.US, "%.1f", miles).removeSuffix(".0")
+                            if (formatted == "1") "1 mile" else "$formatted miles"
+                        }
+                        feet in 850.0..1150.0 -> "1,000 feet"
+                        else -> "${((feet / 100.0).let { kotlin.math.round(it).toInt() } * 100).coerceAtLeast(100)} feet"
+                    }
+                }
+            }
+            com.example.i18n.DistanceUnit.METRIC -> {
+                val km = meters / 1000.0
+                if (language == com.example.i18n.AppLanguage.PERSIAN) {
+                    when {
+                        meters in 2950.0..3250.0 -> "3 کیلومتری"
+                        meters in 1380.0..1650.0 -> "1.5 کیلومتری"
+                        meters in 720.0..880.0 -> "800 متری"
+                        meters in 350.0..460.0 -> "400 متری"
+                        meters in 250.0..349.0 -> "300 متری"
+                        km >= 1.0 -> "${String.format(java.util.Locale.US, "%.1f", km).removeSuffix(".0")} کیلومتری"
+                        else -> "${((meters / 50.0).let { kotlin.math.round(it).toInt() } * 50).coerceAtLeast(50)} متری"
+                    }
+                } else {
+                    when {
+                        meters in 2950.0..3250.0 -> "3 kilometers"
+                        meters in 1380.0..1650.0 -> "1.5 kilometers"
+                        meters in 720.0..880.0 -> "800 meters"
+                        meters in 350.0..460.0 -> "400 meters"
+                        meters in 250.0..349.0 -> "300 meters"
+                        km >= 1.0 -> {
+                            val formatted = String.format(java.util.Locale.US, "%.1f", km).removeSuffix(".0")
+                            if (formatted == "1") "1 kilometer" else "$formatted kilometers"
+                        }
+                        else -> "${((meters / 50.0).let { kotlin.math.round(it).toInt() } * 50).coerceAtLeast(50)} meters"
+                    }
+                }
+            }
+        }
+    }
 }

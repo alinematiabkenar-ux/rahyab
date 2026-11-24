@@ -288,7 +288,18 @@ fun DiagnosticsScreen(
                                     append("PMTiles: ${BilingualFormatter.formatBytes(pack.fileSizes.pmtilesBytes, language)}")
                                     append(" • Valhalla: ${BilingualFormatter.formatBytes(pack.fileSizes.valhallaBytes, language)}")
                                     append(" • Places: ${BilingualFormatter.formatBytes(pack.fileSizes.placesDbBytes, language)}")
+                                    if (pack.fileSizes.extrasDbBytes > 0L) {
+                                        append(" • Extras: ${BilingualFormatter.formatBytes(pack.fileSizes.extrasDbBytes, language)}")
+                                    }
                                 }
+                                DiagKeyValueRow(
+                                    label = strings.diagExtrasDbStatusLabel,
+                                    value = if (pack.fileSizes.extrasDbBytes > 0L) {
+                                        BilingualFormatter.formatBytes(pack.fileSizes.extrasDbBytes, language)
+                                    } else {
+                                        "—"
+                                    }
+                                )
                                 Text(
                                     text = "${strings.diagFileSizes}: $sizesText",
                                     style = MaterialTheme.typography.bodySmall,

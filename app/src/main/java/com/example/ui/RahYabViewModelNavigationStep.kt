@@ -11,6 +11,7 @@ import com.example.navigation.LocationTracker
 import com.example.navigation.ManeuverType
 import com.example.navigation.RoadAlertKind
 import com.example.navigation.RouteManeuver
+import com.example.navigation.TravelMode
 import com.example.service.NavigationForegroundService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -55,9 +56,12 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     val wasArrived = _navigationState.value.hasArrived
     _navigationState.value = state
 
+    val mode = state.effectiveTravelMode
+    val isDriveMode = mode == TravelMode.DRIVE
+
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc
-    if (!state.isWalkingMode && navPos != null && s.showTrafficLights && state.isNavigating && !state.hasArrived) {
+    if (isDriveMode && navPos != null && s.showTrafficLights && state.isNavigating && !state.hasArrived) {
         refreshNearbyTrafficLightsImpl(navPos.lat, navPos.lon)
         val evalFix = GpsFix(
             lat = navPos.lat,
@@ -76,18 +80,23 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         _aheadTrafficLightMeters.value = null
     }
 
-    if (triggerOverspeedChime && !state.isWalkingMode) {
+    if (triggerOverspeedChime && isDriveMode) {
         voiceManager.playOverspeedChime()
     }
 
     if (state.hasArrived && !wasArrived) {
-        onNavigationArrivedForParkingImpl(isWalkingMode = state.isWalkingMode)
-        val spoken = if (state.isWalkingMode) {
+        onNavigationArrivedForParkingImpl(isWalkingMode = !isDriveMode)
+        val spoken = if (mode == TravelMode.WALK) {
             triggerWalkingArrivalVibrationImpl()
-            voiceManager.speakCustomText(
-                com.example.i18n.stringsFor(s.language).parkedCarArrivedVoice,
-                s.language
-            )
+            if (_selectedPlace.value?.id == "parked_car") {
+                voiceManager.speakCustomText(
+                    com.example.i18n.stringsFor(s.language).parkedCarArrivedVoice,
+                    s.language
+                )
+            } else {
+                val arrivalManeuverType = state.route?.maneuvers?.lastOrNull()?.type ?: ManeuverType.ARRIVE
+                voiceManager.speakArrival(arrivalManeuverType, state.destinationName, s.language)
+            }
         } else {
             val arrivalManeuverType = state.route?.maneuvers?.lastOrNull()?.type ?: ManeuverType.ARRIVE
             voiceManager.speakArrival(arrivalManeuverType, state.destinationName, s.language)
@@ -108,17 +117,19 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 unit = s.distanceUnit,
                 language = s.language,
                 announcementStage = stage,
-                includeLaneGuidance = !state.isWalkingMode && maneuver.lanes.isNotEmpty()
+                includeLaneGuidance = isDriveMode && maneuver.lanes.isNotEmpty()
             )
             _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
         }
-        if (!state.isWalkingMode) {
+        if (mode != TravelMode.WALK) {
             alertToSpeak?.let { alert ->
-                if (alert.kind == RoadAlertKind.SPEED_CAMERA || alert.kind == RoadAlertKind.RED_LIGHT_CAMERA) {
+                if (isDriveMode && (alert.kind == RoadAlertKind.SPEED_CAMERA || alert.kind == RoadAlertKind.RED_LIGHT_CAMERA)) {
                     voiceManager.playCameraAlertSound()
                 }
                 voiceManager.speakAlert(alert, s.language, s.distanceUnit)
             }
+        }
+        if (isDriveMode) {
             evaluateSpeedBumpForNavigationImpl(state, fallbackLoc, speedMps)
         }
     }
@@ -134,7 +145,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         val etaStr = BilingualFormatter.formatDuration(state.remainingTimeSeconds, s.language)
         NavigationForegroundService.updateNotification(
             context = app,
-            title = "$distStr • $etaStr",
+            title = formatModeNotificationTitle(mode, distStr, etaStr, s.language),
             body = currentManeuver.streetNames.firstOrNull()?.ifBlank { currentManeuver.instructionEn }
                 ?: currentManeuver.instructionEn
         )
@@ -172,7 +183,8 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 isNavigating = true,
                 simulationSpeedMultiplier = simMultiplier,
                 forceImmediate = forceRecenterNow,
-                isWalkingMode = state.isWalkingMode
+                isWalkingMode = state.isWalkingMode,
+                travelMode = mode
             )
             if (update != null) {
                 _cameraCommand.value = CameraTargetCommand(
@@ -208,14 +220,18 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
 internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
     val dest = _selectedPlace.value ?: return
     val s = settings.value
-    val isWalking = _navigationState.value.isWalkingMode
-    val routingHeading = if (isWalking) null else LocationTracker.resolveRoutingHeadingDegrees(fix)
+    val activeMode = _navigationState.value.effectiveTravelMode
+    val routingHeading = if (activeMode == TravelMode.DRIVE) {
+        LocationTracker.resolveRoutingHeadingDegrees(fix)
+    } else {
+        null
+    }
     voiceManager.speakRerouting(s.language)
     viewModelScope.launch {
         val res = routingEngine.calculateRoutes(
             origin = LatLon(fix.lat, fix.lon),
             destination = LatLon(dest.lat, dest.lon),
-            options = if (isWalking) com.example.navigation.RouteOptions(isPedestrian = true) else buildCurrentRouteOptionsImpl(s),
+            options = buildCurrentRouteOptionsImpl(s, activeMode),
             headingDegrees = routingHeading,
             allowDevOnlineFallback = s.devOnlineOregonMode
         )
@@ -229,6 +245,8 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
             }
             _navigationState.value = _navigationState.value.copy(
                 route = newRoute,
+                travelMode = activeMode,
+                isWalkingMode = (activeMode == TravelMode.WALK),
                 currentManeuverIndex = 0,
                 snappedShapeIndex = 0,
                 isOffRoute = false,
@@ -243,7 +261,7 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
             val etaStr = BilingualFormatter.formatDuration(newRoute.durationSeconds, s.language)
             NavigationForegroundService.updateNotification(
                 context = app,
-                title = "${dest.name} • $etaStr",
+                title = formatModeNotificationTitle(activeMode, dest.name, etaStr, s.language),
                 body = firstManeuver?.streetNames?.firstOrNull()?.ifBlank { firstManeuver.instructionEn }
                     ?: firstManeuver?.instructionEn
                     ?: dest.name,

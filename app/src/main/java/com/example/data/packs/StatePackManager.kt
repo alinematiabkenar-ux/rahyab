@@ -8,15 +8,12 @@ import com.example.data.local.InstalledPackEntity
 import com.example.data.local.PackInstallStatus
 import com.example.data.model.UsStatesCatalog
 import com.example.data.online.OnlineHttpConfig
-import com.example.util.CrashLogManager
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,36 +21,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.RandomAccessFile
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.TimeUnit
-import java.util.zip.ZipInputStream
 
 /**
- * Manages offline US state & regional map packs on device storage.
- *
- * Each pack consists of 3 files under `<filesDir>/packs/<packCode>/`:
- *  - `<packCode>.pmtiles`      (Protomaps vector tiles for MapLibre Native)
- *  - `<packCode>_valhalla.tar` (Valhalla routing tile archive with ~30-mile neighbor border buffer,
- *                               also extracted into `<filesDir>/valhalla_tiles/` so routes cross
- *                               state lines seamlessly without conflicts or duplicate roads)
- *  - `<packCode>_places.db`    (SQLite FTS5 places, brands, addresses, and road hazards database)
- *
- * Supports:
- *  - Multi-state download queue with pause, resume, and automatic retry on transient network loss
- *  - Multi-part GitHub Release asset download + concatenation (> 2 GiB assets split into .part001...)
- *  - Full SHA-256 checksum verification before installation
- *  - Build version tracking & cross-pack build mismatch detection
- *  - Zero-permission Android Storage Access Framework local file import (.zip, .pmtiles, .tar, .db)
+ * Coordinates offline US state & regional map packs on device storage.
+ * Delegates archive extraction/validation to [PackArchiveAndValidation], HTTP transfers to
+ * [PackHttpDownloader], retry/smart-diff execution to [PackDownloadExecutor], and startup audit/import
+ * to [PackAuditAndImportHelper].
  */
 class StatePackManager(
     private val context: Context,
@@ -61,21 +38,15 @@ class StatePackManager(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val queueMutex = Mutex()
-    private val downloadQueue = ConcurrentLinkedQueue<Pair<String, String>>() // (packCode, baseUrl)
+    private val downloadQueue = ConcurrentLinkedQueue<Pair<String, String>>()
     private var queueWorkerJob: Job? = null
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .build()
-
+    private val httpDownloader = PackHttpDownloader()
     private val manifestHttpClient = OnlineHttpConfig.createShortTimeoutClient(timeoutSeconds = 5L)
 
     private val moshi = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
         .build()
-
     private val manifestAdapter = moshi.adapter(PackManifest::class.java)
 
     private val activeJobs = ConcurrentHashMap<String, Job>()
@@ -112,11 +83,6 @@ class StatePackManager(
     val packsRootDir: File
         get() = File(context.filesDir, "packs").apply { mkdirs() }
 
-    /**
-     * Unified Valhalla tile directory where all downloaded states/regions extract their
-     * hierarchical Valhalla tiles (0/, 1/, 2/...). Because adjacent states overlap by ~30 miles
-     * at the border, extracting into a unified directory deduplicates identical tile IDs cleanly.
-     */
     val unifiedValhallaTileDir: File
         get() = File(context.filesDir, "valhalla_tiles").apply { mkdirs() }
 
@@ -129,57 +95,45 @@ class StatePackManager(
     fun valhallaTarFile(stateCode: String): File =
         File(stateDir(stateCode), "${stateCode.lowercase()}_valhalla.tar")
 
-    fun placesDbFile(stateCode: String): File =
-        File(stateDir(stateCode), "${stateCode.lowercase()}_places.db")
+    fun placesDbFile(stateCode: String): File = File(stateDir(stateCode), "${stateCode.lowercase()}_places.db")
+    fun extrasDbFile(stateCode: String): File = File(stateDir(stateCode), "${stateCode.lowercase()}_extras.db")
 
-    fun getAvailableStorageBytes(): Long {
-        return try {
-            val stat = StatFs(context.filesDir.absolutePath)
-            stat.availableBytes
-        } catch (_: Exception) {
-            0L
-        }
+    fun getAvailableStorageBytes(): Long = try {
+        StatFs(context.filesDir.absolutePath).availableBytes
+    } catch (_: Exception) {
+        0L
     }
 
-    fun getTotalMapStorageUsedBytes(): Long {
-        return folderSizeBytes(packsRootDir) + folderSizeBytes(unifiedValhallaTileDir)
-    }
+    fun getTotalMapStorageUsedBytes(): Long =
+        PackArchiveAndValidation.folderSizeBytes(packsRootDir) +
+            PackArchiveAndValidation.folderSizeBytes(unifiedValhallaTileDir)
 
-    fun getStateDiskBytes(stateCode: String): Long = folderSizeBytes(stateDir(stateCode))
+    fun getStateDiskBytes(stateCode: String): Long =
+        PackArchiveAndValidation.folderSizeBytes(stateDir(stateCode))
 
     fun isLowStorageForPack(packSizeBytes: Long): Boolean {
         val required = (packSizeBytes * 1.5).toLong() + 250L * 1024L * 1024L
         return getAvailableStorageBytes() < required
     }
 
-    fun getInstalledPmtilesFiles(): List<Pair<String, File>> {
-        return UsStatesCatalog.allPackEntries.mapNotNull { state ->
+    fun getInstalledPmtilesFiles(): List<Pair<String, File>> =
+        UsStatesCatalog.allPackEntries.mapNotNull { state ->
             val file = pmtilesFile(state.code)
-            if (file.exists() && isValidPmtilesFile(file)) {
-                state.code to file
-            } else {
-                null
-            }
+            if (file.exists() && isValidPmtilesFile(file)) state.code to file else null
         }
+
+    fun getInstalledPlacesDatabases(): List<Pair<String, File>> = UsStatesCatalog.allPackEntries.mapNotNull { state ->
+        placesDbFile(state.code).takeIf { it.exists() && isValidPlacesDb(it) }?.let { state.code to it }
+    }
+    fun getInstalledExtrasDatabases(): List<Pair<String, File>> = UsStatesCatalog.allPackEntries.mapNotNull { state ->
+        extrasDbFile(state.code).takeIf { it.exists() && it.length() > 1024L }?.let { state.code to it }
     }
 
-    fun getInstalledPlacesDatabases(): List<Pair<String, File>> {
-        return UsStatesCatalog.allPackEntries.mapNotNull { state ->
-            val file = placesDbFile(state.code)
-            if (file.exists() && isValidPlacesDb(file)) {
-                state.code to file
-            } else {
-                null
-            }
-        }
-    }
-
-    fun getInstalledRoutingPackCodes(): Set<String> {
-        return UsStatesCatalog.allPackEntries.mapNotNull { state ->
+    fun getInstalledRoutingPackCodes(): Set<String> =
+        UsStatesCatalog.allPackEntries.mapNotNull { state ->
             val tar = valhallaTarFile(state.code)
             if (tar.exists() && tar.length() > 512L) state.code else null
         }.toSet()
-    }
 
     fun hasAnyValidValhallaTiles(): Boolean {
         val dir = unifiedValhallaTileDir
@@ -187,17 +141,12 @@ class StatePackManager(
         return dir.walkTopDown().any { it.isFile && it.name.endsWith(".gph") && it.length() > 0L }
     }
 
-    fun getInstalledValhallaTarFiles(): List<File> {
-        return UsStatesCatalog.allPackEntries.mapNotNull { state ->
+    fun getInstalledValhallaTarFiles(): List<File> =
+        UsStatesCatalog.allPackEntries.mapNotNull { state ->
             val tar = valhallaTarFile(state.code)
             if (tar.exists() && tar.length() > 512L) tar else null
         }
-    }
 
-    /**
-     * Checks whether installed state packs came from different data build versions.
-     * Returns the list of distinct non-blank build versions if > 1 (warning needed), or empty list if aligned.
-     */
     suspend fun getMismatchedBuildVersions(): List<String> = withContext(Dispatchers.IO) {
         val installed = installedPackDao.getAllOnce().filter {
             it.status == PackInstallStatus.INSTALLED.name || it.status == PackInstallStatus.UPDATE_AVAILABLE.name
@@ -209,94 +158,8 @@ class StatePackManager(
         if (versions.size > 1) versions else emptyList()
     }
 
-    /**
-     * Audits disk files against Room pack metadata at startup so corrupted, partial,
-     * or manually removed packs never crash the app.
-     */
     suspend fun auditInstalledPacks() = withContext(Dispatchers.IO) {
-        val existing = installedPackDao.getAllOnce().associateBy { it.stateCode.lowercase() }
-        for (state in UsStatesCatalog.allPackEntries) {
-            val code = state.code
-            val pm = pmtilesFile(code)
-            val vh = valhallaTarFile(code)
-            val db = placesDbFile(code)
-            val anyPresent = pm.exists() || vh.exists() || db.exists()
-            val record = existing[code]
-
-            if (!anyPresent && record == null) continue
-
-            val pmValid = pm.exists() && isValidPmtilesFile(pm)
-            val vhValid = vh.exists() && vh.length() > 512L
-            val dbValid = db.exists() && isValidPlacesDb(db)
-
-            val currentStatus = record?.status?.let {
-                runCatching { PackInstallStatus.valueOf(it) }.getOrNull()
-            }
-
-            if (currentStatus == PackInstallStatus.DOWNLOADING ||
-                currentStatus == PackInstallStatus.PAUSED ||
-                currentStatus == PackInstallStatus.QUEUED
-            ) {
-                if (activeJobs[code]?.isActive != true) {
-                    installedPackDao.upsert(
-                        record.copy(
-                            status = PackInstallStatus.PAUSED.name,
-                            hasPmtiles = pmValid,
-                            hasValhalla = vhValid,
-                            hasPlacesDb = dbValid,
-                            updatedAt = System.currentTimeMillis()
-                        )
-                    )
-                }
-                continue
-            }
-
-            val computedStatus = when {
-                pmValid && vhValid && dbValid -> {
-                    // NEVER create indexes during startup audit — large places DBs (490+ MB) must open instantly
-                    val manifestEntry = _manifest.value?.states?.find { it.stateCode.equals(code, true) }
-                    if (manifestEntry != null && record != null &&
-                        MapUpdateVersionHelper.isNewerVersion(record.installedVersion, manifestEntry.version)
-                    ) {
-                        PackInstallStatus.UPDATE_AVAILABLE
-                    } else {
-                        PackInstallStatus.INSTALLED
-                    }
-                }
-                pmValid || vhValid || dbValid -> PackInstallStatus.CORRUPTED
-                else -> PackInstallStatus.NOT_DOWNLOADED
-            }
-
-            if (computedStatus == PackInstallStatus.NOT_DOWNLOADED) {
-                installedPackDao.delete(code)
-            } else {
-                val diskBytes = getStateDiskBytes(code)
-                installedPackDao.upsert(
-                    InstalledPackEntity(
-                        stateCode = code,
-                        status = computedStatus.name,
-                        installedVersion = record?.installedVersion ?: "local",
-                        buildVersion = record?.buildVersion ?: record?.installedVersion ?: "local",
-                        availableVersion = record?.availableVersion ?: "",
-                        parentStateCode = state.parentStateCode,
-                        totalBytes = record?.totalBytes?.takeIf { it > 0 } ?: diskBytes,
-                        downloadedBytes = diskBytes,
-                        hasPmtiles = pmValid,
-                        hasValhalla = vhValid,
-                        hasPlacesDb = dbValid,
-                        placesSource = record?.placesSource ?: "overture+osm",
-                        pmtilesSha256 = record?.pmtilesSha256.orEmpty(),
-                        valhallaSha256 = record?.valhallaSha256.orEmpty(),
-                        placesSha256 = record?.placesSha256.orEmpty(),
-                        errorMessage = if (computedStatus == PackInstallStatus.CORRUPTED) {
-                            buildMissingFilesNote(pmValid, vhValid, dbValid)
-                        } else null,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            }
-        }
-        notifyPacksChanged()
+        PackAuditAndImportHelper.auditInstalledPacks(this@StatePackManager, installedPackDao, activeJobs)
     }
 
     suspend fun fetchManifest(baseUrl: String): Result<PackManifest> = withContext(Dispatchers.IO) {
@@ -350,10 +213,6 @@ class StatePackManager(
         }
     }
 
-    /**
-     * Adds a state/region pack to the sequential download queue so multiple states can be
-     * downloaded cleanly with pause, resume, and automatic retry after lost connection.
-     */
     fun startOrResumeDownload(stateCode: String, baseUrl: String) {
         val code = stateCode.lowercase()
         val entry = _manifest.value?.states?.find { it.stateCode.equals(code, true) } ?: return
@@ -402,7 +261,15 @@ class StatePackManager(
                 while (true) {
                     val next = downloadQueue.poll() ?: break
                     val (code, baseUrl) = next
-                    val job = launch { executePackDownloadWithRetry(code, baseUrl) }
+                    val job = launch {
+                        PackDownloadExecutor.executePackDownloadWithRetry(
+                            manager = this@StatePackManager,
+                            installedPackDao = installedPackDao,
+                            scope = scope,
+                            code = code,
+                            baseUrl = baseUrl
+                        )
+                    }
                     activeJobs[code] = job
                     job.join()
                     activeJobs.remove(code)
@@ -411,287 +278,13 @@ class StatePackManager(
         }
     }
 
-    private suspend fun executePackDownloadWithRetry(code: String, baseUrl: String) {
-        val entry = _manifest.value?.states?.find { it.stateCode.equals(code, true) } ?: return
-        val totalSize = entry.totalSizeBytes.takeIf { it > 0 }
-            ?: (entry.pmtiles.sizeBytes + entry.valhalla.sizeBytes + entry.places.sizeBytes)
-
-        var lastError: Exception? = null
-        val maxAttempts = 3
-
-        for (attempt in 1..maxAttempts) {
-            try {
-                val existingBefore = installedPackDao.getByState(code)
-                val localHashes = MapUpdateSmartPlanner.resolveLocalHashesForDownload(this, code, existingBefore)
-                val plan = MapUpdateSmartPlanner.planSmartUpdate(
-                    localHashes = localHashes,
-                    remote = entry,
-                    hasLocalPmtiles = isValidPmtilesFile(pmtilesFile(code)),
-                    hasLocalValhalla = valhallaTarFile(code).exists() && valhallaTarFile(code).length() > 512L,
-                    hasLocalPlaces = isValidPlacesDb(placesDbFile(code))
-                )
-                val effectiveDownloadBytes = plan.downloadBytes.takeIf { it > 0L } ?: totalSize
-                val deferSwap = isNavigationActiveProvider() &&
-                    existingBefore?.hasPmtiles == true &&
-                    existingBefore.hasValhalla &&
-                    existingBefore.hasPlacesDb
-
-                if (!deferSwap) {
-                    installedPackDao.upsert(
-                        InstalledPackEntity(
-                            stateCode = code,
-                            status = PackInstallStatus.DOWNLOADING.name,
-                            installedVersion = existingBefore?.installedVersion ?: "",
-                            buildVersion = existingBefore?.buildVersion ?: "",
-                            availableVersion = entry.version,
-                            parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
-                            totalBytes = effectiveDownloadBytes,
-                            downloadedBytes = 0L,
-                            hasPmtiles = existingBefore?.hasPmtiles ?: false,
-                            hasValhalla = existingBefore?.hasValhalla ?: false,
-                            hasPlacesDb = existingBefore?.hasPlacesDb ?: false,
-                            placesSource = entry.placesSource,
-                            pmtilesSha256 = existingBefore?.pmtilesSha256.orEmpty(),
-                            valhallaSha256 = existingBefore?.valhallaSha256.orEmpty(),
-                            placesSha256 = existingBefore?.placesSha256.orEmpty(),
-                            errorMessage = null
-                        )
-                    )
-                }
-
-                val effectiveBase = _manifest.value?.baseUrl?.takeIf { u -> u.isNotBlank() }
-                    ?: baseUrl.trim().trimEnd('/')
-
-                val pendingDir = if (deferSwap) MapUpdateSmartPlanner.pendingStateDir(packsRootDir, code) else null
-                val filesToFetch = buildList {
-                    if (plan.downloadPmtiles) add(entry.pmtiles to (if (deferSwap) File(pendingDir, "${code}.pmtiles") else pmtilesFile(code)))
-                    if (plan.downloadValhalla) add(entry.valhalla to (if (deferSwap) File(pendingDir, "${code}_valhalla.tar") else valhallaTarFile(code)))
-                    if (plan.downloadPlaces) add(entry.places to (if (deferSwap) File(pendingDir, "${code}_places.db") else placesDbFile(code)))
-                }
-
-                var completedPriorBytes = 0L
-                for ((fileEntry, targetFile) in filesToFetch) {
-                    if (targetFile.exists() && fileEntry.sha256.isNotBlank() && sha256Of(targetFile).equals(fileEntry.sha256, true)) {
-                        completedPriorBytes += targetFile.length()
-                        continue
-                    }
-
-                    downloadEntryAndVerify(
-                        fileEntry = fileEntry,
-                        effectiveBase = effectiveBase,
-                        targetFile = targetFile,
-                        onProgress = { currentFileBytes ->
-                            if (!deferSwap) {
-                                scope.launch {
-                                    val current = installedPackDao.getByState(code)
-                                    if (current != null && current.status == PackInstallStatus.DOWNLOADING.name) {
-                                        installedPackDao.upsert(
-                                            current.copy(
-                                                downloadedBytes = (completedPriorBytes + currentFileBytes).coerceAtMost(effectiveDownloadBytes),
-                                                updatedAt = System.currentTimeMillis()
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-                        },
-                        onVerifying = {
-                            if (!deferSwap) {
-                                scope.launch {
-                                    val current = installedPackDao.getByState(code)
-                                    if (current != null) {
-                                        installedPackDao.upsert(
-                                            current.copy(status = PackInstallStatus.VERIFYING.name)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    )
-                    completedPriorBytes += targetFile.length()
-                }
-
-                val newPmSha = entry.pmtiles.sha256.ifBlank { localHashes.pmtilesSha256 }
-                val newVhSha = entry.valhalla.sha256.ifBlank { localHashes.valhallaSha256 }
-                val newDbSha = entry.places.sha256.ifBlank { localHashes.placesSha256 }
-
-                if (deferSwap && pendingDir != null) {
-                    MapUpdateSmartPlanner.writePendingMeta(
-                        pendingDir,
-                        PendingSwapMeta(
-                            stateCode = code,
-                            version = entry.version,
-                            buildVersion = entry.effectiveBuildVersion,
-                            placesSource = entry.placesSource,
-                            parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
-                            pmtilesSha256 = newPmSha,
-                            valhallaSha256 = newVhSha,
-                            placesSha256 = newDbSha,
-                            hasStagedPmtiles = plan.downloadPmtiles,
-                            hasStagedValhalla = plan.downloadValhalla,
-                            hasStagedPlaces = plan.downloadPlaces
-                        )
-                    )
-                    notifyPacksChanged()
-                    onUpdatePostponed?.invoke(code)
-                    return
-                }
-
-                // Validate integrity of live pack files
-                val pmValid = isValidPmtilesFile(pmtilesFile(code))
-                val dbValid = isValidPlacesDb(placesDbFile(code))
-                val vhValid = valhallaTarFile(code).exists() && valhallaTarFile(code).length() > 512L
-                if (!pmValid || !dbValid || !vhValid) {
-                    throw IllegalStateException(buildMissingFilesNote(pmValid, vhValid, dbValid))
-                }
-
-                // Re-extract Valhalla tar only when Valhalla actually changed or tiles are missing
-                if (plan.downloadValhalla || !hasAnyValidValhallaTiles()) {
-                    extractTarIntoDirectory(valhallaTarFile(code), unifiedValhallaTileDir)
-                }
-
-                val diskBytes = getStateDiskBytes(code)
-                installedPackDao.upsert(
-                    InstalledPackEntity(
-                        stateCode = code,
-                        status = PackInstallStatus.INSTALLED.name,
-                        installedVersion = entry.version,
-                        buildVersion = entry.effectiveBuildVersion,
-                        availableVersion = entry.version,
-                        parentStateCode = entry.parentStateCode ?: UsStatesCatalog.byCode[code]?.parentStateCode,
-                        totalBytes = diskBytes,
-                        downloadedBytes = diskBytes,
-                        hasPmtiles = true,
-                        hasValhalla = true,
-                        hasPlacesDb = true,
-                        placesSource = entry.placesSource,
-                        pmtilesSha256 = newPmSha.ifBlank { sha256Of(pmtilesFile(code)) },
-                        valhallaSha256 = newVhSha.ifBlank { sha256Of(valhallaTarFile(code)) },
-                        placesSha256 = newDbSha.ifBlank { sha256Of(placesDbFile(code)) },
-                        errorMessage = null,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-                notifyPacksChanged()
-                if (plan.downloadPlaces) {
-                    scheduleBackgroundPlacesIndexing(code, placesDbFile(code))
-                }
-                return
-            } catch (ce: CancellationException) {
-                val existing = installedPackDao.getByState(code)
-                if (existing != null &&
-                    (existing.status == PackInstallStatus.DOWNLOADING.name || existing.status == PackInstallStatus.QUEUED.name)
-                ) {
-                    installedPackDao.upsert(
-                        existing.copy(
-                            status = PackInstallStatus.PAUSED.name,
-                            downloadedBytes = computePartialBytes(code),
-                            updatedAt = System.currentTimeMillis()
-                        )
-                    )
-                }
-                throw ce
-            } catch (e: Exception) {
-                lastError = e
-                val isChecksumError = e.message?.contains("SHA-256", ignoreCase = true) == true
-                if (!isChecksumError && attempt < maxAttempts) {
-                    // Automatic retry after transient connection loss with exponential backoff
-                    delay(attempt * 3_000L)
-                    continue
-                }
-                break
-            }
-        }
-
-        // All retry attempts failed
-        val existing = installedPackDao.getByState(code)
-        installedPackDao.upsert(
-            (existing ?: InstalledPackEntity(stateCode = code, status = PackInstallStatus.CORRUPTED.name)).copy(
-                status = PackInstallStatus.CORRUPTED.name,
-                errorMessage = lastError?.message ?: "Download or verification failed",
-                updatedAt = System.currentTimeMillis()
-            )
-        )
-        notifyPacksChanged()
-    }
-
-    /**
-     * Downloads a single PackFileEntry — supporting both single-file assets AND multi-part
-     * GitHub Release assets (`parts` list when > 2 GiB) — joins parts cleanly, and verifies SHA-256.
-     */
     fun downloadEntryAndVerify(
         fileEntry: PackFileEntry,
         effectiveBase: String,
         targetFile: File,
         onProgress: (Long) -> Unit,
         onVerifying: () -> Unit
-    ) {
-        if (fileEntry.parts.isNotEmpty()) {
-            // Multi-part GitHub Release asset download + join
-            val partFiles = mutableListOf<File>()
-            var partsBytesSoFar = 0L
-            for (part in fileEntry.parts) {
-                val partTemp = File(targetFile.parentFile, "${part.filename}.part")
-                val partFinal = File(targetFile.parentFile, part.filename)
-                if (partFinal.exists() && part.sha256.isNotBlank() && sha256Of(partFinal).equals(part.sha256, true)) {
-                    partsBytesSoFar += partFinal.length()
-                    partFiles.add(partFinal)
-                    onProgress(partsBytesSoFar)
-                    continue
-                }
-                val partUrl = resolveFileUrl(effectiveBase, part.url, part.filename)
-                downloadWithResume(partUrl, partTemp) { written ->
-                    onProgress(partsBytesSoFar + written)
-                }
-                if (part.sha256.isNotBlank() && !sha256Of(partTemp).equals(part.sha256, true)) {
-                    partTemp.delete()
-                    throw IllegalStateException("SHA-256 mismatch for part ${part.filename}")
-                }
-                if (partFinal.exists()) partFinal.delete()
-                if (!partTemp.renameTo(partFinal)) {
-                    partTemp.copyTo(partFinal, overwrite = true)
-                    partTemp.delete()
-                }
-                partsBytesSoFar += partFinal.length()
-                partFiles.add(partFinal)
-            }
-
-            onVerifying()
-            val joinedTemp = File(targetFile.parentFile, "${targetFile.name}.joined")
-            joinPartFiles(partFiles, joinedTemp)
-
-            if (fileEntry.sha256.isNotBlank() && !sha256Of(joinedTemp).equals(fileEntry.sha256, true)) {
-                joinedTemp.delete()
-                throw IllegalStateException("SHA-256 mismatch after joining ${fileEntry.filename}")
-            }
-            if (targetFile.exists()) targetFile.delete()
-            if (!joinedTemp.renameTo(targetFile)) {
-                joinedTemp.copyTo(targetFile, overwrite = true)
-                joinedTemp.delete()
-            }
-            // Clean up individual part files once joined & verified
-            partFiles.forEach { it.delete() }
-        } else {
-            // Standard single-file download with HTTP Range resume
-            val partFile = File(targetFile.parentFile, "${targetFile.name}.part")
-            val resolvedUrl = resolveFileUrl(effectiveBase, fileEntry.url, fileEntry.filename)
-            downloadWithResume(resolvedUrl, partFile, onProgress)
-
-            onVerifying()
-            if (fileEntry.sha256.isNotBlank()) {
-                val actualHash = sha256Of(partFile)
-                if (!actualHash.equals(fileEntry.sha256, ignoreCase = true)) {
-                    partFile.delete()
-                    throw IllegalStateException("SHA-256 mismatch for ${fileEntry.filename}")
-                }
-            }
-            if (targetFile.exists()) targetFile.delete()
-            if (!partFile.renameTo(targetFile)) {
-                partFile.copyTo(targetFile, overwrite = true)
-                partFile.delete()
-            }
-        }
-    }
+    ) = httpDownloader.downloadEntryAndVerify(fileEntry, effectiveBase, targetFile, onProgress, onVerifying)
 
     fun pauseDownload(stateCode: String) {
         val code = stateCode.lowercase()
@@ -722,100 +315,10 @@ class StatePackManager(
         notifyPacksChanged()
     }
 
-    /**
-     * Imports a local pack archive (.zip) or individual state file (.pmtiles, .tar, .db)
-     * selected via Android Storage Access Framework (zero storage permissions required).
-     */
-    suspend fun importLocalUri(stateCode: String, uri: Uri, displayName: String?): Result<String> = withContext(Dispatchers.IO) {
-        val code = stateCode.lowercase()
-        val lowerName = (displayName ?: uri.lastPathSegment ?: "").lowercase()
-        try {
-            val dir = stateDir(code)
-            val input = context.contentResolver.openInputStream(uri)
-                ?: return@withContext Result.failure(IllegalArgumentException("Cannot open selected file"))
-
-            input.use { stream ->
-                when {
-                    lowerName.endsWith(".zip") || lowerName.endsWith(".rahyab") -> {
-                        extractZipPackForState(code, stream, dir)
-                    }
-                    lowerName.endsWith(".pmtiles") -> {
-                        val target = pmtilesFile(code)
-                        copyStreamToFile(stream, target)
-                        if (!isValidPmtilesFile(target)) {
-                            target.delete()
-                            return@withContext Result.failure(IllegalArgumentException("Invalid PMTiles file header"))
-                        }
-                    }
-                    lowerName.endsWith(".tar") -> {
-                        val target = valhallaTarFile(code)
-                        copyStreamToFile(stream, target)
-                        if (target.length() <= 512L) {
-                            target.delete()
-                            return@withContext Result.failure(IllegalArgumentException("Invalid Valhalla tar archive"))
-                        }
-                        extractTarIntoDirectory(target, unifiedValhallaTileDir)
-                    }
-                    lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") -> {
-                        val target = placesDbFile(code)
-                        copyStreamToFile(stream, target)
-                        if (!isValidPlacesDb(target)) {
-                            target.delete()
-                            return@withContext Result.failure(IllegalArgumentException("Invalid or corrupted FTS5 places SQLite database"))
-                        }
-                        scheduleBackgroundPlacesIndexing(code, target)
-                    }
-                    else -> {
-                        return@withContext Result.failure(
-                            IllegalArgumentException("Unsupported file type. Choose .zip, .pmtiles, .tar, or .db")
-                        )
-                    }
-                }
-            }
-
-            auditInstalledPacks()
-            if (lowerName.endsWith(".zip") || lowerName.endsWith(".rahyab")) {
-                val dbFile = placesDbFile(code)
-                if (dbFile.exists() && isValidPlacesDb(dbFile)) {
-                    scheduleBackgroundPlacesIndexing(code, dbFile)
-                }
-            }
-            Result.success(displayName ?: "Imported")
-        } catch (e: Exception) {
-            Result.failure(e)
+    suspend fun importLocalUri(stateCode: String, uri: Uri, displayName: String?): Result<String> =
+        withContext(Dispatchers.IO) {
+            PackAuditAndImportHelper.importLocalUri(context, this@StatePackManager, stateCode, uri, displayName)
         }
-    }
-
-    private fun extractZipPackForState(stateCode: String, stream: InputStream, stateDir: File) {
-        ZipInputStream(BufferedInputStream(stream)).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                if (!entry.isDirectory) {
-                    val entryName = File(entry.name).name.lowercase()
-                    val destination: File? = when {
-                        entryName.endsWith(".pmtiles") -> pmtilesFile(stateCode)
-                        entryName.endsWith(".tar") -> valhallaTarFile(stateCode)
-                        entryName.endsWith(".db") || entryName.endsWith(".sqlite") -> placesDbFile(stateCode)
-                        else -> null
-                    }
-                    if (destination != null) {
-                        FileOutputStream(destination).use { fos ->
-                            val buf = ByteArray(16 * 1024)
-                            var read: Int
-                            while (zis.read(buf).also { read = it } != -1) {
-                                fos.write(buf, 0, read)
-                            }
-                        }
-                        if (destination.name.endsWith(".tar")) {
-                            extractTarIntoDirectory(destination, unifiedValhallaTileDir)
-                        }
-                    }
-                }
-                zis.closeEntry()
-                entry = zis.nextEntry
-            }
-        }
-    }
 
     private suspend fun rebuildUnifiedValhallaDirectory() {
         unifiedValhallaTileDir.deleteRecursively()
@@ -825,187 +328,21 @@ class StatePackManager(
         }
     }
 
-    /**
-     * Pure-Kotlin POSIX/USTAR tar extractor for Valhalla tile archives (.gph tiles).
-     * Protects against path traversal (Zip Slip) and handles overlapping 30-mile border
-     * buffer tiles cleanly without conflicts.
-     */
-    fun extractTarIntoDirectory(tarFile: File, destDir: File) {
-        val canonicalDest = destDir.canonicalPath
-        BufferedInputStream(FileInputStream(tarFile)).use { bis ->
-            val header = ByteArray(512)
-            while (true) {
-                val readHeader = readFully(bis, header)
-                if (readHeader < 512) break
-                if (header.all { it == 0.toByte() }) break
+    fun extractTarIntoDirectory(tarFile: File, destDir: File) =
+        PackArchiveAndValidation.extractTarIntoDirectory(tarFile, destDir)
 
-                val name = parseTarString(header, 0, 100)
-                val prefix = parseTarString(header, 345, 155)
-                val fullName = if (prefix.isNotEmpty()) "$prefix/$name" else name
-                val size = parseTarOctal(header, 124, 12)
-                val typeFlag = header[156].toInt().toChar()
+    fun resolveFileUrl(baseUrl: String, entryUrl: String, filename: String): String =
+        httpDownloader.resolveFileUrl(baseUrl, entryUrl, filename)
 
-                val outFile = File(destDir, fullName)
-                val canonicalOut = outFile.canonicalPath
-                val isSafe = canonicalOut.startsWith(canonicalDest + File.separator) || canonicalOut == canonicalDest
+    private fun computePartialBytes(stateCode: String): Long =
+        stateDir(stateCode).listFiles()?.sumOf { it.length() } ?: 0L
 
-                if (isSafe && (typeFlag == '0' || typeFlag == '\u0000') && fullName.isNotBlank()) {
-                    outFile.parentFile?.mkdirs()
-                    // Write atomically via temp file so overlapping border tiles never leave partial reads
-                    val tmpFile = File(outFile.parentFile, "${outFile.name}.tmp")
-                    FileOutputStream(tmpFile).use { fos ->
-                        var remaining = size
-                        val buf = ByteArray(16 * 1024)
-                        while (remaining > 0) {
-                            val toRead = minOf(buf.size.toLong(), remaining).toInt()
-                            val n = bis.read(buf, 0, toRead)
-                            if (n <= 0) break
-                            fos.write(buf, 0, n)
-                            remaining -= n
-                        }
-                    }
-                    if (outFile.exists()) outFile.delete()
-                    if (!tmpFile.renameTo(outFile)) {
-                        tmpFile.copyTo(outFile, overwrite = true)
-                        tmpFile.delete()
-                    }
-                } else {
-                    skipFully(bis, size)
-                }
+    internal fun computePartialBytesInternal(stateCode: String): Long = computePartialBytes(stateCode)
 
-                val remainder = (size % 512L).toInt()
-                if (remainder > 0) {
-                    skipFully(bis, (512 - remainder).toLong())
-                }
-            }
-        }
-    }
+    fun isValidPmtilesFile(file: File): Boolean = PackArchiveAndValidation.isValidPmtilesFile(file)
 
-    private fun downloadWithResume(
-        url: String,
-        partFile: File,
-        onProgress: (Long) -> Unit
-    ) {
-        val existingLength = if (partFile.exists()) partFile.length() else 0L
-        val reqBuilder = Request.Builder()
-            .url(url)
-            .header("User-Agent", OnlineHttpConfig.userAgent())
-            .get()
-        if (existingLength > 0L) {
-            reqBuilder.header("Range", "bytes=$existingLength-")
-        }
+    fun isValidPlacesDb(file: File): Boolean = PackArchiveAndValidation.isValidPlacesDb(context, file)
 
-        okHttpClient.newCall(reqBuilder.build()).execute().use { response ->
-            if (response.code == 416) {
-                onProgress(existingLength)
-                return
-            }
-            if (!response.isSuccessful && response.code != 206) {
-                throw IllegalStateException("HTTP ${response.code} downloading $url")
-            }
-
-            val append = response.code == 206 && existingLength > 0L
-            val body = response.body ?: throw IllegalStateException("Empty download body")
-            var written = if (append) existingLength else 0L
-            var lastReported = 0L
-
-            RandomAccessFile(partFile, "rw").use { raf ->
-                if (append) {
-                    raf.seek(existingLength)
-                } else {
-                    raf.setLength(0L)
-                }
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(32 * 1024)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        raf.write(buffer, 0, bytesRead)
-                        written += bytesRead
-                        if (written - lastReported >= 256 * 1024) {
-                            lastReported = written
-                            onProgress(written)
-                        }
-                    }
-                }
-            }
-            onProgress(written)
-        }
-    }
-
-    fun resolveFileUrl(baseUrl: String, entryUrl: String, filename: String): String {
-        return when {
-            entryUrl.startsWith("http://") || entryUrl.startsWith("https://") -> entryUrl
-            entryUrl.isNotBlank() -> "${baseUrl.trimEnd('/')}/${entryUrl.trimStart('/')}"
-            else -> "${baseUrl.trimEnd('/')}/$filename"
-        }
-    }
-
-    private fun computePartialBytes(stateCode: String): Long {
-        val dir = stateDir(stateCode)
-        return dir.listFiles()?.sumOf { it.length() } ?: 0L
-    }
-
-    private fun copyStreamToFile(stream: InputStream, dest: File) {
-        FileOutputStream(dest).use { out ->
-            val buf = ByteArray(16 * 1024)
-            var read: Int
-            while (stream.read(buf).also { read = it } != -1) {
-                out.write(buf, 0, read)
-            }
-        }
-    }
-
-    fun isValidPmtilesFile(file: File): Boolean {
-        if (!file.exists() || file.length() < 127L) return false
-        return try {
-            FileInputStream(file).use { fis ->
-                val magic = ByteArray(7)
-                if (fis.read(magic) != 7) return false
-                String(magic, Charsets.US_ASCII) == "PMTiles"
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    fun isValidPlacesDb(file: File): Boolean {
-        if (!file.exists() || file.length() < 4096L) return false
-        return try {
-            val driver = androidx.sqlite.driver.bundled.BundledSQLiteDriver()
-            val conn = driver.open(file.absolutePath)
-            try {
-                val stmt = conn.prepare(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('places', 'places_fts')"
-                )
-                try {
-                    stmt.step() && stmt.getLong(0) >= 2L
-                } finally {
-                    stmt.close()
-                }
-            } finally {
-                conn.close()
-            }
-        } catch (_: UnsatisfiedLinkError) {
-            // Host JVM unit tests without Android .so: validate SQLite 3 magic header
-            hasSqliteHeader(file)
-        } catch (t: Throwable) {
-            CrashLogManager.logError(context, "PackAudit", "Failed to validate places DB ${file.name}", t)
-            false
-        }
-    }
-
-    private fun hasSqliteHeader(file: File): Boolean = runCatching {
-        FileInputStream(file).use { fis ->
-            val header = ByteArray(16)
-            fis.read(header) == 16 && String(header, Charsets.US_ASCII).startsWith("SQLite format 3")
-        }
-    }.getOrDefault(false)
-
-    /**
-     * Schedules one-time background creation of `idx_places_lat_lon ON places(lat, lon)` AFTER
-     * a pack is installed, updated, or imported. Never runs during app startup and never blocks
-     * the UI or other DB reads; if creation fails (e.g., low disk space), logs and continues cleanly.
-     */
     fun scheduleBackgroundPlacesIndexing(stateCode: String, dbFile: File) {
         val code = stateCode.lowercase()
         if (!dbFile.exists() || dbFile.length() < 1024L) return
@@ -1023,144 +360,37 @@ class StatePackManager(
         indexingJobs[code] = job
     }
 
-    internal fun ensurePlacesLatLonIndex(stateCode: String, dbFile: File) {
-        if (!dbFile.exists() || dbFile.length() < 1024L) return
-        try {
-            val driver = androidx.sqlite.driver.bundled.BundledSQLiteDriver()
-            val conn = driver.open(dbFile.absolutePath)
-            try {
-                // Fast check: skip immediately if index already exists
-                val checkStmt = conn.prepare(
-                    "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_places_lat_lon'"
-                )
-                val alreadyExists = try {
-                    checkStmt.step()
-                } finally {
-                    checkStmt.close()
-                }
-                if (alreadyExists) return
-
-                _indexingStatusMessage.value = "Optimizing search index (${stateCode.uppercase()})…"
-                // Use busy_timeout so concurrent read queries wait cleanly without failing
-                runCatching {
-                    val busyStmt = conn.prepare("PRAGMA busy_timeout = 5000")
-                    try { busyStmt.step() } finally { busyStmt.close() }
-                }
-                val stmt = conn.prepare("CREATE INDEX IF NOT EXISTS idx_places_lat_lon ON places(lat, lon)")
-                try {
-                    stmt.step()
-                } finally {
-                    stmt.close()
-                }
-            } finally {
-                conn.close()
-            }
-        } catch (t: Throwable) {
-            // Never crash or block search if disk space is tight — log and continue without index
-            CrashLogManager.logError(
-                context = context,
-                tag = "PlacesIndex",
-                message = "Skipped idx_places_lat_lon for ${stateCode.uppercase()}; continuing without spatial index",
-                throwable = t
-            )
+    internal fun ensurePlacesLatLonIndex(stateCode: String, dbFile: File) =
+        PackArchiveAndValidation.ensurePlacesLatLonIndex(context, stateCode, dbFile) { msg ->
+            _indexingStatusMessage.value = msg
         }
-    }
 
     data class PackFileSizes(
         val pmtilesBytes: Long,
         val valhallaBytes: Long,
-        val placesDbBytes: Long
+        val placesDbBytes: Long,
+        val extrasDbBytes: Long = 0L
     ) {
-        val totalBytes: Long get() = pmtilesBytes + valhallaBytes + placesDbBytes
+        val totalBytes: Long get() = pmtilesBytes + valhallaBytes + placesDbBytes + extrasDbBytes
     }
 
     fun getPackFileSizes(stateCode: String): PackFileSizes = PackFileSizes(
         pmtilesBytes = pmtilesFile(stateCode).takeIf { it.exists() }?.length() ?: 0L,
         valhallaBytes = valhallaTarFile(stateCode).takeIf { it.exists() }?.length() ?: 0L,
-        placesDbBytes = placesDbFile(stateCode).takeIf { it.exists() }?.length() ?: 0L
+        placesDbBytes = placesDbFile(stateCode).takeIf { it.exists() }?.length() ?: 0L,
+        extrasDbBytes = extrasDbFile(stateCode).takeIf { it.exists() }?.length() ?: 0L
     )
-
-    private fun buildMissingFilesNote(pm: Boolean, vh: Boolean, db: Boolean): String {
-        val missing = buildList {
-            if (!pm) add("PMTiles")
-            if (!vh) add("Valhalla routing")
-            if (!db) add("Places DB")
-        }
-        return "Missing or invalid: ${missing.joinToString(", ")}"
-    }
-
-    private fun folderSizeBytes(dir: File): Long {
-        if (!dir.exists()) return 0L
-        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-    }
-
-    private fun readFully(input: InputStream, buffer: ByteArray): Int {
-        var total = 0
-        while (total < buffer.size) {
-            val n = input.read(buffer, total, buffer.size - total)
-            if (n < 0) break
-            total += n
-        }
-        return total
-    }
-
-    private fun skipFully(input: InputStream, bytes: Long) {
-        var remaining = bytes
-        val trash = ByteArray(4096)
-        while (remaining > 0) {
-            val skipped = input.skip(remaining)
-            if (skipped > 0) {
-                remaining -= skipped
-            } else {
-                val n = input.read(trash, 0, minOf(trash.size.toLong(), remaining).toInt())
-                if (n <= 0) break
-                remaining -= n
-            }
-        }
-    }
-
-    private fun parseTarString(header: ByteArray, offset: Int, length: Int): String {
-        var end = offset
-        val limit = offset + length
-        while (end < limit && header[end] != 0.toByte()) end++
-        return String(header, offset, end - offset, Charsets.UTF_8).trim()
-    }
-
-    private fun parseTarOctal(header: ByteArray, offset: Int, length: Int): Long {
-        val str = parseTarString(header, offset, length).trim()
-        if (str.isEmpty()) return 0L
-        return str.toLongOrNull(8) ?: 0L
-    }
 
     private fun notifyPacksChanged() {
         _packsChangedTick.value = System.currentTimeMillis()
     }
 
-    companion object {
-        fun sha256Of(file: File): String {
-            val digest = MessageDigest.getInstance("SHA-256")
-            FileInputStream(file).use { fis ->
-                val buf = ByteArray(32 * 1024)
-                var read: Int
-                while (fis.read(buf).also { read = it } != -1) {
-                    digest.update(buf, 0, read)
-                }
-            }
-            return digest.digest().joinToString("") { "%02x".format(it) }
-        }
+    internal fun notifyPacksChangedInternal() = notifyPacksChanged()
 
-        fun joinPartFiles(parts: List<File>, destFile: File) {
-            FileOutputStream(destFile).use { fos ->
-                val buf = ByteArray(64 * 1024)
-                for (part in parts) {
-                    FileInputStream(part).use { fis ->
-                        var read: Int
-                        while (fis.read(buf).also { read = it } != -1) {
-                            fos.write(buf, 0, read)
-                        }
-                    }
-                }
-            }
-        }
+    companion object {
+        fun sha256Of(file: File): String = PackArchiveAndValidation.sha256Of(file)
+
+        fun joinPartFiles(parts: List<File>, destFile: File) =
+            PackArchiveAndValidation.joinPartFiles(parts, destFile)
     }
 }
