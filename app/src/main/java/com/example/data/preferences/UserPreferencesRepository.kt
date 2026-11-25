@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
+import com.example.map.LaneHighlightColor
 import com.example.navigation.CyclingSpeedPreset
 import com.example.navigation.LaneChangeTiming
 import com.example.navigation.RoutePreference
@@ -87,6 +88,8 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_LANE_CHANGE_BEEPS = booleanPreferencesKey("lane_change_beeps_enabled")
         val KEY_LANE_CHANGE_TIMING = stringPreferencesKey("lane_change_timing")
         val KEY_LAST_CHANCE_BEEP = booleanPreferencesKey("last_chance_beep_enabled")
+        val KEY_LANE_HIGHLIGHT_ON_MAP = booleanPreferencesKey("lane_highlight_on_map")
+        val KEY_LANE_HIGHLIGHT_COLOR = stringPreferencesKey("lane_highlight_color")
 
         fun mapPreferencesToSettings(prefs: Preferences): UserSettings {
             val defaultMode = TravelMode.fromCode(prefs[Keys.DEFAULT_TRAVEL_MODE])
@@ -98,6 +101,8 @@ class UserPreferencesRepository(private val context: Context) {
                 speedWarningAudioEnabled = prefs[Keys.SPEED_AUDIO_ENABLED] ?: true,
                 speedWarningThresholdMph = prefs[Keys.SPEED_THRESHOLD_MPH] ?: 5,
                 junctionPreviewEnabled = prefs[Keys.JUNCTION_PREVIEW_ENABLED] ?: true,
+                laneHighlightOnMapEnabled = prefs[KEY_LANE_HIGHLIGHT_ON_MAP] ?: true,
+                laneHighlightColor = LaneHighlightColor.fromCode(prefs[KEY_LANE_HIGHLIGHT_COLOR]),
                 laneChangeBeepsEnabled = prefs[KEY_LANE_CHANGE_BEEPS] ?: true,
                 laneChangeTiming = LaneChangeTiming.fromCode(prefs[KEY_LANE_CHANGE_TIMING]),
                 lastChanceBeepEnabled = prefs[KEY_LAST_CHANCE_BEEP] ?: true,
@@ -157,6 +162,8 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setSpeedWarningAudioEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SPEED_AUDIO_ENABLED] = enabled } }
     suspend fun setSpeedWarningThresholdMph(thresholdMph: Int) { context.rahYabDataStore.edit { it[Keys.SPEED_THRESHOLD_MPH] = thresholdMph.coerceIn(0, 15) } }
     suspend fun setJunctionPreviewEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.JUNCTION_PREVIEW_ENABLED] = enabled } }
+    suspend fun setLaneHighlightOnMapEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LANE_HIGHLIGHT_ON_MAP] = enabled } }
+    suspend fun setLaneHighlightColor(color: LaneHighlightColor) { context.rahYabDataStore.edit { it[KEY_LANE_HIGHLIGHT_COLOR] = color.code } }
     suspend fun setLaneChangeBeepsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_BEEPS] = enabled } }
     suspend fun setLaneChangeTiming(timing: LaneChangeTiming) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_TIMING] = timing.code } }
     suspend fun setLastChanceBeepEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LAST_CHANCE_BEEP] = enabled } }

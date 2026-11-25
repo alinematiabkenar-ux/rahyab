@@ -474,6 +474,46 @@ interface AppStrings {
     val routeEventHighwayExit: String
     val routeEventDestination: String
     val speedLimitEstimatedLabel: String
+    // LN3: Lane Highlight on Map
+    val laneHighlightOnMapToggle: String
+    val laneHighlightColorLabel: String
+    val laneColorRed: String
+    val laneColorBlue: String
+    val laneColorGreen: String
+    // SL2: Speed Limit Drop Ahead
+    val speedLimitDropWarningToggle: String
+    val speedLimitDropVoicePrefix: String
+    val speedLimitDropVoiceSuffix: String
+    // PK1-PK3: Parking Near Destination
+    val parkingDefaultLotName: String
+    val parkingTypeGarage: String
+    val parkingTypeLot: String
+    val parkingTypeStreet: String
+    val parkingNearbyButton: String
+    val parkingNearDestTitle: String
+    val parkingWalkMinSuffix: String
+    val parkingWalkToDestButton: String
+    val parkingArrivedTitle: String
+    // VC1-VC3: Offline English Voice Commands
+    val voiceCommandMicDesc: String
+    val voiceListeningTitle: String
+    val voiceNotUnderstood: String
+    val voiceOfflineModelMissing: String
+    val voiceDownloadModelButton: String
+    val voiceOpenSpeechSettingsButton: String
+    val voiceMicPermissionNeeded: String
+    val voiceAutoStartCountdownPrefix: String
+    val voiceCancelAutoStart: String
+    val voiceNoSavedHome: String
+    val voiceNoSavedWork: String
+    val voiceNoParkedCar: String
+    val voiceNotNavigating: String
+    val voiceEtaPrefix: String
+    val voiceMutedConfirm: String
+    val voiceUnmutedConfirm: String
+    val voiceStoppedConfirm: String
+    val voiceRoadClosedConfirm: String
+    val voiceNoSearchMatches: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

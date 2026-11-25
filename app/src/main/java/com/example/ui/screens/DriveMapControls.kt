@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -71,6 +72,7 @@ internal fun DriveControlRail(
     onResetSimulationSpeed: () -> Unit,
     onRepeatVoice: () -> Unit,
     onToggleVoice: () -> Unit,
+    onStartVoiceCommand: () -> Unit,
     onToggle3DView: () -> Unit,
     onToggleCompassMode: () -> Unit,
     onRecenter: () -> Unit,
@@ -151,12 +153,15 @@ internal fun DriveControlRail(
             )
         }
 
-        // Voice mute/unmute
+        // Voice mute/unmute & offline English voice command mic
         SmallCockpitButton(
             icon = if (settings.voiceGuidanceEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
             contentDescription = if (settings.voiceGuidanceEnabled) strings.muteVoice else strings.unmuteVoice,
-            onClick = onToggleVoice,
-            testTag = "toggle_voice_button"
+            onClick = onToggleVoice, testTag = "toggle_voice_button"
+        )
+        SmallCockpitButton(
+            icon = Icons.Filled.Mic, contentDescription = strings.voiceCommandMicDesc,
+            onClick = onStartVoiceCommand, testTag = "drive_voice_command_mic_button", tint = MaterialTheme.colorScheme.primary
         )
 
         // 3D / 2D camera toggle
@@ -198,20 +203,9 @@ internal fun DriveControlRail(
 
         // Large Waze-style One-Tap Report Button (8 report types)
         FloatingActionButton(
-            onClick = onOpenReportSheet,
-            containerColor = AlertAmber,
-            contentColor = Color(0xFF0F172A),
-            shape = CircleShape,
-            modifier = Modifier
-                .size(62.dp)
-                .testTag("open_report_fab")
-        ) {
-            Icon(
-                imageVector = Icons.Filled.ReportProblem,
-                contentDescription = strings.reportButton,
-                modifier = Modifier.size(30.dp)
-            )
-        }
+            onClick = onOpenReportSheet, containerColor = AlertAmber, contentColor = Color(0xFF0F172A),
+            shape = CircleShape, modifier = Modifier.size(62.dp).testTag("open_report_fab")
+        ) { Icon(Icons.Filled.ReportProblem, contentDescription = strings.reportButton, modifier = Modifier.size(30.dp)) }
     }
 }
 

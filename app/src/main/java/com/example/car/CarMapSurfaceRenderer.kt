@@ -240,7 +240,7 @@ class CarMapSurfaceRenderer(
 
         s.launch {
             app.preferencesRepository.settingsFlow.collectLatest { settings ->
-                currentSettings = settings; reloadMapStyleIfNeeded(force = false); updateExtraLayers(); refreshSpeedOverlay()
+                currentSettings = settings; reloadMapStyleIfNeeded(force = false); updatePositionAndRoutes(); updateExtraLayers(); refreshSpeedOverlay()
             }
         }
         s.launch {
@@ -298,7 +298,9 @@ class CarMapSurfaceRenderer(
         }
     }
 
-    private fun updatePositionAndRoutes() = CarMapStyleHelper.updatePositionAndRoutes(app, loadedStyle)
+    private fun updatePositionAndRoutes() = CarMapStyleHelper.updatePositionAndRoutes(
+        app, loadedStyle, currentSettings.laneHighlightOnMapEnabled, currentSettings.laneHighlightColor.hex
+    )
 
     private fun updateExtraLayers() = CarMapStyleHelper.updateExtraLayers(
         app, loadedStyle, currentSettings.showTrafficLights, currentSettings.showStopSignsOnMap
@@ -323,16 +325,11 @@ class CarMapSurfaceRenderer(
         force: Boolean
     ) {
         val map = mapLibreMap ?: return
+        val laneActive = CarMapStyleHelper.isLaneOverlayActive(app.navigationHub.navigationState.value, currentSettings.laneHighlightOnMapEnabled)
         val update = followController.computeFollowCameraUpdate(
-            lat = loc.lat,
-            lon = loc.lon,
-            speedMps = speedMps,
-            headingDegrees = bearing,
-            isHeadingUpMode = true,
-            is3DView = currentSettings.is3DView,
-            isNavigating = isNavigating,
-            forceImmediate = force,
-            isWalkingMode = isWalking
+            lat = loc.lat, lon = loc.lon, speedMps = speedMps, headingDegrees = bearing,
+            isHeadingUpMode = true, is3DView = currentSettings.is3DView, isNavigating = isNavigating,
+            forceImmediate = force, isWalkingMode = isWalking, minZoomFloor = if (laneActive) 16.5 else null
         ) ?: return
 
         val area = if (stableArea.width() > 0 && stableArea.height() > 0) stableArea else visibleArea
@@ -373,7 +370,8 @@ class CarMapSurfaceRenderer(
             overspeed = nav.isOverspeed,
             unit = currentSettings.distanceUnit,
             lang = currentSettings.language, darkMode = isDarkMode,
-            toleranceMph = currentSettings.speedWarningThresholdMph, limitSource = nav.speedLimitSource
+            toleranceMph = currentSettings.speedWarningThresholdMph, limitSource = nav.speedLimitSource,
+            upcomingLimitMph = nav.upcomingSpeedLimitMph, upcomingLimitDistMeters = nav.upcomingSpeedLimitDistanceMeters
         )
     }
 

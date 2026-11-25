@@ -35,6 +35,7 @@ import com.example.ui.RahYabViewModel
 import com.example.ui.components.MapLibreMapContainer
 import com.example.ui.components.RouteProgressBar
 import com.example.ui.components.SpeedometerAndLimitCluster
+import com.example.ui.components.rememberVoiceCommandTrigger
 
 @Composable
 fun DriveScreen(
@@ -85,6 +86,7 @@ fun DriveScreen(
     val onlineSources by viewModel.onlineSourcesSummary.collectAsStateWithLifecycle()
     val weatherAlerts by viewModel.activeWeatherAlerts.collectAsStateWithLifecycle()
     val parkedCar by viewModel.parkedCar.collectAsStateWithLifecycle()
+    val destParkingSpots by viewModel.destinationParkingOptions.collectAsStateWithLifecycle()
     val isSimulationActive = navState.isSimulatingDrive || settings.simulateDriveEnabled
 
     val isNightMode = viewModel.resolveEffectiveNightMode(settings, gpsFix)
@@ -98,11 +100,10 @@ fun DriveScreen(
     var mapCameraBearingDegrees by remember { mutableFloatStateOf(0f) }
     var compassCalibDismissed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isCompassLowAccuracy) {
-        if (isCompassLowAccuracy) {
-            compassCalibDismissed = false
-        }
-    }
+    val onStartVoiceCommand = rememberVoiceCommandTrigger(viewModel)
+    val openSearchResultsTick by viewModel.openSearchResultsEvent.collectAsStateWithLifecycle()
+    LaunchedEffect(openSearchResultsTick) { if (openSearchResultsTick > 0L) isSearchExpanded = true }
+    LaunchedEffect(isCompassLowAccuracy) { if (isCompassLowAccuracy) compassCalibDismissed = false }
 
     // Keep screen awake strictly while actively navigating
     DisposableEffect(navState.isNavigating, context) {
@@ -156,7 +157,13 @@ fun DriveScreen(
                     com.example.map.ManeuverArrowGeometry.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode)
                 }
             } else null,
-            show3DBuildings = settings.show3DBuildings,
+            laneOverlay = if (navState.isNavigating && !navState.hasArrived) {
+                remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 15.0).toInt(), navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled) {
+                    com.example.map.LaneOverlayBuilder.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled)
+                }
+            } else null,
+            laneHighlightColorHex = settings.laneHighlightColor.hex,
+            destinationParkingSpots = destParkingSpots, show3DBuildings = settings.show3DBuildings,
             positionMarkerStyle = settings.positionMarkerStyle,
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),
             cameraCommand = cameraCmd,
@@ -201,11 +208,8 @@ fun DriveScreen(
             onOpenAppSettings = onOpenAppSettings,
             onNavigateToMaps = onNavigateToMaps,
             onEnableDevOregon = { viewModel.setDevOnlineOregonMode(true) },
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+            onStartVoiceCommand = onStartVoiceCommand,
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp)
         )
 
         // 3. Left / Start side: Speed Limit & Live Speedometer Cluster (hidden in walking mode)
@@ -217,6 +221,7 @@ fun DriveScreen(
                 unit = settings.distanceUnit,
                 overspeedToleranceMph = settings.speedWarningThresholdMph,
                 speedLimitSource = navState.speedLimitSource,
+                upcomingSpeedLimitMph = navState.upcomingSpeedLimitMph, upcomingSpeedLimitDistanceMeters = navState.upcomingSpeedLimitDistanceMeters,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = 12.dp, bottom = bottomRailPadding)
@@ -249,13 +254,12 @@ fun DriveScreen(
             onResetSimulationSpeed = { viewModel.resetSimulationSpeedTo1x() },
             onRepeatVoice = { viewModel.repeatLastVoiceInstruction() },
             onToggleVoice = { viewModel.setVoiceEnabled(!settings.voiceGuidanceEnabled) },
+            onStartVoiceCommand = onStartVoiceCommand,
             onToggle3DView = { viewModel.toggle3DView() },
             onToggleCompassMode = { viewModel.toggleCompassHeadingMode() },
             onRecenter = { viewModel.recenterCamera() },
             onOpenReportSheet = { showReportSheet = true },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = if (showRouteProgressBar) 44.dp else 12.dp, bottom = bottomRailPadding)
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = if (showRouteProgressBar) 44.dp else 12.dp, bottom = bottomRailPadding)
         )
 
         // 4b. Sygic-style Route Progress Bar on the right edge (DRIVE & BIKE only)
@@ -351,26 +355,19 @@ fun DriveScreen(
                     viewModel.requestDownloadStatePack(stateCode)
                     onNavigateToMaps()
                 },
-                selectedTravelMode = selectedTravelMode,
-                modePreviewSummaries = modePreviewSummaries,
+                selectedTravelMode = selectedTravelMode, modePreviewSummaries = modePreviewSummaries,
                 onSelectTravelMode = { viewModel.selectTravelMode(it) },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(12.dp)
+                onFindParkingNearby = { viewModel.searchParkingNearPreviewDestination() },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)
             )
         } else if (showParkedCarCard && parkedCar != null && parkedCarDistanceMeters != null) {
             ParkedCarCard(
-                spot = parkedCar!!,
-                distanceMeters = parkedCarDistanceMeters,
-                unit = settings.distanceUnit,
-                onWalkToCar = { viewModel.startWalkToCar() },
-                onUpdateNote = { viewModel.updateParkedCarNote(it) },
-                onClear = { viewModel.clearParkedCar() },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(12.dp)
+                spot = parkedCar!!, distanceMeters = parkedCarDistanceMeters, unit = settings.distanceUnit,
+                onWalkToCar = { viewModel.startWalkToCar() }, onUpdateNote = { viewModel.updateParkedCarNote(it) },
+                onClear = { viewModel.clearParkedCar() }, modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)
             )
         }
+        DriveNextBatchOverlays(viewModel = viewModel, navState = navState, modifier = Modifier.fillMaxSize())
     }
 
     DriveModalsAndDialogs(

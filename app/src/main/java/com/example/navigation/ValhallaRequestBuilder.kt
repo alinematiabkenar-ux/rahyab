@@ -115,6 +115,7 @@ internal object ValhallaRequestBuilder {
                 "edge.begin_shape_index",
                 "edge.end_shape_index",
                 "edge.lane_count",
+                "edge.traversability",
                 "edge.max_upward_grade",
                 "edge.max_downward_grade",
                 "edge.weighted_grade"

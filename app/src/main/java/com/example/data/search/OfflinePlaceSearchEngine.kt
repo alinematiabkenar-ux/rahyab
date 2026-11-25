@@ -157,6 +157,82 @@ class OfflinePlaceSearchEngine(
         }
     }
 
+    /**
+     * PK1: Queries installed offline SQLite places databases for parking lots, garages, or
+     * street parking within [radiusMeters] (default 400 m) of a destination coordinate.
+     */
+    suspend fun queryNearbyParking(
+        destLat: Double,
+        destLon: Double,
+        radiusMeters: Double = 400.0,
+        limit: Int = 30
+    ): List<PlaceSearchResult> = withContext(Dispatchers.IO) {
+        val dbFiles = packManager.getInstalledPlacesDatabases()
+        if (dbFiles.isEmpty()) return@withContext emptyList()
+        val latDelta = (radiusMeters / 111_320.0) * 1.15
+        val cosLat = cos(Math.toRadians(destLat)).coerceAtLeast(0.15)
+        val lonDelta = latDelta / cosLat
+        val out = mutableListOf<PlaceSearchResult>()
+        for ((stateCode, dbFile) in dbFiles) {
+            runCatching {
+                val conn = sqliteDriver.open(dbFile.absolutePath)
+                try {
+                    if (!hasTable(conn, "places")) return@runCatching
+                    val sql = """
+                        SELECT id, COALESCE(name, ''), COALESCE(brand, ''), COALESCE(category, ''),
+                               COALESCE(address, ''), COALESCE(city, ''), COALESCE(state, ?),
+                               COALESCE(postcode, ''), lat, lon, COALESCE(source, 'overture')
+                        FROM places
+                        WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
+                          AND (LOWER(COALESCE(category, '')) LIKE '%parking%'
+                               OR LOWER(COALESCE(name, '')) LIKE '%parking%'
+                               OR LOWER(COALESCE(category, '')) LIKE '%garage%'
+                               OR LOWER(COALESCE(name, '')) LIKE '%garage%')
+                        LIMIT ?
+                    """.trimIndent()
+                    val stmt = conn.prepare(sql)
+                    try {
+                        stmt.bindText(1, stateCode.uppercase())
+                        stmt.bindDouble(2, destLat - latDelta)
+                        stmt.bindDouble(3, destLat + latDelta)
+                        stmt.bindDouble(4, destLon - lonDelta)
+                        stmt.bindDouble(5, destLon + lonDelta)
+                        stmt.bindLong(6, limit.toLong())
+                        while (stmt.step()) {
+                            val lat = stmt.getDouble(8)
+                            val lon = stmt.getDouble(9)
+                            val dist = haversineMeters(destLat, destLon, lat, lon)
+                            if (dist <= radiusMeters) {
+                                out.add(
+                                    PlaceSearchResult(
+                                        id = "${stateCode}_p_${stmt.getLong(0)}",
+                                        name = stmt.getText(1),
+                                        brand = stmt.getText(2),
+                                        category = stmt.getText(3),
+                                        address = stmt.getText(4),
+                                        city = stmt.getText(5),
+                                        stateCode = stmt.getText(6),
+                                        postcode = stmt.getText(7),
+                                        lat = lat,
+                                        lon = lon,
+                                        distanceMeters = dist,
+                                        relevanceScore = 100.0 - dist / 10.0,
+                                        source = stmt.getText(10)
+                                    )
+                                )
+                            }
+                        }
+                    } finally {
+                        stmt.close()
+                    }
+                } finally {
+                    conn.close()
+                }
+            }
+        }
+        out
+    }
+
     suspend fun queryRoadHazardsInBounds(
         minLat: Double,
         maxLat: Double,

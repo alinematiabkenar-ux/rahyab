@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Work
@@ -100,6 +101,7 @@ internal fun PlaceAndRoutePreviewCard(
     selectedTravelMode: com.example.navigation.TravelMode = com.example.navigation.TravelMode.DRIVE,
     modePreviewSummaries: Map<com.example.navigation.TravelMode, ModePreviewSummary> = emptyMap(),
     onSelectTravelMode: (com.example.navigation.TravelMode) -> Unit = {},
+    onFindParkingNearby: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -175,9 +177,18 @@ internal fun PlaceAndRoutePreviewCard(
                 }
             }
 
-            // Route avoid options (Drive mode only)
+            // Route avoid options + Parking nearby (Drive mode only)
             if (selectedTravelMode == com.example.navigation.TravelMode.DRIVE) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    item {
+                        FilterChip(
+                            selected = false,
+                            onClick = onFindParkingNearby,
+                            leadingIcon = { Icon(Icons.Filled.LocalParking, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                            label = { Text(strings.parkingNearbyButton, fontSize = 12.sp) },
+                            modifier = Modifier.testTag("parking_nearby_button")
+                        )
+                    }
                     item {
                         FilterChip(selected = avoidTolls, onClick = { onToggleAvoidTolls(!avoidTolls) }, label = { Text(strings.avoidTolls, fontSize = 12.sp) })
                     }

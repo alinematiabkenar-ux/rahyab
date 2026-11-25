@@ -541,7 +541,9 @@ fun SpeedometerAndLimitCluster(
     unit: DistanceUnit,
     modifier: Modifier = Modifier,
     overspeedToleranceMph: Int = 5,
-    speedLimitSource: String = "none"
+    speedLimitSource: String = "none",
+    upcomingSpeedLimitMph: Int? = null,
+    upcomingSpeedLimitDistanceMeters: Double? = null
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
@@ -660,6 +662,43 @@ fun SpeedometerAndLimitCluster(
                             modifier = Modifier.testTag("speed_limit_est_label")
                         )
                     }
+                }
+            }
+        }
+
+        if (upcomingSpeedLimitMph != null && upcomingSpeedLimitDistanceMeters != null && upcomingSpeedLimitDistanceMeters <= 500.0) {
+            val nextLimit = BilingualFormatter.convertMphToUnit(upcomingSpeedLimitMph, unit)
+            val distStr = BilingualFormatter.formatDistance(upcomingSpeedLimitDistanceMeters, unit, language)
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = Color.White,
+                border = BorderStroke(2.5.dp, AlertAmber),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .width(58.dp)
+                    .testTag("upcoming_speed_limit_sign")
+            ) {
+                Column(
+                    modifier = Modifier.padding(vertical = 3.dp, horizontal = 3.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "↓ $distStr",
+                        fontSize = 8.5.sp,
+                        lineHeight = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFFB45309),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = BilingualFormatter.formatNumber(nextLimit, language),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = if (language == AppLanguage.PERSIAN) MaterialTheme.typography.titleMedium.fontFamily else JetBrainsMonoFamily,
+                        color = Color(0xFF0F172A)
+                    )
                 }
             }
         }

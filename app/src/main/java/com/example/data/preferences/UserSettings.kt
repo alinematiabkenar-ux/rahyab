@@ -3,6 +3,7 @@ package com.example.data.preferences
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
+import com.example.map.LaneHighlightColor
 import com.example.navigation.CyclingSpeedPreset
 import com.example.navigation.LaneChangeTiming
 import com.example.navigation.RoutePreference
@@ -17,6 +18,9 @@ data class UserSettings(
     val speedWarningAudioEnabled: Boolean = true,
     val speedWarningThresholdMph: Int = 5, // 0, 5, or 10 mph (converted automatically for km/h)
     val junctionPreviewEnabled: Boolean = true,
+    // LN3: Lane highlight on the map itself
+    val laneHighlightOnMapEnabled: Boolean = true,
+    val laneHighlightColor: LaneHighlightColor = LaneHighlightColor.RED,
     // L4: Lane change beeps & timing
     val laneChangeBeepsEnabled: Boolean = true,
     val laneChangeTiming: LaneChangeTiming = LaneChangeTiming.NORMAL,

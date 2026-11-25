@@ -82,6 +82,7 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
     val s = settings.value
     navController.reset()
     hpmsFallbackCache.reset()
+    speedLimitDropTracker.reset()
     voiceManager.resetDeduplication()
     val initialManeuver = newRoute.maneuvers.firstOrNull()
     val startLoc = _navigationState.value.snappedLocation
@@ -145,6 +146,7 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
     speedBumpEvaluator.reset()
     trafficLightVoiceEvaluator.reset()
     laneChangeCueTracker.reset()
+    speedLimitDropTracker.reset()
     voiceManager.resetDeduplication()
     locationTracker.setNavigationMode(true)
     compassTracker.setNavigationMode(true)
@@ -308,6 +310,8 @@ internal fun RahYabViewModel.stopNavigationImpl() {
     _navigationState.value = ActiveNavigationState()
     navController.reset()
     hpmsFallbackCache.reset()
+    speedLimitDropTracker.reset()
+    clearDestinationParkingStateImpl()
     NavigationForegroundService.stop(app)
     _isCameraFollowing.value = true
     val ref = getEffectiveReferenceLocation()

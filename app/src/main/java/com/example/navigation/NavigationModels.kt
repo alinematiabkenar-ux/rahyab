@@ -156,6 +156,7 @@ data class OfflineRoute(
     val shape: List<LatLon>,
     val maneuvers: List<RouteManeuver>,
     val speedLimitsByShapeIndex: Map<Int, Int> = emptyMap(),
+    val oneWayByShapeIndex: Map<Int, Boolean> = emptyMap(),
     val roadAlerts: List<AheadAlert> = emptyList(),
     val crossesStateLines: Boolean = false,
     val statesCrossed: List<String> = emptyList(),
@@ -206,6 +207,8 @@ data class ActiveNavigationState(
     val snappedShapeIndex: Int = 0,
     val currentSpeedLimitMph: Int? = null, // OSM maxspeed or HPMS fallback — never guessed!
     val speedLimitSource: String = "none", // "osm", "hpms", or "none"
+    val upcomingSpeedLimitMph: Int? = null,
+    val upcomingSpeedLimitDistanceMeters: Double? = null,
     val isOverspeed: Boolean = false,
     val isOffRoute: Boolean = false,
     val isRerouting: Boolean = false,

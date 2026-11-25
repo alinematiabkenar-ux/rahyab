@@ -228,10 +228,28 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var cachedDbHazards: List<RoadHazardPoint> = emptyList()
     internal var cachedFraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList()
     internal var syntheticSimSpeedBumps: List<RoadHazardPoint> = emptyList()
+    internal val _destinationParkingOptions = MutableStateFlow<List<com.example.navigation.DestinationParkingOption>>(emptyList())
+    val destinationParkingOptions: StateFlow<List<com.example.navigation.DestinationParkingOption>> = _destinationParkingOptions.asStateFlow()
+    internal val _showDestinationParkingCard = MutableStateFlow(false)
+    val showDestinationParkingCard: StateFlow<Boolean> = _showDestinationParkingCard.asStateFlow()
+    internal val _originalFinalDestination = MutableStateFlow<PlaceSearchResult?>(null)
+    val originalFinalDestination: StateFlow<PlaceSearchResult?> = _originalFinalDestination.asStateFlow()
+    internal val _showWalkToOriginalDestinationPrompt = MutableStateFlow(false)
+    val showWalkToOriginalDestinationPrompt: StateFlow<Boolean> = _showWalkToOriginalDestinationPrompt.asStateFlow()
+    internal var destinationParkingJob: Job? = null
+    internal var lastAutoParkingRouteId: String? = null
     internal val speedBumpEvaluator = com.example.navigation.SpeedBumpAlertEvaluator()
     internal val trafficLightVoiceEvaluator = com.example.navigation.TrafficLightVoiceEvaluator()
     internal val laneChangeCueTracker = com.example.navigation.LaneChangeCueTracker()
+    internal val speedLimitDropTracker = com.example.navigation.SpeedLimitDropVoiceTracker()
     internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()
+    internal val voiceCommandManager = com.example.navigation.OfflineVoiceCommandManager(app)
+    val voiceListenState: StateFlow<com.example.navigation.VoiceListenUiState> = voiceCommandManager.uiState
+    internal val _voiceAutoStartSecondsLeft = MutableStateFlow(0)
+    val voiceAutoStartSecondsLeft: StateFlow<Int> = _voiceAutoStartSecondsLeft.asStateFlow()
+    internal val _openSearchResultsEvent = MutableStateFlow(0L)
+    val openSearchResultsEvent: StateFlow<Long> = _openSearchResultsEvent.asStateFlow()
+    internal var voiceAutoStartJob: Job? = null
 
     private val hubDelegate = object : com.example.navigation.PhoneNavigationDelegate {
         override fun onCalculateRoutesForPlace(place: PlaceSearchResult) {
@@ -296,7 +314,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun executeSearchNow(query: String) = executeSearchNowImpl(query)
     fun dropPinOnMap(lat: Double, lon: Double) = dropPinOnMapImpl(lat, lon)
     fun selectPlace(place: PlaceSearchResult) = selectPlaceImpl(place)
-    fun clearSelectedPlace() = clearSelectedPlaceImpl()
+    fun clearSelectedPlace() { cancelVoiceAutoStartCountdownImpl(); clearSelectedPlaceImpl() }
     fun handleExternalMapIntent(intent: Intent?) = handleExternalMapIntentImpl(intent)
     fun selectExternalMatchChoice(place: PlaceSearchResult) = selectExternalMatchChoiceImpl(place)
     fun dismissExternalMatchChoices() = dismissExternalMatchChoicesImpl()
@@ -307,7 +325,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun calculateRoutesToSelectedPlace() = calculateRoutesToSelectedPlaceImpl()
     fun selectTravelMode(mode: com.example.navigation.TravelMode) = selectTravelModeImpl(mode)
     fun selectCandidateRoute(index: Int) = selectCandidateRouteImpl(index)
-    fun startNavigation(forceSimulate: Boolean? = null) = startNavigationImpl(forceSimulate)
+    fun startNavigation(forceSimulate: Boolean? = null) { cancelVoiceAutoStartCountdownImpl(); startNavigationImpl(forceSimulate) }
     fun toggleSimulationFromMap() = toggleSimulationFromMapImpl()
     fun stopSimulationAndReturnToRealGps() = stopSimulationAndReturnToRealGpsImpl()
     fun cycleSimulationSpeed() = cycleSimulationSpeedImpl()
@@ -317,12 +335,23 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun repeatLastVoiceInstruction() = voiceManager.repeatLastInstruction(settings.value.language)
     fun stopNavigation() = stopNavigationImpl()
 
+    // --- OFFLINE ENGLISH VOICE COMMANDS (VC1-VC3, phone only) ---
+    fun startVoiceCommandListening() = startVoiceCommandListeningImpl()
+    fun cancelVoiceCommandListening() = cancelVoiceCommandListeningImpl()
+    fun downloadOfflineEnglishModel() = downloadOfflineEnglishModelImpl()
+    fun cancelVoiceAutoStartCountdown() = cancelVoiceAutoStartCountdownImpl()
+
     // --- PARKED CAR & WALK TO CAR (F4) ---
     fun parkCarHereManually() = parkCarHereManuallyImpl()
     fun updateParkedCarNote(note: String) = updateParkedCarNoteImpl(note)
     fun clearParkedCar() = clearParkedCarImpl()
     fun startWalkToCar() = startWalkToCarImpl()
     fun onCarBluetoothDisconnected() = onCarBluetoothDisconnectedImpl()
+    fun searchParkingNearPreviewDestination() = searchParkingNearPreviewDestinationImpl()
+    fun selectDestinationParking(option: com.example.navigation.DestinationParkingOption) = selectDestinationParkingImpl(option)
+    fun dismissDestinationParkingCard() { _showDestinationParkingCard.value = false; _destinationParkingOptions.value = emptyList() }
+    fun startWalkFromParkingToOriginalDestination() = startWalkFromParkingToOriginalDestinationImpl()
+    fun dismissWalkToOriginalDestinationPrompt() = dismissWalkToOriginalDestinationPromptImpl()
     fun setSkipParkingAtHome(enabled: Boolean) { viewModelScope.launch { prefs.setSkipParkingAtHome(enabled) } }
     fun setCarBluetoothDevice(address: String, name: String) {
         viewModelScope.launch { prefs.setCarBluetoothDevice(address, name) }
@@ -368,6 +397,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setSpeedAudioEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setSpeedWarningAudioEnabled(enabled) } }
     fun setSpeedWarningThresholdMph(thresholdMph: Int) { viewModelScope.launch { prefs.setSpeedWarningThresholdMph(thresholdMph) } }
     fun setJunctionPreviewEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setJunctionPreviewEnabled(enabled) } }
+    fun setLaneHighlightOnMapEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLaneHighlightOnMapEnabled(enabled) } }
+    fun setLaneHighlightColor(color: com.example.map.LaneHighlightColor) { viewModelScope.launch { prefs.setLaneHighlightColor(color) } }
     fun setLaneChangeBeepsEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLaneChangeBeepsEnabled(enabled) } }
     fun setLaneChangeTiming(timing: com.example.navigation.LaneChangeTiming) { viewModelScope.launch { prefs.setLaneChangeTiming(timing) } }
     fun setLastChanceBeepEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLastChanceBeepEnabled(enabled) } }
@@ -420,6 +451,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        voiceCommandManager.destroy()
         navigationHub.detachPhoneDelegate(hubDelegate)
         carBluetoothReceiver.unregister(app)
     }

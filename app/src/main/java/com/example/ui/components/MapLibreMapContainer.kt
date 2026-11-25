@@ -101,6 +101,9 @@ fun MapLibreMapContainer(
     stopSigns: List<RoadHazardPoint> = emptyList(),
     parkedCarLocation: LatLon? = null,
     maneuverArrow: com.example.map.ManeuverArrowData? = null,
+    laneOverlay: com.example.map.LaneOverlayData? = null,
+    laneHighlightColorHex: String = com.example.map.LaneHighlightColor.RED.hex,
+    destinationParkingSpots: List<com.example.navigation.DestinationParkingOption> = emptyList(),
     show3DBuildings: Boolean = true,
     positionMarkerStyle: String = "arrow",
     isGpsPoor: Boolean = false,
@@ -454,6 +457,14 @@ fun MapLibreMapContainer(
     LaunchedEffect(loadedStyle, maneuverArrow) {
         val style = loadedStyle ?: return@LaunchedEffect
         com.example.map.MapExtraLayersHelper.updateManeuverArrow(style, maneuverArrow)
+    }
+    LaunchedEffect(loadedStyle, laneOverlay, laneHighlightColorHex) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        com.example.map.LaneMapLayerHelper.updateLaneOverlay(style, laneOverlay, laneHighlightColorHex)
+    }
+    LaunchedEffect(loadedStyle, destinationParkingSpots) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        com.example.map.ParkingOverlayLayerHelper.updateDestinationParkingIcons(style, destinationParkingSpots)
     }
 
     // 4. POSITION ARROW & ACCURACY CIRCLE EFFECT — runs ONLY when position or throttled heading changes

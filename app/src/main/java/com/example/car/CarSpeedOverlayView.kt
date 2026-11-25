@@ -36,6 +36,8 @@ class CarSpeedOverlayView(context: Context) : View(context) {
     private var isOverspeed: Boolean = false
     private var overspeedToleranceMph: Int = 5
     private var speedLimitSource: String = "none"
+    private var upcomingSpeedLimitMph: Int? = null
+    private var upcomingSpeedLimitDistMeters: Double? = null
     private var distanceUnit: DistanceUnit = DistanceUnit.IMPERIAL
     private var language: AppLanguage = AppLanguage.ENGLISH
     private var isDarkMode: Boolean = true
@@ -87,7 +89,9 @@ class CarSpeedOverlayView(context: Context) : View(context) {
         lang: AppLanguage,
         darkMode: Boolean,
         toleranceMph: Int = 5,
-        limitSource: String = "none"
+        limitSource: String = "none",
+        upcomingLimitMph: Int? = null,
+        upcomingLimitDistMeters: Double? = null
     ) {
         noPackMessage = noPackMsg
         showSpeedOverlay = showSpeed
@@ -96,6 +100,8 @@ class CarSpeedOverlayView(context: Context) : View(context) {
         isOverspeed = overspeed
         overspeedToleranceMph = toleranceMph
         speedLimitSource = limitSource
+        upcomingSpeedLimitMph = upcomingLimitMph
+        upcomingSpeedLimitDistMeters = upcomingLimitDistMeters
         distanceUnit = unit
         language = lang
         isDarkMode = darkMode
@@ -196,41 +202,73 @@ class CarSpeedOverlayView(context: Context) : View(context) {
         canvas.drawText(unitText, cx, cy + 20f * density, unitLabelPaint)
 
         // 2. Speed limit sign side-by-side next to the circular speedometer
-        val limitMph = speedLimitMph ?: return
-        val displayLimit = if (distanceUnit == DistanceUnit.METRIC) {
-            ((limitMph * 1.60934) / 5.0).roundToInt() * 5
-        } else {
-            limitMph
-        }
-        val isEstimated = SpeedometerRingPolicy.isEstimatedLimitSource(speedLimitSource)
-        val limitW = 64f * density
-        val limitH = if (isEstimated) 78f * density else 70f * density
-        val limitLeft = cx + radius + gap
-        val limitTop = cy - limitH / 2f
-        val limitRect = RectF(limitLeft, limitTop, limitLeft + limitW, limitTop + limitH)
-        limitBorderPaint.strokeWidth = 3f * density
-        canvas.drawRoundRect(limitRect, 10f * density, 10f * density, limitBgPaint)
-        canvas.drawRoundRect(limitRect, 10f * density, 10f * density, limitBorderPaint)
+        var nextLeft = cx + radius + gap
+        val limitMph = speedLimitMph
+        if (limitMph != null) {
+            val displayLimit = if (distanceUnit == DistanceUnit.METRIC) {
+                ((limitMph * 1.60934) / 5.0).roundToInt() * 5
+            } else {
+                limitMph
+            }
+            val isEstimated = SpeedometerRingPolicy.isEstimatedLimitSource(speedLimitSource)
+            val limitW = 64f * density
+            val limitH = if (isEstimated) 78f * density else 70f * density
+            val limitTop = cy - limitH / 2f
+            val limitRect = RectF(nextLeft, limitTop, nextLeft + limitW, limitTop + limitH)
+            limitBorderPaint.color = Color.parseColor("#0F172A")
+            limitBorderPaint.strokeWidth = 3f * density
+            canvas.drawRoundRect(limitRect, 10f * density, 10f * density, limitBgPaint)
+            canvas.drawRoundRect(limitRect, 10f * density, 10f * density, limitBorderPaint)
 
-        limitHeaderPaint.textSize = 9.5f * density
-        canvas.drawText("LIMIT", limitRect.centerX(), limitRect.top + 17f * density, limitHeaderPaint)
-        speedValuePaint.color = if (effectiveOverspeed) Color.parseColor("#DC2626") else Color.parseColor("#0F172A")
-        speedValuePaint.textSize = 25f * density
-        val numberBaseline = if (isEstimated) limitRect.bottom - 20f * density else limitRect.bottom - 13f * density
+            limitHeaderPaint.textSize = 9.5f * density
+            canvas.drawText("LIMIT", limitRect.centerX(), limitRect.top + 17f * density, limitHeaderPaint)
+            speedValuePaint.color = if (effectiveOverspeed) Color.parseColor("#DC2626") else Color.parseColor("#0F172A")
+            speedValuePaint.textSize = 25f * density
+            val numberBaseline = if (isEstimated) limitRect.bottom - 20f * density else limitRect.bottom - 13f * density
+            canvas.drawText(
+                BilingualFormatter.formatNumber(displayLimit, language),
+                limitRect.centerX(),
+                numberBaseline,
+                speedValuePaint
+            )
+            if (isEstimated) {
+                estLabelPaint.textSize = 9f * density
+                canvas.drawText(
+                    stringsFor(language).speedLimitEstimatedLabel,
+                    limitRect.centerX(),
+                    limitRect.bottom - 6f * density,
+                    estLabelPaint
+                )
+            }
+            nextLeft += limitW + gap * 0.8f
+        }
+
+        // 3. SL3: Upcoming speed limit drop sign + distance beside current speed limit sign
+        val nextMph = upcomingSpeedLimitMph ?: return
+        val nextDist = upcomingSpeedLimitDistMeters?.takeIf { it <= 500.0 } ?: return
+        val displayNext = BilingualFormatter.convertMphToUnit(nextMph, distanceUnit)
+        val distText = "↓ ${BilingualFormatter.formatDistance(nextDist, distanceUnit, language)}"
+        val upW = 58f * density
+        val upH = 62f * density
+        val upTop = cy - upH / 2f
+        val upRect = RectF(nextLeft, upTop, nextLeft + upW, upTop + upH)
+        limitBorderPaint.color = Color.parseColor("#F59E0B")
+        limitBorderPaint.strokeWidth = 3f * density
+        canvas.drawRoundRect(upRect, 10f * density, 10f * density, limitBgPaint)
+        canvas.drawRoundRect(upRect, 10f * density, 10f * density, limitBorderPaint)
+
+        estLabelPaint.color = Color.parseColor("#B45309")
+        estLabelPaint.textSize = 9f * density
+        canvas.drawText(distText, upRect.centerX(), upRect.top + 16f * density, estLabelPaint)
+        estLabelPaint.color = Color.parseColor("#475569")
+
+        speedValuePaint.color = Color.parseColor("#0F172A")
+        speedValuePaint.textSize = 22f * density
         canvas.drawText(
-            BilingualFormatter.formatNumber(displayLimit, language),
-            limitRect.centerX(),
-            numberBaseline,
+            BilingualFormatter.formatNumber(displayNext, language),
+            upRect.centerX(),
+            upRect.bottom - 12f * density,
             speedValuePaint
         )
-        if (isEstimated) {
-            estLabelPaint.textSize = 9f * density
-            canvas.drawText(
-                stringsFor(language).speedLimitEstimatedLabel,
-                limitRect.centerX(),
-                limitRect.bottom - 6f * density,
-                estLabelPaint
-            )
-        }
     }
 }

@@ -167,7 +167,7 @@ internal fun RahYabViewModel.startWalkToCarImpl() {
     }
 }
 
-private fun RahYabViewModel.startWalkingNavigationSessionImpl(
+internal fun RahYabViewModel.startWalkingNavigationSessionImpl(
     route: com.example.navigation.OfflineRoute,
     dest: com.example.data.search.PlaceSearchResult
 ) {

@@ -191,17 +191,32 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         if (text.isBlank()) return ""
         val effectiveLanguage = resolveEffectiveLanguage(language)
         _lastSpokenText.value = text
-        if (voiceEnabled && engineSelector.isInitialized) {
+        if (voiceEnabled && engineSelector.isInitialized) speechQueue.speakRaw(text, effectiveLanguage)
+        return text
+    }
+
+    fun speakAfterCurrentSpeech(text: String, language: AppLanguage): String {
+        if (text.isBlank() || !voiceEnabled || !engineSelector.isInitialized) return text
+        val effectiveLanguage = resolveEffectiveLanguage(language)
+        if (isSpeakingOrQueued()) {
+            speechQueue.enqueueAfterCurrentSpeech {
+                if (voiceEnabled && engineSelector.isInitialized) speechQueue.speakRaw(text, effectiveLanguage)
+            }
+        } else {
             speechQueue.speakRaw(text, effectiveLanguage)
         }
         return text
     }
 
+    fun stopSpeaking() {
+        laneChangeTonePlayer.cancelPending()
+        speechQueue.stopAllSpeech()
+    }
+
     fun repeatLastInstruction(language: AppLanguage) {
         val text = _lastSpokenText.value
         if (text.isBlank() || !engineSelector.isInitialized) return
-        val effectiveLanguage = resolveEffectiveLanguage(language)
-        speechQueue.speakRaw(text, effectiveLanguage)
+        speechQueue.speakRaw(text, resolveEffectiveLanguage(language))
     }
 
     fun speakAlert(

@@ -76,7 +76,8 @@ class CameraFollowController {
         simulationSpeedMultiplier: Int = 1,
         forceImmediate: Boolean = false,
         isWalkingMode: Boolean = false,
-        travelMode: TravelMode = if (isWalkingMode) TravelMode.WALK else TravelMode.DRIVE
+        travelMode: TravelMode = if (isWalkingMode) TravelMode.WALK else TravelMode.DRIVE,
+        minZoomFloor: Double? = null
     ): CameraFollowUpdate? {
         val effectiveMode = if (isWalkingMode) TravelMode.WALK else travelMode
         val effectiveHeadingUp = if (effectiveMode == TravelMode.BIKE) true else isHeadingUpMode
@@ -104,12 +105,18 @@ class CameraFollowController {
             return null
         }
 
-        val targetZoom = when (effectiveMode) {
+        val rawTargetZoom = when (effectiveMode) {
             TravelMode.WALK -> 17.0
             TravelMode.BIKE -> 16.0
             TravelMode.DRIVE -> targetZoomForSpeedMps(speedMps, isNavigating)
         }
-        val nextZoom = smoothZoom(targetZoom, forceImmediate)
+        val targetZoom = if (minZoomFloor != null) maxOf(rawTargetZoom, minZoomFloor) else rawTargetZoom
+        val smoothed = smoothZoom(targetZoom, forceImmediate)
+        val nextZoom = if (minZoomFloor != null) {
+            maxOf(smoothed, minZoomFloor).also { smoothedZoom = it }
+        } else {
+            smoothed
+        }
 
         val tilt = when {
             effectiveMode != TravelMode.DRIVE -> 0.0

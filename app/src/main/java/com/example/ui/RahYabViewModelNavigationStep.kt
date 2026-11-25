@@ -56,10 +56,22 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
 ) {
     val s = settings.value
     val wasArrived = _navigationState.value.hasArrived
-    _navigationState.value = state
-
     val mode = state.effectiveTravelMode
     val isDriveMode = mode == TravelMode.DRIVE
+    val speedDropAhead = if (isDriveMode && state.isNavigating && !state.hasArrived) {
+        com.example.navigation.SpeedLimitChangeAhead.findNextDrop(
+            route = state.route,
+            snappedShapeIndex = state.snappedShapeIndex,
+            currentSpeedLimitMph = state.currentSpeedLimitMph
+        )
+    } else null
+    val visualDrop = speedDropAhead?.takeIf {
+        it.distanceMeters <= com.example.navigation.SpeedLimitChangeAhead.VISUAL_SIGN_WINDOW_METERS
+    }
+    _navigationState.value = state.copy(
+        upcomingSpeedLimitMph = visualDrop?.newLimitMph,
+        upcomingSpeedLimitDistanceMeters = visualDrop?.distanceMeters
+    )
 
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc
@@ -119,11 +131,15 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
             voiceManager.speakArrival(arrivalManeuverType, state.destinationName, s.language)
         }
         _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
-        arrivalEndJob?.cancel()
-        arrivalEndJob = viewModelScope.launch {
-            delay(6000L)
-            if (_navigationState.value.hasArrived) {
-                stopNavigation()
+        if (isDriveMode && _originalFinalDestination.value != null) {
+            onArrivedAtChosenParkingImpl()
+        } else {
+            arrivalEndJob?.cancel()
+            arrivalEndJob = viewModelScope.launch {
+                delay(6000L)
+                if (_navigationState.value.hasArrived) {
+                    stopNavigation()
+                }
             }
         }
     } else {
@@ -147,6 +163,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         }
         if (mode != TravelMode.WALK) {
             alertToSpeak?.let { alert ->
+                if (alert.kind == RoadAlertKind.SPEED_LIMIT_DROP) return@let
                 if (isDriveMode && (alert.kind == RoadAlertKind.SPEED_CAMERA || alert.kind == RoadAlertKind.RED_LIGHT_CAMERA)) {
                     voiceManager.playCameraAlertSound()
                 }
@@ -154,7 +171,19 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
             }
         }
         if (isDriveMode) {
+            speedLimitDropTracker.checkVoiceTrigger(
+                drop = speedDropAhead,
+                speedMps = speedMps,
+                travelMode = mode,
+                enabled = s.alertSpeedDropEnabled
+            )?.let { triggered ->
+                val phrase = com.example.navigation.SpeedLimitDropVoiceTracker.formatVoicePhrase(
+                    triggered.newLimitMph, s.distanceUnit, s.language
+                )
+                voiceManager.speakAfterCurrentSpeech(phrase, s.language)
+            }
             evaluateSpeedBumpForNavigationImpl(state, fallbackLoc, speedMps)
+            maybeSearchParkingNearActiveDestinationImpl(state)
             if (navPos != null && maneuverToSpeak == null && alertToSpeak == null) {
                 evaluateTrafficLightVoiceImpl(navPos.lat, navPos.lon, state.snappedBearing, isDriveMode = true)
             }
@@ -200,6 +229,15 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 _userHeadingDegrees.value
             }
             val simMultiplier = if (state.isSimulatingDrive) _simulationSpeedMultiplier.value else 1
+            val isLaneOverlayActive = !state.hasArrived && com.example.map.LaneOverlayBuilder.build(
+                route = state.route,
+                currentManeuverIndex = state.currentManeuverIndex,
+                snappedShapeIndex = state.snappedShapeIndex,
+                distanceToNextManeuverMeters = state.distanceToNextManeuverMeters,
+                travelMode = mode,
+                isOffRoute = state.isOffRoute,
+                enabled = s.laneHighlightOnMapEnabled
+            ) != null
             val update = cameraFollowController.computeFollowCameraUpdate(
                 lat = targetLoc.lat,
                 lon = targetLoc.lon,
@@ -211,7 +249,8 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 simulationSpeedMultiplier = simMultiplier,
                 forceImmediate = forceRecenterNow,
                 isWalkingMode = state.isWalkingMode,
-                travelMode = mode
+                travelMode = mode,
+                minZoomFloor = if (isLaneOverlayActive) 16.5 else null
             )
             if (update != null) {
                 _cameraCommand.value = CameraTargetCommand(
@@ -267,6 +306,7 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
             navController.reset()
             trafficLightVoiceEvaluator.reset()
             laneChangeCueTracker.reset()
+            speedLimitDropTracker.reset()
             voiceManager.resetDeduplication()
             val spoken = voiceManager.speakStartInstruction(newRoute, s.language)
             if (spoken.isNotBlank()) {

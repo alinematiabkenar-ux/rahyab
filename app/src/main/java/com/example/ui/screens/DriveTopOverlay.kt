@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.LocalCafe
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocalPharmacy
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -101,6 +102,7 @@ internal fun DriveTopOverlay(
     onOpenAppSettings: () -> Unit,
     onNavigateToMaps: () -> Unit,
     onEnableDevOregon: () -> Unit,
+    onStartVoiceCommand: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -215,39 +217,23 @@ internal fun DriveTopOverlay(
                     },
                     trailingIcon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (isSearching) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(6.dp))
+                            if (isSearching) { CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(modifier = Modifier.width(6.dp)) }
+                            IconButton(onClick = onStartVoiceCommand, modifier = Modifier.testTag("search_voice_command_mic_button")) {
+                                Icon(Icons.Filled.Mic, contentDescription = strings.voiceCommandMicDesc, tint = MaterialTheme.colorScheme.primary)
                             }
                             if (searchQuery.isNotEmpty() || isSearchExpanded) {
                                 IconButton(
-                                    onClick = {
-                                        onSearchQueryChanged("")
-                                        onSetSearchExpanded(false)
-                                        keyboard?.hide()
-                                    },
+                                    onClick = { onSearchQueryChanged(""); onSetSearchExpanded(false); keyboard?.hide() },
                                     modifier = Modifier.testTag("clear_search_button")
-                                ) {
-                                    Icon(Icons.Filled.Clear, contentDescription = strings.close)
-                                }
+                                ) { Icon(Icons.Filled.Clear, contentDescription = strings.close) }
                             }
                         }
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(
-                        onSearch = {
-                            onExecuteSearchNow(searchQuery)
-                            keyboard?.hide()
-                        }
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("search_input_field")
+                    keyboardActions = KeyboardActions(onSearch = { onExecuteSearchNow(searchQuery); keyboard?.hide() }),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent),
+                    modifier = Modifier.fillMaxWidth().testTag("search_input_field")
                 )
             }
 

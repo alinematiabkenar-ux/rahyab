@@ -48,7 +48,12 @@ internal object CarMapStyleHelper {
         }
     }
 
-    fun updatePositionAndRoutes(app: RahYabApplication, style: Style?) {
+    fun updatePositionAndRoutes(
+        app: RahYabApplication,
+        style: Style?,
+        laneHighlightEnabled: Boolean = true,
+        laneHighlightColorHex: String = com.example.map.LaneHighlightColor.RED.hex
+    ) {
         if (style == null || !style.isFullyLoaded) return
         val hub = app.navigationHub
         val nav = hub.navigationState.value
@@ -120,8 +125,33 @@ internal object CarMapStyleHelper {
                 null
             }
             MapExtraLayersHelper.updateManeuverArrow(style, arrow)
+            val laneOverlay = if (nav.isNavigating && !nav.hasArrived) {
+                com.example.map.LaneOverlayBuilder.build(
+                    route = nav.route,
+                    currentManeuverIndex = nav.currentManeuverIndex,
+                    snappedShapeIndex = nav.snappedShapeIndex,
+                    distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
+                    travelMode = nav.effectiveTravelMode,
+                    isOffRoute = nav.isOffRoute,
+                    enabled = laneHighlightEnabled
+                )
+            } else null
+            com.example.map.LaneMapLayerHelper.updateLaneOverlay(style, laneOverlay, laneHighlightColorHex)
         }
     }
+
+    fun isLaneOverlayActive(
+        nav: com.example.navigation.ActiveNavigationState,
+        laneHighlightEnabled: Boolean
+    ): Boolean = nav.isNavigating && !nav.hasArrived && com.example.map.LaneOverlayBuilder.build(
+        route = nav.route,
+        currentManeuverIndex = nav.currentManeuverIndex,
+        snappedShapeIndex = nav.snappedShapeIndex,
+        distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
+        travelMode = nav.effectiveTravelMode,
+        isOffRoute = nav.isOffRoute,
+        enabled = laneHighlightEnabled
+    ) != null
 
     fun updateExtraLayers(
         app: RahYabApplication,

@@ -22,6 +22,9 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Offline English voice commands on phone (requested only on first mic tap) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Android Auto Car App Library navigation templates and map surface -->
     <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
@@ -29,6 +32,9 @@
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
         </intent>
     </queries>
 

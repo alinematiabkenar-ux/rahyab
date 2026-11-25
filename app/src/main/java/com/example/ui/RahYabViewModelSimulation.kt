@@ -116,6 +116,7 @@ internal fun RahYabViewModel.startSimulationOnActiveRouteImpl() {
     speedBumpEvaluator.reset()
     trafficLightVoiceEvaluator.reset()
     laneChangeCueTracker.reset()
+    speedLimitDropTracker.reset()
     seedSimulationSpeedBumpsImpl(route.shape)
     voiceManager.resetDeduplication()
     simulatedWrongTurnTicksRemaining = 0
@@ -264,6 +265,7 @@ internal fun RahYabViewModel.setSimulateDriveEnabledImpl(enabled: Boolean) {
 internal fun enrichHighwayExitLanesForSimulation(
     route: com.example.navigation.OfflineRoute
 ): com.example.navigation.OfflineRoute {
+    val updatedOneWay = route.oneWayByShapeIndex.toMutableMap()
     val updated = route.maneuvers.map { m ->
         val isExitOrSplit = m.isHighwayExitOrSplit ||
             m.type == com.example.navigation.ManeuverType.EXIT_RIGHT ||
@@ -272,6 +274,13 @@ internal fun enrichHighwayExitLanesForSimulation(
             m.type == com.example.navigation.ManeuverType.RAMP_LEFT ||
             m.type == com.example.navigation.ManeuverType.STAY_RIGHT ||
             m.type == com.example.navigation.ManeuverType.STAY_LEFT
+        if (isExitOrSplit) {
+            val startIdx = (m.beginShapeIndex - 20).coerceAtLeast(0)
+            val endIdx = (m.beginShapeIndex + 10).coerceAtMost((route.shape.size - 1).coerceAtLeast(0))
+            for (idx in startIdx..endIdx) {
+                updatedOneWay.putIfAbsent(idx, true)
+            }
+        }
         if (!isExitOrSplit || m.lanes.size >= 2) return@map m
 
         val isLeft = m.type == com.example.navigation.ManeuverType.EXIT_LEFT ||
@@ -300,5 +309,5 @@ internal fun enrichHighwayExitLanesForSimulation(
             isHighwayExitOrSplit = true
         )
     }
-    return route.copy(maneuvers = updated)
+    return route.copy(maneuvers = updated, oneWayByShapeIndex = updatedOneWay)
 }

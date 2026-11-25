@@ -5,7 +5,9 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -59,6 +62,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -356,6 +361,43 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.setJunctionPreviewEnabled(it) },
                     testTag = "switch_junction_preview"
                 )
+                SettingsToggleRow(
+                    label = strings.laneHighlightOnMapToggle,
+                    checked = settings.laneHighlightOnMapEnabled,
+                    onCheckedChange = { viewModel.setLaneHighlightOnMapEnabled(it) },
+                    testTag = "switch_lane_highlight_on_map"
+                )
+                if (settings.laneHighlightOnMapEnabled) {
+                    Text(strings.laneHighlightColorLabel, style = MaterialTheme.typography.labelLarge)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val colorChoices = listOf(
+                            Triple(com.example.map.LaneHighlightColor.RED, strings.laneColorRed, Color(0xFFE53935)),
+                            Triple(com.example.map.LaneHighlightColor.BLUE, strings.laneColorBlue, Color(0xFF1E88E5)),
+                            Triple(com.example.map.LaneHighlightColor.GREEN, strings.laneColorGreen, Color(0xFF43A047))
+                        )
+                        colorChoices.forEach { (choice, label, swatch) ->
+                            FilterChip(
+                                selected = settings.laneHighlightColor == choice,
+                                onClick = { viewModel.setLaneHighlightColor(choice) },
+                                leadingIcon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .clip(CircleShape)
+                                            .background(swatch)
+                                    )
+                                },
+                                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("lane_color_${choice.code}_chip")
+                            )
+                        }
+                    }
+                }
 
                 Text(strings.speedWarningThresholdLabel, style = MaterialTheme.typography.labelLarge)
                 Row(
@@ -379,7 +421,7 @@ fun SettingsScreen(
 
                 HorizontalDivider()
                 SettingsToggleRow(
-                    label = strings.alertToggleSpeedDrop,
+                    label = strings.speedLimitDropWarningToggle,
                     checked = settings.alertSpeedDropEnabled,
                     onCheckedChange = { viewModel.setAlertSpeedDropEnabled(it) },
                     testTag = "switch_alert_speed_drop"

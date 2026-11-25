@@ -35,7 +35,8 @@ object ValhallaResponseParser {
     data class TraceAttributesData(
         val speedLimitsByShapeIndex: Map<Int, Int>,
         val laneCountsByShapeIndex: Map<Int, Int>,
-        val gradeSpans: List<EdgeGradeSpan> = emptyList()
+        val gradeSpans: List<EdgeGradeSpan> = emptyList(),
+        val oneWayByShapeIndex: Map<Int, Boolean> = emptyMap()
     )
 
     fun parseTraceAttributes(traceJson: String, shapeSize: Int): TraceAttributesData =

@@ -138,6 +138,7 @@ internal fun RahYabViewModel.dropPinOnMapImpl(lat: Double, lon: Double) {
 }
 
 internal fun RahYabViewModel.selectPlaceImpl(place: PlaceSearchResult) {
+    clearDestinationParkingStateImpl()
     _selectedPlace.value = place
     _candidateRoutes.value = emptyList()
     _routeError.value = null
@@ -169,6 +170,7 @@ internal fun RahYabViewModel.selectPlaceImpl(place: PlaceSearchResult) {
 }
 
 internal fun RahYabViewModel.clearSelectedPlaceImpl() {
+    clearDestinationParkingStateImpl()
     multiModePreviewJob?.cancel()
     _modePreviewSummaries.value = emptyMap()
     _selectedPlace.value = null

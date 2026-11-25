@@ -59,6 +59,8 @@ object MapExtraLayersHelper {
             style.addImage(IMAGE_PARKED_CAR, createParkedCarBitmap())
             style.addImage(IMAGE_MANEUVER_ARROW_HEAD, createManeuverArrowHeadBitmap())
             registerManeuverArrowLayers(style)
+            LaneMapLayerHelper.registerLaneOverlayLayers(style)
+            ParkingOverlayLayerHelper.registerDestinationParkingLayer(style)
 
             if (style.getSource(SOURCE_SPEED_BUMPS) == null) {
                 style.addSource(GeoJsonSource(SOURCE_SPEED_BUMPS))
