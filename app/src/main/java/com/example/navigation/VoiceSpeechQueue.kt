@@ -21,8 +21,16 @@ internal class VoiceSpeechQueue(
     private val sequenceLock = Any()
     private val pendingSegments = ArrayDeque<VoiceGuidanceManager.SpeechSegment>()
     private val pendingLowPriorityAlerts = PendingLowPriorityAlertQueue()
+    private val pendingPostSpeechActions = ArrayDeque<() -> Unit>()
     @Volatile
     private var activeSequenceGeneration: Long = 0L
+
+    fun enqueueAfterCurrentSpeech(action: () -> Unit) {
+        synchronized(sequenceLock) {
+            if (pendingPostSpeechActions.size >= 4) pendingPostSpeechActions.removeFirst()
+            pendingPostSpeechActions.addLast(action)
+        }
+    }
 
     fun updateUserMotionForAlerts(lat: Double, lon: Double, headingDegrees: Float) {
         pendingLowPriorityAlerts.updateUserMotion(lat, lon, headingDegrees)
@@ -109,6 +117,13 @@ internal class VoiceSpeechQueue(
             else pendingSegments.removeFirst()
         }
         if (next == null) {
+            val queuedAction = synchronized(sequenceLock) {
+                if (pendingPostSpeechActions.isNotEmpty()) pendingPostSpeechActions.removeFirst() else null
+            }
+            if (queuedAction != null) {
+                queuedAction.invoke()
+                return
+            }
             if (!speakPendingLowPriorityAlertIfReady()) {
                 engineSelector.abandonDuckingFocus()
             }

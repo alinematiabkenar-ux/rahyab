@@ -130,7 +130,10 @@ private fun RahYabViewModel.applyModePreviewToActiveCandidatesImpl(mode: TravelM
                     _cameraCommand.value = CameraTargetCommand(mid.lat, mid.lon, zoom = 12.0, anchorLowerThird = false)
                 }
             }
-            refreshWeatherAlertsIfEligibleImpl(explicitRoute = summary.routes.firstOrNull())
+            summary.routes.firstOrNull()?.let { primaryRoute ->
+                refreshWeatherAlertsIfEligibleImpl(explicitRoute = primaryRoute)
+                loadFraCrossingsForRouteImpl(primaryRoute)
+            }
         }
         !summary.isLoading -> {
             _candidateRoutes.value = emptyList()

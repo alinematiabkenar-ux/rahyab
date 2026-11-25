@@ -80,11 +80,9 @@ class NavigationSessionController {
         unit: DistanceUnit,
         language: AppLanguage,
         speedAudioEnabled: Boolean,
-        settings: UserSettings = UserSettings(
-            language = language,
-            distanceUnit = unit,
-            speedWarningAudioEnabled = speedAudioEnabled
-        )
+        settings: UserSettings = UserSettings(language = language, distanceUnit = unit, speedWarningAudioEnabled = speedAudioEnabled),
+        fraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList(),
+        hpmsFallbackSpeedMph: Int? = null
     ): UpdateResult {
         val route = currentState.route ?: return UpdateResult(currentState, shouldReroute = false)
         if (route.shape.isEmpty() || route.maneuvers.isEmpty()) {
@@ -237,15 +235,17 @@ class NavigationSessionController {
         )
         val showJunctionPreview = activeJunctionManeuver != null
 
-        // 9. Speed limit (DRIVE only — strictly null in WALK and BIKE)
-        val speedLimitMph = if (!isDrive) {
-            null
-        } else if (route.speedLimitsByShapeIndex.isNotEmpty()) {
+        // 9. Speed limit (DRIVE only — OSM primary, optional HPMS fallback, never guessed)
+        val osmSpeedLimitMph = if (!isDrive) null else if (route.speedLimitsByShapeIndex.isNotEmpty()) {
             route.speedLimitsByShapeIndex[bestIdx]
         } else {
-            val activeManeuver = route.maneuvers.getOrNull((upcomingManeuverIdx - 1).coerceAtLeast(0))
-            activeManeuver?.speedLimitMph
+            route.maneuvers.getOrNull((upcomingManeuverIdx - 1).coerceAtLeast(0))?.speedLimitMph
         }
+        val (speedLimitMph, speedLimitSource) = HpmsSpeedFallbackCache.resolveSpeedLimitWithSource(
+            isDrive = isDrive,
+            osmSpeedLimitMph = osmSpeedLimitMph,
+            hpmsFallbackMph = hpmsFallbackSpeedMph
+        )
         val currentMph = fix.speedMps * 2.23694f
         val isOverspeed = isDrive &&
             speedLimitMph != null &&
@@ -262,7 +262,8 @@ class NavigationSessionController {
                 userReports = userReports,
                 settings = settings,
                 isHighway = isHighway,
-                travelMode = mode
+                travelMode = mode,
+                fraCrossings = fraCrossings
             )
         }
         val speakDistanceMax = if (activeAheadAlert?.kind == RoadAlertKind.STEEP_GRADE) 1_700.0 else 550.0
@@ -285,6 +286,7 @@ class NavigationSessionController {
             snappedBearing = snappedBearing,
             snappedShapeIndex = bestIdx,
             currentSpeedLimitMph = speedLimitMph,
+            speedLimitSource = speedLimitSource,
             isOverspeed = isOverspeed,
             isOffRoute = isOffRouteNow,
             isRerouting = shouldReroute || currentState.isRerouting,
@@ -332,10 +334,12 @@ class NavigationSessionController {
         unit: DistanceUnit,
         language: AppLanguage,
         speedAudioEnabled: Boolean,
-        settings: UserSettings
+        settings: UserSettings,
+        fraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList(),
+        hpmsFallbackSpeedMph: Int? = null
     ): SimulationStepBatchResult = NavigationSimulationEngine.advanceSimulationStep(
         this, currentState, totalSimulatedSeconds, startingSimClockMs, wrongTurnOffsetMeters,
-        dbHazards, userReports, unit, language, speedAudioEnabled, settings
+        dbHazards, userReports, unit, language, speedAudioEnabled, settings, fraCrossings, hpmsFallbackSpeedMph
     )
 
     fun snapToRoute(fix: GpsFix, shape: List<LatLon>, hintIndex: Int = -1): SnapProjection =

@@ -4,18 +4,20 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
 from build_state_pack import merge_manifests, write_pack_manifest_entry
-from extras_builder import compute_elevation_bbox, validate_test_route_response
+from extras_builder import build_elevation_tiles, compute_elevation_bbox, validate_test_route_response
 from extras_fra_hpms import (
     discover_fra_columns,
     discover_hpms_columns,
@@ -33,6 +35,37 @@ class ExtrasPipelineUnitTest(unittest.TestCase):
         bbox = (-124.57, 41.99, -116.46, 46.29)
         min_x, min_y, max_x, max_y = compute_elevation_bbox(bbox)
         self.assertEqual((min_x, min_y, max_x, max_y), (-126, 41, -115, 47))
+
+    def test_build_elevation_tiles_exact_cli_command(self):
+        bbox = (-124.57, 41.99, -116.46, 46.29)
+        with tempfile.TemporaryDirectory() as tmp:
+            elev_dir = Path(tmp) / "elev"
+            fake_tool = "/usr/local/bin/valhalla_build_elevation"
+            captured_cmds: list[list[str]] = []
+
+            def fake_run(cmd, **kwargs):
+                captured_cmds.append(list(cmd))
+                (elev_dir / "N44W124.hgt").write_bytes(b"hgt")
+                return mock.Mock(returncode=0, stdout="ok", stderr="")
+
+            with mock.patch("extras_builder.shutil.which", return_value=fake_tool), \
+                 mock.patch("extras_builder.subprocess.run", side_effect=fake_run):
+                result = build_elevation_tiles("or", bbox, elev_dir)
+
+            self.assertEqual(result, elev_dir)
+            self.assertEqual(len(captured_cmds), 1)
+            self.assertEqual(
+                captured_cmds[0],
+                [
+                    fake_tool,
+                    "--from-bbox=-126,41,-115,47",
+                    "--outdir",
+                    str(elev_dir),
+                    "-p",
+                    str(os.cpu_count() or 4),
+                    "-v",
+                ],
+            )
 
     def test_validate_test_route_response_checks_duration_maneuvers_and_lanes(self):
         good_route = {

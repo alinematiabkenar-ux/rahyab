@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime
 import json
 import math
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -71,14 +72,7 @@ def build_elevation_tiles(
 
     min_x, min_y, max_x, max_y = compute_elevation_bbox(bbox)
     elevation_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        tool,
-        "--min-x", str(min_x),
-        "--max-x", str(max_x),
-        "--min-y", str(min_y),
-        "--max-y", str(max_y),
-        "--elevation-dir", str(elevation_dir),
-    ]
+    cmd = [tool, f"--from-bbox={min_x},{min_y},{max_x},{max_y}", "--outdir", str(elevation_dir), "-p", str(os.cpu_count() or 4), "-v"]
     print(f"[extras] Building elevation tiles for {pack_code.upper()} ({min_x},{min_y}..{max_x},{max_y})", flush=True)
     try:
         res = subprocess.run(

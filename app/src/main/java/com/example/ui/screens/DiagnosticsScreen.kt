@@ -110,6 +110,7 @@ fun DiagnosticsScreen(
     val lastRouteDiag by viewModel.lastRouteDiagnostics.collectAsStateWithLifecycle()
     val ttsDiag by viewModel.ttsDiagnostics.collectAsStateWithLifecycle()
     val parkedCar by viewModel.parkedCar.collectAsStateWithLifecycle()
+    val navState by viewModel.navigationState.collectAsStateWithLifecycle()
 
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var errorLines by remember { mutableStateOf(viewModel.readLastErrorLogLines(20)) }
@@ -152,7 +153,8 @@ fun DiagnosticsScreen(
         language,
         settings.lastManifestCheckEpochMs,
         settings.lastMapUpdateCheckResult,
-        parkedCar
+        parkedCar,
+        navState.speedLimitSource
     ) {
         formatDiagnosticsReport(
             strings = strings,
@@ -169,7 +171,8 @@ fun DiagnosticsScreen(
             lastMapUpdateCheckEpochMs = settings.lastManifestCheckEpochMs,
             lastMapUpdateCheckResult = settings.lastMapUpdateCheckResult,
             parkedCarTimeEpochMs = parkedCar?.parkedAtEpochMs,
-            parkedCarAccuracyMeters = parkedCar?.accuracyMeters
+            parkedCarAccuracyMeters = parkedCar?.accuracyMeters,
+            speedLimitSource = navState.speedLimitSource
         )
     }
 
@@ -411,6 +414,10 @@ fun DiagnosticsScreen(
                             value = "${BilingualFormatter.formatNumber(routeDiag.routingTimeMs.toInt(), language)} ms"
                         )
                     }
+                    DiagKeyValueRow(
+                        label = strings.diagSpeedLimitSourceLabel,
+                        value = navState.speedLimitSource
+                    )
                 }
             }
 
@@ -674,7 +681,8 @@ fun formatDiagnosticsReport(
     lastMapUpdateCheckEpochMs: Long = 0L,
     lastMapUpdateCheckResult: String = "",
     parkedCarTimeEpochMs: Long? = null,
-    parkedCarAccuracyMeters: Float? = null
+    parkedCarAccuracyMeters: Float? = null,
+    speedLimitSource: String = "none"
 ): String = buildString {
     appendLine("=== ${strings.appName} — ${strings.diagnosticsTitle} ===")
     appendLine()
@@ -725,6 +733,7 @@ fun formatDiagnosticsReport(
         appendLine("${strings.diagShapeSpeedLimits}: ${lastRoute.shapePointsWithSpeedLimitCount}/${lastRoute.totalShapePoints}")
         appendLine("${strings.diagRoutingTimeMs}: ${lastRoute.routingTimeMs} ms")
     }
+    appendLine("${strings.diagSpeedLimitSourceLabel}: $speedLimitSource")
     appendLine()
     appendLine("[${strings.diagSectionTts}]")
     appendLine("${strings.diagPersianTtsEngine}: ${ttsInfo.persianEngineLabel.ifBlank { ttsInfo.persianEnginePackage.ifBlank { "—" } }}")

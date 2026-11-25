@@ -62,6 +62,18 @@ class CarAlertHelper(private val carContext: CarContext) {
         )
     }
 
+    fun showLaneChangeCueAlert(maneuverIndex: Int, pulseAtMs: Long, language: AppLanguage) {
+        if (pulseAtMs <= 0L) return
+        if (!shownAlertIds.add("lane_cue_${maneuverIndex}_${pulseAtMs}")) return
+        val str = stringsFor(language)
+        displayAlertOrToast(
+            title = str.carChangeLanesNowTitle,
+            subtitle = "",
+            durationMs = 3500L,
+            language = language
+        )
+    }
+
     fun showClosureReportedToast(language: AppLanguage) {
         val str = stringsFor(language)
         runCatching {

@@ -14,13 +14,17 @@ import android.view.View
 import com.example.i18n.AppLanguage
 import com.example.i18n.BilingualFormatter
 import com.example.i18n.DistanceUnit
+import com.example.i18n.stringsFor
+import com.example.navigation.SpeedRingState
+import com.example.navigation.SpeedometerRingPolicy
 import kotlin.math.roundToInt
 
 /**
  * Lightweight Canvas overlay rendered atop the Android Auto MapLibre surface:
  * 1. Draws a centered message inside `visibleArea` when no offline state pack is installed.
- * 2. Draws the US-style speed limit sign and live speed badge in the lower-start corner of
- *    `visibleArea` (turning red when over the speed limit).
+ * 2. V3: Draws the circular live speedometer ring side-by-side with the US-style speed limit
+ *    sign in the lower-start corner of `visibleArea`, with ring color thresholds and "est."
+ *    label for HPMS estimated speed limits.
  */
 class CarSpeedOverlayView(context: Context) : View(context) {
 
@@ -30,6 +34,8 @@ class CarSpeedOverlayView(context: Context) : View(context) {
     private var speedMps: Float = 0f
     private var speedLimitMph: Int? = null
     private var isOverspeed: Boolean = false
+    private var overspeedToleranceMph: Int = 5
+    private var speedLimitSource: String = "none"
     private var distanceUnit: DistanceUnit = DistanceUnit.IMPERIAL
     private var language: AppLanguage = AppLanguage.ENGLISH
     private var isDarkMode: Boolean = true
@@ -57,6 +63,11 @@ class CarSpeedOverlayView(context: Context) : View(context) {
         color = Color.parseColor("#0F172A")
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
+    private val estLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        color = Color.parseColor("#475569")
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
     private val noPackTextPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
@@ -74,13 +85,17 @@ class CarSpeedOverlayView(context: Context) : View(context) {
         overspeed: Boolean,
         unit: DistanceUnit,
         lang: AppLanguage,
-        darkMode: Boolean
+        darkMode: Boolean,
+        toleranceMph: Int = 5,
+        limitSource: String = "none"
     ) {
         noPackMessage = noPackMsg
         showSpeedOverlay = showSpeed
         speedMps = currentSpeedMps
         speedLimitMph = currentLimitMph
         isOverspeed = overspeed
+        overspeedToleranceMph = toleranceMph
+        speedLimitSource = limitSource
         distanceUnit = unit
         language = lang
         isDarkMode = darkMode
@@ -132,23 +147,35 @@ class CarSpeedOverlayView(context: Context) : View(context) {
 
     private fun drawSpeedCluster(canvas: Canvas, safe: Rect, density: Float) {
         val margin = 14f * density
-        val badgeW = 64f * density
-        val badgeH = 68f * density
-        val gap = 8f * density
-        val left = safe.left + margin
-        var bottom = safe.bottom - margin
+        val ringDiameter = 72f * density
+        val radius = ringDiameter / 2f
+        val gap = 10f * density
+        val cx = safe.left + margin + radius
+        val cy = safe.bottom - margin - radius
 
-        // 1. Live speed pill (red background when overspeed)
-        val speedRect = RectF(left, bottom - badgeH, left + badgeW, bottom)
+        val ringState = SpeedometerRingPolicy.evaluate(
+            currentSpeedMps = speedMps,
+            speedLimitMph = speedLimitMph,
+            overspeedToleranceMph = overspeedToleranceMph,
+            unit = distanceUnit
+        )
+        val effectiveOverspeed = isOverspeed || ringState == SpeedRingState.OVERSPEED
+
+        // 1. Live circular speedometer ring
         cardBgPaint.color = when {
-            isOverspeed -> Color.parseColor("#DC2626")
-            isDarkMode -> Color.argb(230, 15, 23, 42)
-            else -> Color.argb(238, 255, 255, 255)
+            effectiveOverspeed -> Color.parseColor("#DC2626")
+            isDarkMode -> Color.argb(236, 15, 23, 42)
+            else -> Color.argb(242, 255, 255, 255)
         }
-        cardBorderPaint.color = if (isOverspeed) Color.WHITE else Color.parseColor("#38BDF8")
-        cardBorderPaint.strokeWidth = 2f * density
-        canvas.drawRoundRect(speedRect, 14f * density, 14f * density, cardBgPaint)
-        canvas.drawRoundRect(speedRect, 14f * density, 14f * density, cardBorderPaint)
+        canvas.drawCircle(cx, cy, radius - 2f * density, cardBgPaint)
+
+        cardBorderPaint.color = when {
+            effectiveOverspeed -> Color.parseColor("#EF4444")
+            ringState == SpeedRingState.APPROACHING_LIMIT -> Color.parseColor("#FACC15")
+            else -> Color.parseColor("#38BDF8")
+        }
+        cardBorderPaint.strokeWidth = 4.5f * density
+        canvas.drawCircle(cx, cy, radius - 2.5f * density, cardBorderPaint)
 
         val displaySpeed = if (distanceUnit == DistanceUnit.METRIC) {
             (speedMps * 3.6f).roundToInt().coerceAtLeast(0)
@@ -161,36 +188,49 @@ class CarSpeedOverlayView(context: Context) : View(context) {
         } else {
             if (language == AppLanguage.PERSIAN) "مایل/س" else "mph"
         }
-        speedValuePaint.color = if (isOverspeed || isDarkMode) Color.WHITE else Color.parseColor("#0F172A")
+        speedValuePaint.color = if (effectiveOverspeed || isDarkMode) Color.WHITE else Color.parseColor("#0F172A")
         speedValuePaint.textSize = 24f * density
-        unitLabelPaint.color = if (isOverspeed) Color.WHITE else Color.parseColor("#94A3B8")
-        unitLabelPaint.textSize = 11f * density
-        canvas.drawText(speedText, speedRect.centerX(), speedRect.top + 38f * density, speedValuePaint)
-        canvas.drawText(unitText, speedRect.centerX(), speedRect.bottom - 10f * density, unitLabelPaint)
+        unitLabelPaint.color = if (effectiveOverspeed) Color.WHITE else Color.parseColor("#94A3B8")
+        unitLabelPaint.textSize = 10.5f * density
+        canvas.drawText(speedText, cx, cy + 5f * density, speedValuePaint)
+        canvas.drawText(unitText, cx, cy + 20f * density, unitLabelPaint)
 
-        // 2. Speed limit sign directly above speed pill (strictly when real OSM maxspeed exists)
+        // 2. Speed limit sign side-by-side next to the circular speedometer
         val limitMph = speedLimitMph ?: return
         val displayLimit = if (distanceUnit == DistanceUnit.METRIC) {
             ((limitMph * 1.60934) / 5.0).roundToInt() * 5
         } else {
             limitMph
         }
-        bottom = speedRect.top - gap
-        val limitH = 74f * density
-        val limitRect = RectF(left, bottom - limitH, left + badgeW, bottom)
+        val isEstimated = SpeedometerRingPolicy.isEstimatedLimitSource(speedLimitSource)
+        val limitW = 64f * density
+        val limitH = if (isEstimated) 78f * density else 70f * density
+        val limitLeft = cx + radius + gap
+        val limitTop = cy - limitH / 2f
+        val limitRect = RectF(limitLeft, limitTop, limitLeft + limitW, limitTop + limitH)
         limitBorderPaint.strokeWidth = 3f * density
         canvas.drawRoundRect(limitRect, 10f * density, 10f * density, limitBgPaint)
         canvas.drawRoundRect(limitRect, 10f * density, 10f * density, limitBorderPaint)
 
         limitHeaderPaint.textSize = 9.5f * density
-        canvas.drawText("LIMIT", limitRect.centerX(), limitRect.top + 18f * density, limitHeaderPaint)
-        speedValuePaint.color = if (isOverspeed) Color.parseColor("#DC2626") else Color.parseColor("#0F172A")
-        speedValuePaint.textSize = 26f * density
+        canvas.drawText("LIMIT", limitRect.centerX(), limitRect.top + 17f * density, limitHeaderPaint)
+        speedValuePaint.color = if (effectiveOverspeed) Color.parseColor("#DC2626") else Color.parseColor("#0F172A")
+        speedValuePaint.textSize = 25f * density
+        val numberBaseline = if (isEstimated) limitRect.bottom - 20f * density else limitRect.bottom - 13f * density
         canvas.drawText(
             BilingualFormatter.formatNumber(displayLimit, language),
             limitRect.centerX(),
-            limitRect.bottom - 14f * density,
+            numberBaseline,
             speedValuePaint
         )
+        if (isEstimated) {
+            estLabelPaint.textSize = 9f * density
+            canvas.drawText(
+                stringsFor(language).speedLimitEstimatedLabel,
+                limitRect.centerX(),
+                limitRect.bottom - 6f * density,
+                estLabelPaint
+            )
+        }
     }
 }

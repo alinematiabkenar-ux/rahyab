@@ -98,7 +98,9 @@ fun MapLibreMapContainer(
     cameras: List<RoadHazardPoint> = emptyList(),
     trafficLights: List<RoadHazardPoint> = emptyList(),
     speedBumps: List<RoadHazardPoint> = emptyList(),
+    stopSigns: List<RoadHazardPoint> = emptyList(),
     parkedCarLocation: LatLon? = null,
+    maneuverArrow: com.example.map.ManeuverArrowData? = null,
     show3DBuildings: Boolean = true,
     positionMarkerStyle: String = "arrow",
     isGpsPoor: Boolean = false,
@@ -436,14 +438,22 @@ fun MapLibreMapContainer(
         }
     }
 
-    // 3D. SPEED BUMPS (zoom 15+) & PARKED CAR BLUE "P" MARKER
+    // 3D. SPEED BUMPS (zoom 15+), STOP SIGNS (zoom 16+) & PARKED CAR BLUE "P" MARKER
     LaunchedEffect(loadedStyle, speedBumps) {
         val style = loadedStyle ?: return@LaunchedEffect
         com.example.map.MapExtraLayersHelper.updateSpeedBumps(style, speedBumps)
     }
+    LaunchedEffect(loadedStyle, stopSigns) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        com.example.map.MapExtraLayersHelper.updateStopSigns(style, stopSigns)
+    }
     LaunchedEffect(loadedStyle, parkedCarLocation) {
         val style = loadedStyle ?: return@LaunchedEffect
         com.example.map.MapExtraLayersHelper.updateParkedCar(style, parkedCarLocation)
+    }
+    LaunchedEffect(loadedStyle, maneuverArrow) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        com.example.map.MapExtraLayersHelper.updateManeuverArrow(style, maneuverArrow)
     }
 
     // 4. POSITION ARROW & ACCURACY CIRCLE EFFECT — runs ONLY when position or throttled heading changes

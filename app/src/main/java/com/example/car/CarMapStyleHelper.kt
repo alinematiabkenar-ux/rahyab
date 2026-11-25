@@ -108,10 +108,27 @@ internal object CarMapStyleHelper {
                 })
             } else emptyFc
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(puckFc)
+            val arrow = if (nav.isNavigating && !nav.hasArrived) {
+                com.example.map.ManeuverArrowGeometry.build(
+                    route = nav.route,
+                    currentManeuverIndex = nav.currentManeuverIndex,
+                    snappedShapeIndex = nav.snappedShapeIndex,
+                    distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
+                    travelMode = nav.effectiveTravelMode
+                )
+            } else {
+                null
+            }
+            MapExtraLayersHelper.updateManeuverArrow(style, arrow)
         }
     }
 
-    fun updateExtraLayers(app: RahYabApplication, style: Style?) {
+    fun updateExtraLayers(
+        app: RahYabApplication,
+        style: Style?,
+        showTrafficLights: Boolean = true,
+        showStopSigns: Boolean = true
+    ) {
         if (style == null || !style.isFullyLoaded) return
         val hub = app.navigationHub
         runCatching {
@@ -124,11 +141,14 @@ internal object CarMapStyleHelper {
                 }
             })
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_CAMERAS)?.setGeoJson(camsFc)
-            val lightsFc = FeatureCollection.fromFeatures(hub.visibleTrafficLights.value.map {
+            val lights = if (showTrafficLights) hub.visibleTrafficLights.value else emptyList()
+            val lightsFc = FeatureCollection.fromFeatures(lights.map {
                 Feature.fromGeometry(Point.fromLngLat(it.lon, it.lat))
             })
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_TRAFFIC_LIGHTS)?.setGeoJson(lightsFc)
             MapExtraLayersHelper.updateSpeedBumps(style, hub.visibleSpeedBumps.value)
+            val stops = if (showStopSigns) hub.visibleStopSigns.value else emptyList()
+            MapExtraLayersHelper.updateStopSigns(style, stops)
         }
     }
 

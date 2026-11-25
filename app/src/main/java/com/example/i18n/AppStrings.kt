@@ -457,6 +457,23 @@ interface AppStrings {
     val diagSpeedLimitSourceLabel: String
     val diagExtrasDbStatusLabel: String
     val extrasAttributionFull: String
+    // S1: Separate Traffic Lights & Stop Signs
+    val sectionTrafficLightsStopSigns: String
+    val alertToggleTrafficLight: String
+    val showStopSignsToggle: String
+    // L4 & L5: Lane Change Beeps & Timing
+    val laneChangeBeepsToggle: String
+    val laneChangeTimingLabel: String
+    val laneChangeTimingEarly: String
+    val laneChangeTimingNormal: String
+    val laneChangeTimingLate: String
+    val lastChanceBeepToggle: String
+    val carChangeLanesNowTitle: String
+    // V2 & V3: Route Progress Bar & Speedometer Ring
+    val routeProgressBarDesc: String
+    val routeEventHighwayExit: String
+    val routeEventDestination: String
+    val speedLimitEstimatedLabel: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

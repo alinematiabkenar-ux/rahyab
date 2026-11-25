@@ -43,6 +43,9 @@ class SharedNavigationStateStore {
     val _visibleSpeedBumps = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
     val visibleSpeedBumps: StateFlow<List<RoadHazardPoint>> = _visibleSpeedBumps.asStateFlow()
 
+    val _visibleStopSigns = MutableStateFlow<List<RoadHazardPoint>>(emptyList())
+    val visibleStopSigns: StateFlow<List<RoadHazardPoint>> = _visibleStopSigns.asStateFlow()
+
     val _aheadTrafficLightMeters = MutableStateFlow<Double?>(null)
     val aheadTrafficLightMeters: StateFlow<Double?> = _aheadTrafficLightMeters.asStateFlow()
 

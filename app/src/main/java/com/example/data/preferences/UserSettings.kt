@@ -4,6 +4,7 @@ import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
 import com.example.navigation.CyclingSpeedPreset
+import com.example.navigation.LaneChangeTiming
 import com.example.navigation.RoutePreference
 import com.example.navigation.TravelMode
 import com.example.navigation.WalkingSpeedPreset
@@ -16,6 +17,10 @@ data class UserSettings(
     val speedWarningAudioEnabled: Boolean = true,
     val speedWarningThresholdMph: Int = 5, // 0, 5, or 10 mph (converted automatically for km/h)
     val junctionPreviewEnabled: Boolean = true,
+    // L4: Lane change beeps & timing
+    val laneChangeBeepsEnabled: Boolean = true,
+    val laneChangeTiming: LaneChangeTiming = LaneChangeTiming.NORMAL,
+    val lastChanceBeepEnabled: Boolean = true,
     // Individual Phase 3 Road Alerts toggles
     val alertSpeedDropEnabled: Boolean = true,
     val alertSharpCurveEnabled: Boolean = true,
@@ -23,11 +28,13 @@ data class UserSettings(
     val alertRailroadEnabled: Boolean = true,
     val alertSchoolZoneEnabled: Boolean = true,
     val alertStopSignEnabled: Boolean = false, // Optional — OFF by default
+    val alertTrafficLightEnabled: Boolean = false, // S1: Traffic light voice alert, default OFF
+    val showTrafficLights: Boolean = true,
+    val showStopSignsOnMap: Boolean = true, // S1: Show stop signs on map, default ON
     val alertSpeedCameraEnabled: Boolean = true,
     val alertRedLightCameraEnabled: Boolean = true,
     val alertSpeedBumpEnabled: Boolean = true,
     val alertSteepGradeEnabled: Boolean = true,
-    val showTrafficLights: Boolean = true,
     val show3DBuildings: Boolean = true,
     val positionMarkerStyle: String = "arrow", // "arrow" or "car"
     val is3DView: Boolean = true,

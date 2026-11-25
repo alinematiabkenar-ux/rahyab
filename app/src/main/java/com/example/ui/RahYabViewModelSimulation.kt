@@ -54,7 +54,9 @@ internal fun RahYabViewModel.startSimulatedDriveLoopImpl() {
                     unit = s.distanceUnit,
                     language = s.language,
                     speedAudioEnabled = s.speedWarningAudioEnabled,
-                    settings = s
+                    settings = s,
+                    fraCrossings = cachedFraCrossings,
+                    hpmsFallbackSpeedMph = hpmsFallbackCache.cachedSpeedMph
                 )
             }
             simulatedClockMs = batch.finalSimClockMs
@@ -101,12 +103,19 @@ internal fun RahYabViewModel.toggleSimulationFromMapImpl() {
 
 internal fun RahYabViewModel.startSimulationOnActiveRouteImpl() {
     val currentNav = _navigationState.value
-    val route = currentNav.route ?: return
+    val rawRoute = currentNav.route ?: return
+    val route = if (rawRoute.travelMode == com.example.navigation.TravelMode.DRIVE) {
+        enrichHighwayExitLanesForSimulation(rawRoute)
+    } else {
+        rawRoute
+    }
     val s = settings.value
     gpsWatchdogJob?.cancel()
     gpsWatchdogJob = null
     navController.reset()
     speedBumpEvaluator.reset()
+    trafficLightVoiceEvaluator.reset()
+    laneChangeCueTracker.reset()
     seedSimulationSpeedBumpsImpl(route.shape)
     voiceManager.resetDeduplication()
     simulatedWrongTurnTicksRemaining = 0
@@ -119,6 +128,7 @@ internal fun RahYabViewModel.startSimulationOnActiveRouteImpl() {
     val firstManeuver = route.maneuvers.firstOrNull()
     val initialDist = firstManeuver?.lengthMeters ?: route.distanceMeters
     _navigationState.value = currentNav.copy(
+        route = route,
         isSimulatingDrive = true,
         currentManeuverIndex = 0,
         snappedShapeIndex = 0,
@@ -244,4 +254,51 @@ internal fun RahYabViewModel.setSimulateDriveEnabledImpl(enabled: Boolean) {
     } else if (!_navigationState.value.isNavigating && _candidateRoutes.value.isNotEmpty() && _selectedPlace.value != null) {
         startNavigationImpl(forceSimulate = true)
     }
+}
+
+/**
+ * L6: Simulation-only lane enrichment for highway exits/ramps (e.g., I-5 Eugene/Springfield)
+ * when an exit maneuver lacks OSM turn:lanes metadata, ensuring Drive Simulation reliably
+ * exercises lane-change beeps, visual pulses, and junction views without affecting real GPS.
+ */
+internal fun enrichHighwayExitLanesForSimulation(
+    route: com.example.navigation.OfflineRoute
+): com.example.navigation.OfflineRoute {
+    val updated = route.maneuvers.map { m ->
+        val isExitOrSplit = m.isHighwayExitOrSplit ||
+            m.type == com.example.navigation.ManeuverType.EXIT_RIGHT ||
+            m.type == com.example.navigation.ManeuverType.EXIT_LEFT ||
+            m.type == com.example.navigation.ManeuverType.RAMP_RIGHT ||
+            m.type == com.example.navigation.ManeuverType.RAMP_LEFT ||
+            m.type == com.example.navigation.ManeuverType.STAY_RIGHT ||
+            m.type == com.example.navigation.ManeuverType.STAY_LEFT
+        if (!isExitOrSplit || m.lanes.size >= 2) return@map m
+
+        val isLeft = m.type == com.example.navigation.ManeuverType.EXIT_LEFT ||
+            m.type == com.example.navigation.ManeuverType.RAMP_LEFT ||
+            m.type == com.example.navigation.ManeuverType.STAY_LEFT
+        val thruLane = com.example.navigation.LaneInfo(
+            directions = listOf(com.example.navigation.LaneDirection.THROUGH),
+            activeDirections = emptyList(),
+            isRecommended = false,
+            isActive = false,
+            isValid = false
+        )
+        val exitDir = if (isLeft) com.example.navigation.LaneDirection.SLIGHT_LEFT else com.example.navigation.LaneDirection.SLIGHT_RIGHT
+        val exitLane = com.example.navigation.LaneInfo(
+            directions = listOf(exitDir),
+            activeDirections = listOf(exitDir),
+            isRecommended = true,
+            isActive = true,
+            isValid = true
+        )
+        val lanes = if (isLeft) listOf(exitLane, thruLane, thruLane) else listOf(thruLane, thruLane, exitLane)
+        m.copy(
+            lanes = lanes,
+            laneCount = lanes.size,
+            isMultiLaneRoad = true,
+            isHighwayExitOrSplit = true
+        )
+    }
+    return route.copy(maneuvers = updated)
 }

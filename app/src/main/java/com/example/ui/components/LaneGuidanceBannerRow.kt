@@ -74,12 +74,14 @@ fun LaneGuidanceBannerRow(
     isNightMode: Boolean,
     useHighwayGreen: Boolean,
     pulseTriggerKey: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    laneChangeCuePulseKey: Long = 0L
 ) {
     if (lanes.isEmpty()) return
 
     val pulseScale = remember { Animatable(1f) }
     val pulseGlow = remember { Animatable(0f) }
+    val cuePulseActive = remember { Animatable(0f) }
 
     LaunchedEffect(pulseTriggerKey) {
         if (pulseTriggerKey > 0) {
@@ -89,6 +91,21 @@ fun LaneGuidanceBannerRow(
             pulseScale.animateTo(1.09f, animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing))
             pulseScale.animateTo(1f, animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing))
             pulseGlow.animateTo(0f, animationSpec = tween(durationMillis = 340, easing = FastOutSlowInEasing))
+        }
+    }
+
+    // L3: 3-second (3000 ms) visual pulse on lane change cue: bright target lanes + dimmed other lanes
+    LaunchedEffect(laneChangeCuePulseKey) {
+        if (laneChangeCuePulseKey > 0L) {
+            cuePulseActive.snapTo(1f)
+            repeat(5) {
+                pulseGlow.animateTo(1f, animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing))
+                pulseScale.animateTo(1.09f, animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing))
+                pulseScale.animateTo(1.0f, animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing))
+                pulseGlow.animateTo(0.35f, animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing))
+            }
+            pulseGlow.animateTo(0f, animationSpec = tween(durationMillis = 180))
+            cuePulseActive.animateTo(0f, animationSpec = tween(durationMillis = 220))
         }
     }
 
@@ -220,6 +237,11 @@ fun LaneGuidanceBannerRow(
                             LaneHighlightTier.INACTIVE -> inactiveArrowColor
                         }
 
+                        val boxAlpha = if (!isHighlighted && cuePulseActive.value > 0.05f) {
+                            1f - (0.68f * cuePulseActive.value)
+                        } else {
+                            1f
+                        }
                         val semanticDesc = buildLaneContentDescription(index, laneCount, lane)
                         val boxModifier = (if (useEvenShrink) {
                             Modifier.weight(1f)
@@ -230,6 +252,7 @@ fun LaneGuidanceBannerRow(
                             .graphicsLayer {
                                 scaleX = scale
                                 scaleY = scale
+                                alpha = boxAlpha
                             }
                             .clip(RoundedCornerShape(10.dp))
                             .background(boxBg)

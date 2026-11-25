@@ -226,6 +226,24 @@ class OfflinePlaceSearchEngine(
         )
     }
 
+    suspend fun queryStopSignsInBounds(
+        minLat: Double,
+        maxLat: Double,
+        minLon: Double,
+        maxLon: Double
+    ): List<RoadHazardPoint> = withContext(Dispatchers.IO) {
+        val raw = queryRoadHazardsInFiles(
+            dbFiles = packManager.getInstalledPlacesDatabases().map { it.second },
+            minLat = minLat,
+            maxLat = maxLat,
+            minLon = minLon,
+            maxLon = maxLon,
+            stopSignsOnly = true,
+            limit = 1000
+        )
+        mergeNearbyTrafficSignals(raw, mergeRadiusMeters = 10.0)
+    }
+
     /**
      * Merges traffic signal nodes closer than [mergeRadiusMeters] (default ~15 m) into a single
      * averaged intersection centroid so multi-node intersections never crowd the map.
@@ -278,6 +296,7 @@ class OfflinePlaceSearchEngine(
         camerasOnly: Boolean = false,
         trafficSignalsOnly: Boolean = false,
         speedBumpsOnly: Boolean = false,
+        stopSignsOnly: Boolean = false,
         limit: Int = 400
     ): List<RoadHazardPoint> {
         val hazards = mutableListOf<RoadHazardPoint>()
@@ -295,6 +314,7 @@ class OfflinePlaceSearchEngine(
                         camerasOnly -> "AND type IN ('speed_camera', 'red_light_camera')"
                         trafficSignalsOnly -> "AND type IN ('traffic_signal', 'traffic_signals')"
                         speedBumpsOnly -> "AND type = 'speed_bump'"
+                        stopSignsOnly -> "AND type IN ('stop_sign', 'stop')"
                         else -> ""
                     }
                     val stmt = conn.prepare(

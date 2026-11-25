@@ -33,6 +33,7 @@ import com.example.i18n.LocalAppLanguage
 import com.example.i18n.LocalAppStrings
 import com.example.ui.RahYabViewModel
 import com.example.ui.components.MapLibreMapContainer
+import com.example.ui.components.RouteProgressBar
 import com.example.ui.components.SpeedometerAndLimitCluster
 
 @Composable
@@ -76,6 +77,7 @@ fun DriveScreen(
     val visibleCameras by viewModel.visibleCameras.collectAsStateWithLifecycle()
     val visibleTrafficLights by viewModel.visibleTrafficLights.collectAsStateWithLifecycle()
     val visibleSpeedBumps by viewModel.visibleSpeedBumps.collectAsStateWithLifecycle()
+    val visibleStopSigns by viewModel.visibleStopSigns.collectAsStateWithLifecycle()
     val aheadTrafficLightMeters by viewModel.aheadTrafficLightMeters.collectAsStateWithLifecycle()
     val freeDriveAheadAlert by viewModel.freeDriveAheadAlert.collectAsStateWithLifecycle()
     val externalMatchChoices by viewModel.externalLinkMatchChoices.collectAsStateWithLifecycle()
@@ -147,7 +149,13 @@ fun DriveScreen(
             cameras = visibleCameras,
             trafficLights = if (settings.showTrafficLights) visibleTrafficLights else emptyList(),
             speedBumps = visibleSpeedBumps,
+            stopSigns = if (settings.showStopSignsOnMap) visibleStopSigns else emptyList(),
             parkedCarLocation = parkedCar?.let { com.example.navigation.LatLon(it.lat, it.lon) },
+            maneuverArrow = if (navState.isNavigating && !navState.hasArrived) {
+                remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 10.0).toInt(), navState.effectiveTravelMode) {
+                    com.example.map.ManeuverArrowGeometry.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode)
+                }
+            } else null,
             show3DBuildings = settings.show3DBuildings,
             positionMarkerStyle = settings.positionMarkerStyle,
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),
@@ -207,13 +215,24 @@ fun DriveScreen(
                 speedLimitMph = navState.currentSpeedLimitMph,
                 isOverspeed = navState.isOverspeed,
                 unit = settings.distanceUnit,
+                overspeedToleranceMph = settings.speedWarningThresholdMph,
+                speedLimitSource = navState.speedLimitSource,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = 12.dp, bottom = bottomRailPadding)
             )
         }
 
-        // 4. Right / End side: Driving Control Rail
+        val routeProgressEvents = if (navState.isNavigating && !navState.hasArrived && !navState.isWalkingMode) {
+            remember(navState.route, navState.snappedShapeIndex, (navState.remainingDistanceMeters / 25.0).toInt(), navState.effectiveTravelMode, visibleCameras) {
+                com.example.navigation.RouteProgressBarPlanner.buildEvents(
+                    navState.route, navState.snappedShapeIndex, navState.remainingDistanceMeters, navState.effectiveTravelMode, visibleCameras
+                )
+            }
+        } else emptyList()
+        val showRouteProgressBar = routeProgressEvents.isNotEmpty()
+
+        // 4. Right / End side: Driving Control Rail (shifted left of RouteProgressBar when active)
         DriveControlRail(
             navState = navState,
             settings = settings,
@@ -236,8 +255,20 @@ fun DriveScreen(
             onOpenReportSheet = { showReportSheet = true },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 12.dp, bottom = bottomRailPadding)
+                .padding(end = if (showRouteProgressBar) 44.dp else 12.dp, bottom = bottomRailPadding)
         )
+
+        // 4b. Sygic-style Route Progress Bar on the right edge (DRIVE & BIKE only)
+        if (showRouteProgressBar) {
+            RouteProgressBar(
+                events = routeProgressEvents,
+                unit = settings.distanceUnit,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(end = 6.dp, top = if (navState.showJunctionPreview) 316.dp else 172.dp, bottom = 124.dp)
+            )
+        }
 
         // 5. Required OpenStreetMap + Overture Maps attribution badge & Manual "I parked here" chip
         val parkedCarDistanceMeters = remember(parkedCar, gpsFix) {

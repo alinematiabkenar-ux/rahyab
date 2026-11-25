@@ -1,8 +1,10 @@
 package com.example.ui
 
 import androidx.lifecycle.viewModelScope
+import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.i18n.AppLanguage
 import com.example.i18n.stringsFor
+import com.example.navigation.LatLon
 import com.example.navigation.RoutePreference
 import kotlinx.coroutines.launch
 
@@ -25,12 +27,124 @@ internal fun RahYabViewModel.setShowTrafficLightsImpl(enabled: Boolean) {
     viewModelScope.launch {
         prefs.setShowTrafficLights(enabled)
         if (!enabled) {
-            _visibleTrafficLights.value = emptyList()
             _aheadTrafficLightMeters.value = null
+            if (!settings.value.alertTrafficLightEnabled) {
+                _visibleTrafficLights.value = emptyList()
+            }
         } else {
             val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
             refreshNearbyTrafficLightsImpl(ref.lat, ref.lon, force = true)
         }
+    }
+}
+
+internal fun RahYabViewModel.setAlertTrafficLightEnabledImpl(enabled: Boolean) {
+    viewModelScope.launch {
+        prefs.setAlertTrafficLightEnabled(enabled)
+        if (!enabled && !settings.value.showTrafficLights) {
+            _visibleTrafficLights.value = emptyList()
+        } else if (enabled) {
+            val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+            refreshNearbyTrafficLightsImpl(ref.lat, ref.lon, force = true)
+        }
+    }
+}
+
+internal fun RahYabViewModel.evaluateTrafficLightVoiceImpl(
+    lat: Double,
+    lon: Double,
+    headingDegrees: Float,
+    isDriveMode: Boolean
+) {
+    val s = settings.value
+    if (!isDriveMode || !s.alertTrafficLightEnabled) return
+    val alert = trafficLightVoiceEvaluator.evaluate(
+        userLat = lat,
+        userLon = lon,
+        headingDegrees = headingDegrees,
+        lights = _visibleTrafficLights.value,
+        isDriveMode = isDriveMode,
+        enabled = s.alertTrafficLightEnabled,
+        isVoiceBusy = voiceManager.isSpeakingOrQueued()
+    ) ?: return
+    voiceManager.speakAlert(alert, s.language, s.distanceUnit)
+}
+
+internal fun RahYabViewModel.evaluateLaneChangeCueImpl(
+    state: com.example.navigation.ActiveNavigationState,
+    speedMps: Float,
+    maneuverToSpeak: Pair<com.example.navigation.RouteManeuver, String>?
+): Boolean {
+    val s = settings.value
+    val maneuver = state.currentManeuver ?: return false
+    val event = laneChangeCueTracker.evaluate(
+        maneuver = maneuver,
+        distanceToManeuverMeters = state.distanceToNextManeuverMeters,
+        speedMps = speedMps,
+        travelMode = state.effectiveTravelMode,
+        timing = s.laneChangeTiming,
+        beepsEnabled = s.laneChangeBeepsEnabled,
+        lastChanceEnabled = s.lastChanceBeepEnabled
+    ) ?: return false
+
+    val isHalfMileStage = maneuverToSpeak != null && (
+        maneuverToSpeak.second == com.example.navigation.NavigationSessionController.STAGE_HW_HALF_MI ||
+            maneuverToSpeak.second == com.example.navigation.NavigationSessionController.STAGE_CITY_HALF_MI
+        )
+    val effectiveEvent = if (isHalfMileStage && event.kind == com.example.navigation.LaneChangeCueKind.PRIMARY) {
+        event.copy(mergeWithHalfMile = true)
+    } else {
+        event
+    }
+
+    val spoken = voiceManager.playLaneChangeCue(
+        event = effectiveEvent,
+        maneuver = maneuver,
+        distanceMeters = state.distanceToNextManeuverMeters,
+        unit = s.distanceUnit,
+        language = s.language
+    )
+    _navigationState.value = _navigationState.value.copy(
+        laneChangeCueManeuverIndex = effectiveEvent.maneuverIndex,
+        laneChangeCuePulseAtMs = System.currentTimeMillis(),
+        lastSpokenInstruction = spoken.ifBlank { _navigationState.value.lastSpokenInstruction }
+    )
+    return effectiveEvent.mergeWithHalfMile && isHalfMileStage
+}
+
+internal fun RahYabViewModel.setShowStopSignsOnMapImpl(enabled: Boolean) {
+    viewModelScope.launch {
+        prefs.setShowStopSignsOnMap(enabled)
+        if (!enabled) {
+            _visibleStopSigns.value = emptyList()
+        } else {
+            val ref = _navigationState.value.snappedLocation ?: getEffectiveReferenceLocation()
+            refreshNearbyStopSignsImpl(ref.lat, ref.lon, force = true)
+        }
+    }
+}
+
+internal fun RahYabViewModel.refreshNearbyStopSignsImpl(lat: Double, lon: Double, force: Boolean = false) {
+    if (!settings.value.showStopSignsOnMap) {
+        if (_visibleStopSigns.value.isNotEmpty()) _visibleStopSigns.value = emptyList()
+        return
+    }
+    val last = lastStopSignFetchLoc
+    if (!force && last != null &&
+        OfflinePlaceSearchEngine.haversineMeters(last.lat, last.lon, lat, lon) < 1_000.0
+    ) {
+        return
+    }
+    lastStopSignFetchLoc = LatLon(lat, lon)
+    stopSignFetchJob?.cancel()
+    stopSignFetchJob = viewModelScope.launch {
+        val signs = offlineSearch.queryStopSignsInBounds(
+            minLat = lat - 0.035,
+            maxLat = lat + 0.035,
+            minLon = lon - 0.045,
+            maxLon = lon + 0.045
+        )
+        _visibleStopSigns.value = signs
     }
 }
 

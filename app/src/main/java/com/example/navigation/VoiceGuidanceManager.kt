@@ -46,6 +46,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private var lastSpokenTimeMs: Long = 0L
     private var lastOverspeedBeepMs: Long = 0L
     private var lastCameraChimeMs: Long = 0L
+    private val laneChangeTonePlayer = LaneChangeTonePlayer()
 
     private lateinit var speechQueue: VoiceSpeechQueue
     private val engineSelector: VoiceTtsEngineSelector = VoiceTtsEngineSelector(
@@ -108,6 +109,9 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
             engineSelector.abandonDuckingFocus()
         }
     }
+
+    fun isSpeakingOrQueued(): Boolean =
+        engineSelector.isAnyEngineSpeaking() || speechQueue.hasPendingSegments()
 
     private fun resolveEffectiveLanguage(requested: AppLanguage): AppLanguage {
         if (requested == AppLanguage.PERSIAN && useEnglishVoiceInPersianMode) {
@@ -300,12 +304,57 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         }
     }
 
+    fun playLaneChangeCue(
+        event: LaneChangeCueEvent,
+        maneuver: RouteManeuver,
+        distanceMeters: Double,
+        unit: DistanceUnit,
+        language: AppLanguage
+    ): String {
+        val effectiveLang = resolveEffectiveLanguage(language)
+        if (event.kind == LaneChangeCueKind.LAST_CHANCE) {
+            if (voiceEnabled) {
+                if (isSpeakingOrQueued()) speechQueue.enqueueAfterCurrentSpeech { laneChangeTonePlayer.playSingleBeep() }
+                else laneChangeTonePlayer.playSingleBeep()
+            }
+            return ""
+        }
+        val phrase = if (event.mergeWithHalfMile) {
+            LaneChangeTonePlayer.appendNowToPrompt(
+                formatSpokenInstruction(maneuver, distanceMeters, unit, effectiveLang, true, NavigationSessionController.STAGE_HW_HALF_MI),
+                effectiveLang
+            )
+        } else {
+            LaneChangeTonePlayer.formatCuePhrase(event.targetSide, effectiveLang)
+        }
+        val dispatch: () -> Unit = {
+            if (voiceEnabled) {
+                if (event.mergeWithHalfMile && engineSelector.isInitialized && phrase.isNotBlank()) {
+                    _lastSpokenText.value = phrase
+                    speechQueue.speakRaw(phrase, effectiveLang)
+                    speechQueue.enqueueAfterCurrentSpeech { laneChangeTonePlayer.playTripleBeep() }
+                } else {
+                    laneChangeTonePlayer.playTripleBeep {
+                        if (voiceEnabled && engineSelector.isInitialized && phrase.isNotBlank()) {
+                            _lastSpokenText.value = phrase; speechQueue.speakRaw(phrase, effectiveLang)
+                        }
+                    }
+                }
+            }
+        }
+        if (voiceEnabled) {
+            if (isSpeakingOrQueued()) speechQueue.enqueueAfterCurrentSpeech(dispatch) else dispatch()
+        }
+        return phrase
+    }
+
     fun resetDeduplication() {
         lastSpokenKey = ""
         lastSpokenTimeMs = 0L
     }
 
     fun shutdown() {
+        laneChangeTonePlayer.cancelPending()
         speechQueue.stopAllSpeech()
         engineSelector.shutdown()
     }

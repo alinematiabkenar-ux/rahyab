@@ -2,6 +2,8 @@ package com.example.navigation
 
 import com.example.data.local.ReportType
 import com.example.data.local.UserReportEntity
+import com.example.data.packs.ExtrasMatchingHelper
+import com.example.data.packs.FraCrossingRecord
 import com.example.data.preferences.UserSettings
 import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.data.search.RoadHazardPoint
@@ -96,7 +98,8 @@ internal object NavigationAlertEvaluator {
         userReports: List<UserReportEntity>,
         settings: UserSettings,
         isHighway: Boolean = fix.speedMps >= 20f,
-        travelMode: TravelMode = TravelMode.DRIVE
+        travelMode: TravelMode = TravelMode.DRIVE,
+        fraCrossings: List<FraCrossingRecord> = emptyList()
     ): AheadAlert? {
         if (travelMode == TravelMode.WALK) return null
         val candidates = mutableListOf<AheadAlert>()
@@ -120,7 +123,11 @@ internal object NavigationAlertEvaluator {
             val maxDist = if (a.kind == RoadAlertKind.STEEP_GRADE) 1_750.0 else 750.0
             val dist = OfflinePlaceSearchEngine.haversineMeters(fix.lat, fix.lon, a.lat, a.lon)
             if (dist in 25.0..maxDist && NavigationGeometryHelper.isRoughlyAhead(fix, a.lat, a.lon)) {
-                candidates.add(a.copy(distanceMeters = dist))
+                val moved = a.copy(distanceMeters = dist)
+                val enriched = if (moved.kind == RoadAlertKind.RAILROAD_CROSSING && fraCrossings.isNotEmpty()) {
+                    ExtrasMatchingHelper.enrichRailroadAlertWithFra(moved, fraCrossings)
+                } else moved
+                candidates.add(enriched)
             }
         }
 
@@ -160,18 +167,21 @@ internal object NavigationAlertEvaluator {
                     else -> continue
                 }
                 if (!isAlertAllowedForMode(travelMode, kind)) continue
+                val rawAlert = AheadAlert(
+                    id = "db_hazard_${h.id}",
+                    kind = kind,
+                    lat = h.lat,
+                    lon = h.lon,
+                    distanceMeters = dist,
+                    titleEn = titleEn,
+                    titleFa = titleFa,
+                    detail = h.label,
+                    newSpeedLimitMph = h.speedLimitMph
+                )
                 candidates.add(
-                    AheadAlert(
-                        id = "db_hazard_${h.id}",
-                        kind = kind,
-                        lat = h.lat,
-                        lon = h.lon,
-                        distanceMeters = dist,
-                        titleEn = titleEn,
-                        titleFa = titleFa,
-                        detail = h.label,
-                        newSpeedLimitMph = h.speedLimitMph
-                    )
+                    if (kind == RoadAlertKind.RAILROAD_CROSSING && fraCrossings.isNotEmpty()) {
+                        ExtrasMatchingHelper.enrichRailroadAlertWithFra(rawAlert, fraCrossings)
+                    } else rawAlert
                 )
             }
         }

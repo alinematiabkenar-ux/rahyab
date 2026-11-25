@@ -204,7 +204,8 @@ data class ActiveNavigationState(
     val snappedLocation: LatLon? = null,
     val snappedBearing: Float = 0f,
     val snappedShapeIndex: Int = 0,
-    val currentSpeedLimitMph: Int? = null, // Strictly null when no OSM maxspeed exists — never guessed!
+    val currentSpeedLimitMph: Int? = null, // OSM maxspeed or HPMS fallback — never guessed!
+    val speedLimitSource: String = "none", // "osm", "hpms", or "none"
     val isOverspeed: Boolean = false,
     val isOffRoute: Boolean = false,
     val isRerouting: Boolean = false,
@@ -216,6 +217,8 @@ data class ActiveNavigationState(
     val showLaneStrip: Boolean = false,
     val lanePulseManeuverIndex: Int = -1,
     val lanePulseTriggerCount: Int = 0,
+    val laneChangeCueManeuverIndex: Int = -1,
+    val laneChangeCuePulseAtMs: Long = 0L,
     val showJunctionPreview: Boolean = false,
     val activeJunctionManeuverIndex: Int = -1,
     val dismissedJunctionManeuverIndex: Int = -1,

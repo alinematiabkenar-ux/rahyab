@@ -140,7 +140,9 @@ internal object NavigationSimulationEngine {
         unit: DistanceUnit,
         language: AppLanguage,
         speedAudioEnabled: Boolean,
-        settings: UserSettings
+        settings: UserSettings,
+        fraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList(),
+        hpmsFallbackSpeedMph: Int? = null
     ): NavigationSessionController.SimulationStepBatchResult {
         if (!currentState.isNavigating || currentState.hasArrived || currentState.route == null) {
             return NavigationSessionController.SimulationStepBatchResult(
@@ -181,7 +183,9 @@ internal object NavigationSimulationEngine {
                 unit = unit,
                 language = language,
                 speedAudioEnabled = speedAudioEnabled,
-                settings = settings
+                settings = settings,
+                fraCrossings = fraCrossings,
+                hpmsFallbackSpeedMph = hpmsFallbackSpeedMph
             )
             state = res.state
             if (res.shouldReroute) shouldReroute = true

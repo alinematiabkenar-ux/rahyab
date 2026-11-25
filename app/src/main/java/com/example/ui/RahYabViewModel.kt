@@ -177,6 +177,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val visibleTrafficLights: StateFlow<List<RoadHazardPoint>> = navStore.visibleTrafficLights
     internal val _visibleSpeedBumps: MutableStateFlow<List<RoadHazardPoint>> = navStore._visibleSpeedBumps
     val visibleSpeedBumps: StateFlow<List<RoadHazardPoint>> = navStore.visibleSpeedBumps
+    internal val _visibleStopSigns: MutableStateFlow<List<RoadHazardPoint>> = navStore._visibleStopSigns
+    val visibleStopSigns: StateFlow<List<RoadHazardPoint>> = navStore.visibleStopSigns
     internal val _aheadTrafficLightMeters: MutableStateFlow<Double?> = navStore._aheadTrafficLightMeters
     val aheadTrafficLightMeters: StateFlow<Double?> = navStore.aheadTrafficLightMeters
     internal val _freeDriveAheadAlert: MutableStateFlow<AheadAlert?> = navStore._freeDriveAheadAlert
@@ -215,15 +217,21 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var cameraFetchJob: Job? = null
     internal var trafficLightFetchJob: Job? = null
     internal var speedBumpFetchJob: Job? = null
+    internal var stopSignFetchJob: Job? = null
     internal var lastCameraFetchLoc: LatLon? = null
     internal var lastTrafficLightFetchLoc: LatLon? = null
     internal var lastSpeedBumpFetchLoc: LatLon? = null
+    internal var lastStopSignFetchLoc: LatLon? = null
     internal var lastGpsReceivedMs: Long = 0L
     internal var simulatedWrongTurnTicksRemaining: Int = 0
     internal var simulatedClockMs: Long = 0L
     internal var cachedDbHazards: List<RoadHazardPoint> = emptyList()
+    internal var cachedFraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList()
     internal var syntheticSimSpeedBumps: List<RoadHazardPoint> = emptyList()
     internal val speedBumpEvaluator = com.example.navigation.SpeedBumpAlertEvaluator()
+    internal val trafficLightVoiceEvaluator = com.example.navigation.TrafficLightVoiceEvaluator()
+    internal val laneChangeCueTracker = com.example.navigation.LaneChangeCueTracker()
+    internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()
 
     private val hubDelegate = object : com.example.navigation.PhoneNavigationDelegate {
         override fun onCalculateRoutesForPlace(place: PlaceSearchResult) {
@@ -360,12 +368,16 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setSpeedAudioEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setSpeedWarningAudioEnabled(enabled) } }
     fun setSpeedWarningThresholdMph(thresholdMph: Int) { viewModelScope.launch { prefs.setSpeedWarningThresholdMph(thresholdMph) } }
     fun setJunctionPreviewEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setJunctionPreviewEnabled(enabled) } }
+    fun setLaneChangeBeepsEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLaneChangeBeepsEnabled(enabled) } }
+    fun setLaneChangeTiming(timing: com.example.navigation.LaneChangeTiming) { viewModelScope.launch { prefs.setLaneChangeTiming(timing) } }
+    fun setLastChanceBeepEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLastChanceBeepEnabled(enabled) } }
     fun setAlertSpeedDropEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedDropEnabled(enabled) } }
     fun setAlertSharpCurveEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSharpCurveEnabled(enabled) } }
     fun setAlertTollBoothEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertTollBoothEnabled(enabled) } }
     fun setAlertRailroadEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertRailroadEnabled(enabled) } }
     fun setAlertSchoolZoneEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSchoolZoneEnabled(enabled) } }
     fun setAlertStopSignEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertStopSignEnabled(enabled) } }
+    fun setAlertTrafficLightEnabled(enabled: Boolean) = setAlertTrafficLightEnabledImpl(enabled)
     fun setAlertSpeedCameraEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedCameraEnabled(enabled) } }
     fun setAlertRedLightCameraEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertRedLightCameraEnabled(enabled) } }
     fun setAlertSpeedBumpEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAlertSpeedBumpEnabled(enabled) } }
@@ -378,6 +390,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setCyclingSpeedPreset(preset: com.example.navigation.CyclingSpeedPreset) { viewModelScope.launch { prefs.setCyclingSpeedPreset(preset) } }
     fun setAvoidHillsWhenCycling(avoid: Boolean) { viewModelScope.launch { prefs.setAvoidHillsWhenCycling(avoid) } }
     fun setShowTrafficLights(enabled: Boolean) = setShowTrafficLightsImpl(enabled)
+    fun setShowStopSignsOnMap(enabled: Boolean) = setShowStopSignsOnMapImpl(enabled)
     fun setShow3DBuildings(enabled: Boolean) { viewModelScope.launch { prefs.setShow3DBuildings(enabled) } }
     fun setPositionMarkerStyle(style: String) { viewModelScope.launch { prefs.setPositionMarkerStyle(style) } }
     fun setOnlineFeaturesEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setOnlineFeaturesEnabled(enabled) } }

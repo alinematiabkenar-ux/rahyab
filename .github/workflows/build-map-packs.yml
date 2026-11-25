@@ -32,8 +32,18 @@ on:
   # Optional automatic monthly refresh (OFF by default so you stay in full control).
   # To turn on monthly automatic map updates on the 1st of every month at 06:00 UTC,
   # simply remove the '#' characters from the two lines below:
-  # schedule:
-  #   - cron: "0 6 1 * *"
+  schedule:
+    - cron: "0 6 1 * *"
+
+  push:
+    branches: [main]
+    paths:
+      - "data-pipeline/**"
+      - ".github/workflows/build-map-packs.yml"
+
+concurrency:
+  group: build-map-packs
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -55,12 +65,12 @@ jobs:
       - name: Resolve states, regional splits, and latest upstream releases
         id: resolve
         run: |
-          INPUT_STATES="${{ github.event.inputs.states || 'or' }}"
+          INPUT_STATES="${{ github.event.inputs.states || 'published' }}"
           PACKS_JSON=$(python3 data-pipeline/build_state_pack.py --resolve-matrix "$INPUT_STATES")
 
           BUILD_VER="${{ github.event.inputs.build_version }}"
           if [ -z "$BUILD_VER" ]; then
-            BUILD_VER=$(date -u +"%Y.%m.%d")
+            BUILD_VER=$(date -u +"%Y.%m.%d.%H%M")
           fi
 
           PROTOMAPS_URL="${{ github.event.inputs.protomaps_url }}"
@@ -169,6 +179,7 @@ jobs:
             "$RUNNER_TEMP/output/${{ matrix.pack }}.pmtiles"*
             "$RUNNER_TEMP/output/${{ matrix.pack }}_valhalla.tar"*
             "$RUNNER_TEMP/output/${{ matrix.pack }}_places.db"*
+            "$RUNNER_TEMP/output/${{ matrix.pack }}_extras.db"*
           )
           if [ ${#ASSETS[@]} -eq 0 ]; then
             echo "No release assets found for ${{ matrix.pack }}" >&2

@@ -26,7 +26,9 @@ internal fun RahYabViewModel.handleNavigationGpsFixImpl(fix: GpsFix) {
         unit = s.distanceUnit,
         language = s.language,
         speedAudioEnabled = s.speedWarningAudioEnabled,
-        settings = s
+        settings = s,
+        fraCrossings = cachedFraCrossings,
+        hpmsFallbackSpeedMph = hpmsFallbackCache.cachedSpeedMph
     )
     applyNavigationStepResultImpl(
         state = result.state,
@@ -61,21 +63,36 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
 
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc
-    if (isDriveMode && navPos != null && s.showTrafficLights && state.isNavigating && !state.hasArrived) {
+    if (isDriveMode && navPos != null && state.isNavigating && !state.hasArrived &&
+        state.speedLimitSource != com.example.navigation.HpmsSpeedFallbackCache.SOURCE_OSM
+    ) {
+        val heading = state.snappedBearing.takeIf { it.isFinite() }
+        hpmsFallbackCache.maybeRefreshAsync(viewModelScope, System.currentTimeMillis(), navPos.lat, navPos.lon) {
+            app.extrasDbReader.lookupHpmsSpeedLimitMph(navPos.lat, navPos.lon, heading)
+        }
+    }
+    if (navPos != null && state.isNavigating && !state.hasArrived && s.showStopSignsOnMap) {
+        refreshNearbyStopSignsImpl(navPos.lat, navPos.lon)
+    }
+    if (isDriveMode && navPos != null && (s.showTrafficLights || s.alertTrafficLightEnabled) && state.isNavigating && !state.hasArrived) {
         refreshNearbyTrafficLightsImpl(navPos.lat, navPos.lon)
-        val evalFix = GpsFix(
-            lat = navPos.lat,
-            lon = navPos.lon,
-            bearing = state.snappedBearing,
-            hasBearing = true,
-            speedMps = speedMps,
-            accuracyMeters = 5f,
-            timestampMs = System.currentTimeMillis()
-        )
-        _aheadTrafficLightMeters.value = navController.findAheadTrafficLightMeters(
-            evalFix,
-            _visibleTrafficLights.value
-        )
+        if (s.showTrafficLights) {
+            val evalFix = GpsFix(
+                lat = navPos.lat,
+                lon = navPos.lon,
+                bearing = state.snappedBearing,
+                hasBearing = true,
+                speedMps = speedMps,
+                accuracyMeters = 5f,
+                timestampMs = System.currentTimeMillis()
+            )
+            _aheadTrafficLightMeters.value = navController.findAheadTrafficLightMeters(
+                evalFix,
+                _visibleTrafficLights.value
+            )
+        } else {
+            _aheadTrafficLightMeters.value = null
+        }
     } else {
         _aheadTrafficLightMeters.value = null
     }
@@ -110,16 +127,23 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
             }
         }
     } else {
-        maneuverToSpeak?.let { (maneuver, stage) ->
-            val spoken = voiceManager.speakManeuver(
-                maneuver = maneuver,
-                distanceMeters = state.distanceToNextManeuverMeters,
-                unit = s.distanceUnit,
-                language = s.language,
-                announcementStage = stage,
-                includeLaneGuidance = isDriveMode && maneuver.lanes.isNotEmpty()
-            )
-            _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
+        val mergedWithLaneCue = if (isDriveMode) {
+            evaluateLaneChangeCueImpl(state, speedMps, maneuverToSpeak)
+        } else {
+            false
+        }
+        if (!mergedWithLaneCue) {
+            maneuverToSpeak?.let { (maneuver, stage) ->
+                val spoken = voiceManager.speakManeuver(
+                    maneuver = maneuver,
+                    distanceMeters = state.distanceToNextManeuverMeters,
+                    unit = s.distanceUnit,
+                    language = s.language,
+                    announcementStage = stage,
+                    includeLaneGuidance = isDriveMode && maneuver.lanes.isNotEmpty()
+                )
+                _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
+            }
         }
         if (mode != TravelMode.WALK) {
             alertToSpeak?.let { alert ->
@@ -131,6 +155,9 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         }
         if (isDriveMode) {
             evaluateSpeedBumpForNavigationImpl(state, fallbackLoc, speedMps)
+            if (navPos != null && maneuverToSpeak == null && alertToSpeak == null) {
+                evaluateTrafficLightVoiceImpl(navPos.lat, navPos.lon, state.snappedBearing, isDriveMode = true)
+            }
         }
     }
 
@@ -238,6 +265,8 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
         res.onSuccess { routes ->
             val newRoute = routes.firstOrNull() ?: return@onSuccess
             navController.reset()
+            trafficLightVoiceEvaluator.reset()
+            laneChangeCueTracker.reset()
             voiceManager.resetDeduplication()
             val spoken = voiceManager.speakStartInstruction(newRoute, s.language)
             if (spoken.isNotBlank()) {
@@ -256,6 +285,7 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
                 dismissedJunctionManeuverIndex = -1,
                 lastSpokenInstruction = spoken.ifBlank { _navigationState.value.lastSpokenInstruction }
             )
+            loadFraCrossingsForRouteImpl(newRoute, cachedDbHazards)
             // Keep the same running foreground service alive during reroute — only update notification
             val firstManeuver = newRoute.maneuvers.firstOrNull()
             val etaStr = BilingualFormatter.formatDuration(newRoute.durationSeconds, s.language)

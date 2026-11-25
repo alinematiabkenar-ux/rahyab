@@ -13,6 +13,7 @@ import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
 import com.example.navigation.CyclingSpeedPreset
+import com.example.navigation.LaneChangeTiming
 import com.example.navigation.RoutePreference
 import com.example.navigation.TravelMode
 import com.example.navigation.WalkingSpeedPreset
@@ -75,59 +76,78 @@ class UserPreferencesRepository(private val context: Context) {
     }
 
     val settingsFlow: Flow<UserSettings> = context.rahYabDataStore.data.map { prefs ->
-        val defaultMode = TravelMode.fromCode(prefs[Keys.DEFAULT_TRAVEL_MODE])
-        UserSettings(
-            language = AppLanguage.entries.find { it.code == prefs[Keys.LANGUAGE] } ?: AppLanguage.ENGLISH,
-            distanceUnit = DistanceUnit.entries.find { it.code == prefs[Keys.DISTANCE_UNIT] } ?: DistanceUnit.IMPERIAL,
-            themeMode = MapThemeMode.entries.find { it.code == prefs[Keys.THEME_MODE] } ?: MapThemeMode.AUTO,
-            voiceGuidanceEnabled = prefs[Keys.VOICE_ENABLED] ?: true,
-            speedWarningAudioEnabled = prefs[Keys.SPEED_AUDIO_ENABLED] ?: true,
-            speedWarningThresholdMph = prefs[Keys.SPEED_THRESHOLD_MPH] ?: 5,
-            junctionPreviewEnabled = prefs[Keys.JUNCTION_PREVIEW_ENABLED] ?: true,
-            alertSpeedDropEnabled = prefs[Keys.ALERT_SPEED_DROP] ?: true,
-            alertSharpCurveEnabled = prefs[Keys.ALERT_SHARP_CURVE] ?: true,
-            alertTollBoothEnabled = prefs[Keys.ALERT_TOLL_BOOTH] ?: true,
-            alertRailroadEnabled = prefs[Keys.ALERT_RAILROAD] ?: true,
-            alertSchoolZoneEnabled = prefs[Keys.ALERT_SCHOOL_ZONE] ?: true,
-            alertStopSignEnabled = prefs[Keys.ALERT_STOP_SIGN] ?: false,
-            alertSpeedCameraEnabled = prefs[Keys.ALERT_SPEED_CAMERA] ?: true,
-            alertRedLightCameraEnabled = prefs[Keys.ALERT_RED_LIGHT_CAMERA] ?: true,
-            alertSpeedBumpEnabled = prefs[Keys.ALERT_SPEED_BUMP] ?: true,
-            alertSteepGradeEnabled = prefs[Keys.ALERT_STEEP_GRADE] ?: true,
-            showTrafficLights = prefs[Keys.SHOW_TRAFFIC_LIGHTS] ?: true,
-            show3DBuildings = prefs[Keys.SHOW_3D_BUILDINGS] ?: true,
-            positionMarkerStyle = prefs[Keys.POSITION_MARKER_STYLE]?.takeIf { it == "car" || it == "arrow" } ?: "arrow",
-            is3DView = prefs[Keys.IS_3D_VIEW] ?: true,
-            routePreference = RoutePreference.entries.find { it.code == prefs[Keys.ROUTE_PREFERENCE] }
-                ?: RoutePreference.FASTEST,
-            avoidTolls = prefs[Keys.AVOID_TOLLS] ?: false,
-            avoidHighways = prefs[Keys.AVOID_HIGHWAYS] ?: false,
-            avoidFerries = prefs[Keys.AVOID_FERRIES] ?: false,
-            defaultTravelMode = defaultMode,
-            lastTravelMode = prefs[Keys.LAST_TRAVEL_MODE]?.let { TravelMode.fromCode(it) } ?: defaultMode,
-            walkingSpeedPreset = WalkingSpeedPreset.fromCode(prefs[Keys.WALKING_SPEED_PRESET]),
-            cyclingSpeedPreset = CyclingSpeedPreset.fromCode(prefs[Keys.CYCLING_SPEED_PRESET]),
-            avoidHillsWhenCycling = prefs[Keys.AVOID_HILLS_WHEN_CYCLING] ?: false,
-            githubOwner = prefs[Keys.GITHUB_OWNER]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_OWNER,
-            githubRepo = prefs[Keys.GITHUB_REPO]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_REPO,
-            packBaseUrl = prefs[Keys.PACK_BASE_URL] ?: "",
-            onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
-            devOnlineOregonMode = prefs[Keys.DEV_ONLINE_OREGON] ?: false,
-            simulateDriveEnabled = prefs[Keys.SIMULATE_DRIVE] ?: false,
-            persianTtsNoticeShown = prefs[Keys.PERSIAN_TTS_NOTICE_SHOWN] ?: false,
-            useEnglishVoiceInPersianMode = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false,
-            onlineFeaturesEnabled = prefs[Keys.ONLINE_FEATURES_ENABLED] ?: true,
-            onlineWeatherAlertsEnabled = prefs[Keys.ONLINE_WEATHER_ALERTS_ENABLED] ?: true,
-            onlineSearchFallbackEnabled = prefs[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] ?: true,
-            autoCheckMapUpdatesEnabled = prefs[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] ?: true,
-            wifiOnlyLargeDownloads = prefs[Keys.WIFI_ONLY_LARGE_DOWNLOADS] ?: true,
-            autoUpdateMapsOnWifi = prefs[Keys.AUTO_UPDATE_MAPS_ON_WIFI] ?: false,
-            lastManifestCheckEpochMs = prefs[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] ?: 0L,
-            lastMapUpdateCheckResult = prefs[Keys.LAST_MAP_UPDATE_CHECK_RESULT] ?: "",
-            skipParkingAtHome = prefs[Keys.SKIP_PARKING_AT_HOME] ?: true,
-            carBluetoothDeviceAddress = prefs[Keys.CAR_BT_DEVICE_ADDRESS] ?: "",
-            carBluetoothDeviceName = prefs[Keys.CAR_BT_DEVICE_NAME] ?: ""
-        )
+        mapPreferencesToSettings(prefs)
+    }
+
+    companion object {
+        val KEY_ALERT_STOP_SIGN = booleanPreferencesKey("alert_stop_sign")
+        val KEY_ALERT_TRAFFIC_LIGHT = booleanPreferencesKey("alert_traffic_light")
+        val KEY_SHOW_TRAFFIC_LIGHTS = booleanPreferencesKey("show_traffic_lights")
+        val KEY_SHOW_STOP_SIGNS_ON_MAP = booleanPreferencesKey("show_stop_signs_on_map")
+        val KEY_LANE_CHANGE_BEEPS = booleanPreferencesKey("lane_change_beeps_enabled")
+        val KEY_LANE_CHANGE_TIMING = stringPreferencesKey("lane_change_timing")
+        val KEY_LAST_CHANCE_BEEP = booleanPreferencesKey("last_chance_beep_enabled")
+
+        fun mapPreferencesToSettings(prefs: Preferences): UserSettings {
+            val defaultMode = TravelMode.fromCode(prefs[Keys.DEFAULT_TRAVEL_MODE])
+            return UserSettings(
+                language = AppLanguage.entries.find { it.code == prefs[Keys.LANGUAGE] } ?: AppLanguage.ENGLISH,
+                distanceUnit = DistanceUnit.entries.find { it.code == prefs[Keys.DISTANCE_UNIT] } ?: DistanceUnit.IMPERIAL,
+                themeMode = MapThemeMode.entries.find { it.code == prefs[Keys.THEME_MODE] } ?: MapThemeMode.AUTO,
+                voiceGuidanceEnabled = prefs[Keys.VOICE_ENABLED] ?: true,
+                speedWarningAudioEnabled = prefs[Keys.SPEED_AUDIO_ENABLED] ?: true,
+                speedWarningThresholdMph = prefs[Keys.SPEED_THRESHOLD_MPH] ?: 5,
+                junctionPreviewEnabled = prefs[Keys.JUNCTION_PREVIEW_ENABLED] ?: true,
+                laneChangeBeepsEnabled = prefs[KEY_LANE_CHANGE_BEEPS] ?: true,
+                laneChangeTiming = LaneChangeTiming.fromCode(prefs[KEY_LANE_CHANGE_TIMING]),
+                lastChanceBeepEnabled = prefs[KEY_LAST_CHANCE_BEEP] ?: true,
+                alertSpeedDropEnabled = prefs[Keys.ALERT_SPEED_DROP] ?: true,
+                alertSharpCurveEnabled = prefs[Keys.ALERT_SHARP_CURVE] ?: true,
+                alertTollBoothEnabled = prefs[Keys.ALERT_TOLL_BOOTH] ?: true,
+                alertRailroadEnabled = prefs[Keys.ALERT_RAILROAD] ?: true,
+                alertSchoolZoneEnabled = prefs[Keys.ALERT_SCHOOL_ZONE] ?: true,
+                alertStopSignEnabled = prefs[KEY_ALERT_STOP_SIGN] ?: false,
+                alertTrafficLightEnabled = prefs[KEY_ALERT_TRAFFIC_LIGHT] ?: false,
+                showTrafficLights = prefs[KEY_SHOW_TRAFFIC_LIGHTS] ?: true,
+                showStopSignsOnMap = prefs[KEY_SHOW_STOP_SIGNS_ON_MAP] ?: true,
+                alertSpeedCameraEnabled = prefs[Keys.ALERT_SPEED_CAMERA] ?: true,
+                alertRedLightCameraEnabled = prefs[Keys.ALERT_RED_LIGHT_CAMERA] ?: true,
+                alertSpeedBumpEnabled = prefs[Keys.ALERT_SPEED_BUMP] ?: true,
+                alertSteepGradeEnabled = prefs[Keys.ALERT_STEEP_GRADE] ?: true,
+                show3DBuildings = prefs[Keys.SHOW_3D_BUILDINGS] ?: true,
+                positionMarkerStyle = prefs[Keys.POSITION_MARKER_STYLE]?.takeIf { it == "car" || it == "arrow" } ?: "arrow",
+                is3DView = prefs[Keys.IS_3D_VIEW] ?: true,
+                routePreference = RoutePreference.entries.find { it.code == prefs[Keys.ROUTE_PREFERENCE] }
+                    ?: RoutePreference.FASTEST,
+                avoidTolls = prefs[Keys.AVOID_TOLLS] ?: false,
+                avoidHighways = prefs[Keys.AVOID_HIGHWAYS] ?: false,
+                avoidFerries = prefs[Keys.AVOID_FERRIES] ?: false,
+                defaultTravelMode = defaultMode,
+                lastTravelMode = prefs[Keys.LAST_TRAVEL_MODE]?.let { TravelMode.fromCode(it) } ?: defaultMode,
+                walkingSpeedPreset = WalkingSpeedPreset.fromCode(prefs[Keys.WALKING_SPEED_PRESET]),
+                cyclingSpeedPreset = CyclingSpeedPreset.fromCode(prefs[Keys.CYCLING_SPEED_PRESET]),
+                avoidHillsWhenCycling = prefs[Keys.AVOID_HILLS_WHEN_CYCLING] ?: false,
+                githubOwner = prefs[Keys.GITHUB_OWNER]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_OWNER,
+                githubRepo = prefs[Keys.GITHUB_REPO]?.takeIf { it.isNotBlank() } ?: UserSettings.DEFAULT_GITHUB_REPO,
+                packBaseUrl = prefs[Keys.PACK_BASE_URL] ?: "",
+                onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
+                devOnlineOregonMode = prefs[Keys.DEV_ONLINE_OREGON] ?: false,
+                simulateDriveEnabled = prefs[Keys.SIMULATE_DRIVE] ?: false,
+                persianTtsNoticeShown = prefs[Keys.PERSIAN_TTS_NOTICE_SHOWN] ?: false,
+                useEnglishVoiceInPersianMode = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false,
+                onlineFeaturesEnabled = prefs[Keys.ONLINE_FEATURES_ENABLED] ?: true,
+                onlineWeatherAlertsEnabled = prefs[Keys.ONLINE_WEATHER_ALERTS_ENABLED] ?: true,
+                onlineSearchFallbackEnabled = prefs[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] ?: true,
+                autoCheckMapUpdatesEnabled = prefs[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] ?: true,
+                wifiOnlyLargeDownloads = prefs[Keys.WIFI_ONLY_LARGE_DOWNLOADS] ?: true,
+                autoUpdateMapsOnWifi = prefs[Keys.AUTO_UPDATE_MAPS_ON_WIFI] ?: false,
+                lastManifestCheckEpochMs = prefs[Keys.LAST_MANIFEST_CHECK_EPOCH_MS] ?: 0L,
+                lastMapUpdateCheckResult = prefs[Keys.LAST_MAP_UPDATE_CHECK_RESULT] ?: "",
+                skipParkingAtHome = prefs[Keys.SKIP_PARKING_AT_HOME] ?: true,
+                carBluetoothDeviceAddress = prefs[Keys.CAR_BT_DEVICE_ADDRESS] ?: "",
+                carBluetoothDeviceName = prefs[Keys.CAR_BT_DEVICE_NAME] ?: ""
+            )
+        }
     }
 
     suspend fun setLanguage(language: AppLanguage) { context.rahYabDataStore.edit { it[Keys.LANGUAGE] = language.code } }
@@ -137,17 +157,22 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setSpeedWarningAudioEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SPEED_AUDIO_ENABLED] = enabled } }
     suspend fun setSpeedWarningThresholdMph(thresholdMph: Int) { context.rahYabDataStore.edit { it[Keys.SPEED_THRESHOLD_MPH] = thresholdMph.coerceIn(0, 15) } }
     suspend fun setJunctionPreviewEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.JUNCTION_PREVIEW_ENABLED] = enabled } }
+    suspend fun setLaneChangeBeepsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_BEEPS] = enabled } }
+    suspend fun setLaneChangeTiming(timing: LaneChangeTiming) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_TIMING] = timing.code } }
+    suspend fun setLastChanceBeepEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LAST_CHANCE_BEEP] = enabled } }
     suspend fun setAlertSpeedDropEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_DROP] = enabled } }
     suspend fun setAlertSharpCurveEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SHARP_CURVE] = enabled } }
     suspend fun setAlertTollBoothEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_TOLL_BOOTH] = enabled } }
     suspend fun setAlertRailroadEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_RAILROAD] = enabled } }
     suspend fun setAlertSchoolZoneEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SCHOOL_ZONE] = enabled } }
-    suspend fun setAlertStopSignEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_STOP_SIGN] = enabled } }
+    suspend fun setAlertStopSignEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_ALERT_STOP_SIGN] = enabled } }
+    suspend fun setAlertTrafficLightEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_ALERT_TRAFFIC_LIGHT] = enabled } }
     suspend fun setAlertSpeedCameraEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_CAMERA] = enabled } }
     suspend fun setAlertRedLightCameraEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_RED_LIGHT_CAMERA] = enabled } }
     suspend fun setAlertSpeedBumpEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_SPEED_BUMP] = enabled } }
     suspend fun setAlertSteepGradeEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ALERT_STEEP_GRADE] = enabled } }
-    suspend fun setShowTrafficLights(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SHOW_TRAFFIC_LIGHTS] = enabled } }
+    suspend fun setShowTrafficLights(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_SHOW_TRAFFIC_LIGHTS] = enabled } }
+    suspend fun setShowStopSignsOnMap(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_SHOW_STOP_SIGNS_ON_MAP] = enabled } }
     suspend fun set3DView(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.IS_3D_VIEW] = enabled } }
     suspend fun setRoutePreference(preference: RoutePreference) { context.rahYabDataStore.edit { it[Keys.ROUTE_PREFERENCE] = preference.code } }
     suspend fun setAvoidTolls(avoid: Boolean) { context.rahYabDataStore.edit { it[Keys.AVOID_TOLLS] = avoid } }

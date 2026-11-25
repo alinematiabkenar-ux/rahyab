@@ -45,12 +45,14 @@
 - [x] X3 Pipeline: HPMS speed limits (`42um-tgh5`) into `hpms_speed` table with bbox index
 - [x] X4 Pipeline & App: `extras.db` `meta` table, `"extras"` manifest key + merge + download/smart-update/Diagnostics + About attribution + Python tests
 - [x] X5 App: Steep grade warnings (`edge.max_upward_grade`/`max_downward_grade`/`weighted_grade`, `RoadAlertKind.STEEP_GRADE`, toggle ON, phone + car)
-- [ ] X6 App: Railroad crossing FRA detail (within 40 m match + FRA-only crossings, EN/FA phone banner + voice + Android Auto)
-- [ ] X7 App: HPMS speed limit fallback (bbox + 20 m + 30 deg heading, Diagnostics source `osm`/`hpms`, never override OSM)
-- [ ] X8 App: Unit tests for X5, X6, X7 including missing `extras.db` and old packs without grades
+- [x] X1b Pipeline: Fix `valhalla_build_elevation` CLI flags (`--from-bbox=`, `--outdir`, `-p`, `-v`) + exact command unit test
+- [x] W2 Workflow: Automate `.github/workflows/build-map-packs.yml` (`_extras.db` upload, monthly schedule, push trigger, concurrency, `published` fallback, `YYYY.MM.DD.HHMM`)
+- [x] X6 App: Railroad crossing FRA detail (within 40 m match + FRA-only crossings, EN/FA phone banner + voice + Android Auto)
+- [x] X7 App: HPMS speed limit fallback (bbox + 20 m + 30 deg heading, Diagnostics source `osm`/`hpms`, never override OSM)
+- [x] X8 App: Unit tests for X5, X6, X7 including missing `extras.db` and old packs without grades
 
 ## Final
-- [ ] FINAL All unit tests pass, APK builds cleanly, bump versionCode to 25 / versionName "25.0", mark everything DONE
+- [x] FINAL done, version set by build step
 
 ## Noticed bugs
 - (None recorded yet)

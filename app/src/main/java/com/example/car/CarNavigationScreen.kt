@@ -130,6 +130,13 @@ class CarNavigationScreen(
                                 language = settings.language
                             )
                             alertHelper.showWeatherAlertIfNew(weatherAlert, settings.language)
+                            if (nav.laneChangeCuePulseAtMs > 0L) {
+                                alertHelper.showLaneChangeCueAlert(
+                                    maneuverIndex = nav.laneChangeCueManeuverIndex,
+                                    pulseAtMs = nav.laneChangeCuePulseAtMs,
+                                    language = settings.language
+                                )
+                            }
                         }
 
                         pushTripUpdateIfNeeded(nav)

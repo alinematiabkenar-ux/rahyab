@@ -48,6 +48,7 @@ internal fun RahYabViewModel.initializeViewModel() {
             refreshNearbyCamerasImpl(ref.lat, ref.lon, force = true)
             refreshNearbyTrafficLightsImpl(ref.lat, ref.lon, force = true)
             refreshNearbySpeedBumpsImpl(ref.lat, ref.lon, force = true)
+            refreshNearbyStopSignsImpl(ref.lat, ref.lon, force = true)
         }
     }
 
@@ -202,7 +203,7 @@ internal fun mergeUniqueCamerasImpl(
 }
 
 internal fun RahYabViewModel.refreshNearbyTrafficLightsImpl(lat: Double, lon: Double, force: Boolean = false) {
-    if (!settings.value.showTrafficLights) {
+    if (!settings.value.showTrafficLights && !settings.value.alertTrafficLightEnabled) {
         if (_visibleTrafficLights.value.isNotEmpty()) _visibleTrafficLights.value = emptyList()
         _aheadTrafficLightMeters.value = null
         return
@@ -230,6 +231,7 @@ internal fun RahYabViewModel.handleFreeDriveGpsFixImpl(fix: GpsFix) {
     val s = settings.value
     refreshNearbyCamerasImpl(fix.lat, fix.lon)
     refreshNearbyTrafficLightsImpl(fix.lat, fix.lon)
+    refreshNearbyStopSignsImpl(fix.lat, fix.lon)
 
     // Visual-only approaching traffic light within ~300 ft (no voice)
     _aheadTrafficLightMeters.value = if (s.showTrafficLights) {
@@ -249,7 +251,7 @@ internal fun RahYabViewModel.handleFreeDriveGpsFixImpl(fix: GpsFix) {
         voiceManager.playCameraAlertSound()
         voiceManager.speakAlert(alertToSpeak, s.language, s.distanceUnit)
     }
-    evaluateSpeedBumpForFreeDriveImpl(fix)
+    evaluateSpeedBumpForFreeDriveImpl(fix); evaluateTrafficLightVoiceImpl(fix.lat, fix.lon, if (fix.hasBearing && fix.speedMps > 1.3f) fix.bearing else _userHeadingDegrees.value, true)
 
     val isPlaceOrPreviewOpen = _selectedPlace.value != null || _candidateRoutes.value.isNotEmpty()
     val nowElapsed = SystemClock.elapsedRealtime()

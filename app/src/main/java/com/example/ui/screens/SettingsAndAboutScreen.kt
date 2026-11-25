@@ -241,6 +241,41 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.setSpeedAudioEnabled(it) },
                     testTag = "switch_speed_audio"
                 )
+                SettingsToggleRow(
+                    label = strings.laneChangeBeepsToggle,
+                    checked = settings.laneChangeBeepsEnabled,
+                    onCheckedChange = { viewModel.setLaneChangeBeepsEnabled(it) },
+                    testTag = "switch_lane_change_beeps"
+                )
+                if (settings.laneChangeBeepsEnabled) {
+                    Text(strings.laneChangeTimingLabel, style = MaterialTheme.typography.labelLarge)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val timingChoices = listOf(
+                            com.example.navigation.LaneChangeTiming.EARLY to strings.laneChangeTimingEarly,
+                            com.example.navigation.LaneChangeTiming.NORMAL to strings.laneChangeTimingNormal,
+                            com.example.navigation.LaneChangeTiming.LATE to strings.laneChangeTimingLate
+                        )
+                        timingChoices.forEach { (timing, label) ->
+                            FilterChip(
+                                selected = settings.laneChangeTiming == timing,
+                                onClick = { viewModel.setLaneChangeTiming(timing) },
+                                label = { Text(label) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("lane_timing_${timing.code}_chip")
+                            )
+                        }
+                    }
+                    SettingsToggleRow(
+                        label = strings.lastChanceBeepToggle,
+                        checked = settings.lastChanceBeepEnabled,
+                        onCheckedChange = { viewModel.setLastChanceBeepEnabled(it) },
+                        testTag = "switch_last_chance_beep"
+                    )
+                }
 
                 if (settings.language == AppLanguage.PERSIAN) {
                     SettingsToggleRow(
@@ -392,11 +427,43 @@ fun SettingsScreen(
                     testTag = "switch_alert_red_light_camera"
                 )
                 SettingsToggleRow(
+                    label = strings.alertToggleSpeedBump,
+                    checked = settings.alertSpeedBumpEnabled,
+                    onCheckedChange = { viewModel.setAlertSpeedBumpEnabled(it) },
+                    testTag = "switch_alert_speed_bump"
+                )
+                HorizontalDivider()
+                Text(
+                    text = strings.sectionTrafficLightsStopSigns,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                SettingsToggleRow(
                     label = strings.showTrafficLightsToggle,
                     checked = settings.showTrafficLights,
                     onCheckedChange = { viewModel.setShowTrafficLights(it) },
                     testTag = "switch_show_traffic_lights"
                 )
+                SettingsToggleRow(
+                    label = strings.alertToggleTrafficLight,
+                    checked = settings.alertTrafficLightEnabled,
+                    onCheckedChange = { viewModel.setAlertTrafficLightEnabled(it) },
+                    testTag = "switch_alert_traffic_light"
+                )
+                SettingsToggleRow(
+                    label = strings.showStopSignsToggle,
+                    checked = settings.showStopSignsOnMap,
+                    onCheckedChange = { viewModel.setShowStopSignsOnMap(it) },
+                    testTag = "switch_show_stop_signs_map"
+                )
+                SettingsToggleRow(
+                    label = strings.alertToggleStopSign,
+                    checked = settings.alertStopSignEnabled,
+                    onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },
+                    testTag = "switch_alert_stop_sign"
+                )
+                HorizontalDivider()
                 SettingsToggleRow(
                     label = strings.show3DBuildingsToggle,
                     checked = settings.show3DBuildings,
@@ -430,18 +497,6 @@ fun SettingsScreen(
                         )
                     }
                 }
-                SettingsToggleRow(
-                    label = strings.alertToggleStopSign,
-                    checked = settings.alertStopSignEnabled,
-                    onCheckedChange = { viewModel.setAlertStopSignEnabled(it) },
-                    testTag = "switch_alert_stop_sign"
-                )
-                SettingsToggleRow(
-                    label = strings.alertToggleSpeedBump,
-                    checked = settings.alertSpeedBumpEnabled,
-                    onCheckedChange = { viewModel.setAlertSpeedBumpEnabled(it) },
-                    testTag = "switch_alert_speed_bump"
-                )
             }
         }
 

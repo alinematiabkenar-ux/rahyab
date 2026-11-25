@@ -43,6 +43,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     val visibleCameras: StateFlow<List<RoadHazardPoint>> get() = stateStore.visibleCameras
     val visibleTrafficLights: StateFlow<List<RoadHazardPoint>> get() = stateStore.visibleTrafficLights
     val visibleSpeedBumps: StateFlow<List<RoadHazardPoint>> get() = stateStore.visibleSpeedBumps
+    val visibleStopSigns: StateFlow<List<RoadHazardPoint>> get() = stateStore.visibleStopSigns
     val freeDriveAheadAlert: StateFlow<AheadAlert?> get() = stateStore.freeDriveAheadAlert
     val userHeadingDegrees: StateFlow<Float> get() = stateStore.userHeadingDegrees
     val isHeadingUpMode: StateFlow<Boolean> get() = stateStore.isHeadingUpMode
@@ -54,6 +55,8 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     private var headlessSimJob: Job? = null
     private var headlessArrivalJob: Job? = null
     private var headlessCachedHazards: List<RoadHazardPoint> = emptyList()
+    private var headlessCachedFraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList()
+    private val headlessHpmsFallbackCache = HpmsSpeedFallbackCache()
     private var isCarSessionConnected: Boolean = false
 
     fun attachPhoneDelegate(delegate: PhoneNavigationDelegate) {
@@ -153,6 +156,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             val shouldSim = forceSimulate ?: s.simulateDriveEnabled
             stopHeadlessLoops()
             headlessController.reset()
+            headlessHpmsFallbackCache.reset()
             app.voiceGuidanceManager.setUseEnglishVoiceInPersianMode(s.useEnglishVoiceInPersianMode)
             app.voiceGuidanceManager.setLanguage(s.language)
             app.voiceGuidanceManager.setVoiceEnabled(s.voiceGuidanceEnabled)
@@ -190,6 +194,17 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
                 val minLon = route.shape.minOf { it.lon } - 0.05
                 val maxLon = route.shape.maxOf { it.lon } + 0.05
                 headlessCachedHazards = app.offlineSearchEngine.queryRoadHazardsInBounds(minLat, maxLat, minLon, maxLon)
+                headlessCachedFraCrossings = withContext(Dispatchers.IO) {
+                    app.extrasDbReader.queryFraCrossingsInBounds(minLat, maxLat, minLon, maxLon)
+                }
+                val fraOnly = com.example.data.packs.ExtrasMatchingHelper.buildFraOnlyRouteAlerts(route.shape, headlessCachedHazards, headlessCachedFraCrossings)
+                if (fraOnly.isNotEmpty()) {
+                    val curNav = stateStore._navigationState.value
+                    val curRoute = curNav.route
+                    if (curRoute != null && curRoute.id == route.id) {
+                        stateStore._navigationState.value = curNav.copy(route = curRoute.copy(roadAlerts = curRoute.roadAlerts + fraOnly))
+                    }
+                }
             }
 
             val etaText = BilingualFormatter.formatDuration(route.durationSeconds, s.language)
@@ -290,7 +305,9 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
                             unit = s.distanceUnit,
                             language = s.language,
                             speedAudioEnabled = s.speedWarningAudioEnabled,
-                            settings = s
+                            settings = s,
+                            fraCrossings = headlessCachedFraCrossings,
+                            hpmsFallbackSpeedMph = headlessHpmsFallbackCache.cachedSpeedMph
                         )
                     }
                     simClockMs = batch.finalSimClockMs
@@ -310,7 +327,9 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
                         unit = s.distanceUnit,
                         language = s.language,
                         speedAudioEnabled = s.speedWarningAudioEnabled,
-                        settings = s
+                        settings = s,
+                        fraCrossings = headlessCachedFraCrossings,
+                        hpmsFallbackSpeedMph = headlessHpmsFallbackCache.cachedSpeedMph
                     )
                     applyHeadlessStep(res.state, res.maneuverToSpeak, res.alertToSpeak, res.triggerOverspeedChime, s)
                 }
@@ -327,6 +346,12 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     ) {
         val wasArrived = navigationState.value.hasArrived
         stateStore._navigationState.value = state
+        val loc = state.snappedLocation
+        if (loc != null && state.isNavigating && !state.hasArrived && state.speedLimitSource != HpmsSpeedFallbackCache.SOURCE_OSM) {
+            headlessHpmsFallbackCache.maybeRefreshAsync(hubScope, System.currentTimeMillis(), loc.lat, loc.lon) {
+                app.extrasDbReader.lookupHpmsSpeedLimitMph(loc.lat, loc.lon, state.snappedBearing)
+            }
+        }
         if (chime) app.voiceGuidanceManager.playOverspeedChime()
         if (state.hasArrived && !wasArrived) {
             val arrivalType = state.route?.maneuvers?.lastOrNull()?.type ?: ManeuverType.ARRIVE

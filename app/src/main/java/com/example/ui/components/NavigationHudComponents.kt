@@ -136,6 +136,7 @@ fun TurnByTurnTopHud(
     modifier: Modifier = Modifier,
     isNightMode: Boolean = false,
     lanePulseTriggerKey: Int = 0,
+    laneChangeCuePulseKey: Long = 0L,
     junctionManeuver: RouteManeuver = maneuver
 ) {
     val strings = LocalAppStrings.current
@@ -231,7 +232,8 @@ fun TurnByTurnTopHud(
                         lanes = maneuver.lanes,
                         isNightMode = isNightMode,
                         useHighwayGreen = useHighwayGreen,
-                        pulseTriggerKey = lanePulseTriggerKey
+                        pulseTriggerKey = lanePulseTriggerKey,
+                        laneChangeCuePulseKey = laneChangeCuePulseKey
                     )
                 }
             }
@@ -289,6 +291,7 @@ fun TurnByTurnTopHud(
                     distanceText = distText,
                     isNightMode = isNightMode,
                     onDismiss = onDismissJunctionPreview,
+                    laneChangeCuePulseKey = laneChangeCuePulseKey,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -525,8 +528,10 @@ fun EnlargedJunctionPreviewCard(
 }
 
 /**
- * Authentic US MUTCD Speed Limit sign paired with live GPS speedometer pill.
- * Speed limit sign is strictly hidden when `speedLimitMph == null` (never guessed!).
+ * V3: Authentic US MUTCD Speed Limit sign placed side-by-side with a circular speedometer ring.
+ * Ring color reflects [com.example.navigation.SpeedometerRingPolicy] (normal cyan, yellow within
+ * 3 mph / 5 km/h of limit, red when above limit + tolerance). Shows a subtle "est." / "تخمینی"
+ * label under the speed limit when `speedLimitSource == "hpms"`.
  */
 @Composable
 fun SpeedometerAndLimitCluster(
@@ -534,62 +539,66 @@ fun SpeedometerAndLimitCluster(
     speedLimitMph: Int?,
     isOverspeed: Boolean,
     unit: DistanceUnit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    overspeedToleranceMph: Int = 5,
+    speedLimitSource: String = "none"
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
     val currentSpeed = BilingualFormatter.formatSpeedValue(currentSpeedMps, unit)
-    val speedColor by animateColorAsState(
-        targetValue = if (isOverspeed) AlertRed else CockpitMidnight,
+    val ringState = com.example.navigation.SpeedometerRingPolicy.evaluate(
+        currentSpeedMps = currentSpeedMps,
+        speedLimitMph = speedLimitMph,
+        overspeedToleranceMph = overspeedToleranceMph,
+        unit = unit
+    )
+    val effectiveOverspeed = isOverspeed || ringState == com.example.navigation.SpeedRingState.OVERSPEED
+    val ringColor by animateColorAsState(
+        targetValue = when {
+            effectiveOverspeed -> AlertRed
+            ringState == com.example.navigation.SpeedRingState.APPROACHING_LIMIT -> Color(0xFFFACC15)
+            else -> CyanBeacon
+        },
+        label = "speed_ring_color"
+    )
+    val dialColor by animateColorAsState(
+        targetValue = if (effectiveOverspeed) AlertRed.copy(alpha = 0.92f) else CockpitMidnight,
         label = "overspeed_bg"
     )
+    val isEstimated = com.example.navigation.SpeedometerRingPolicy.isEstimatedLimitSource(speedLimitSource)
 
-    Column(
+    Row(
         modifier = modifier.testTag("speed_cluster"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (speedLimitMph != null) {
-            val displayLimit = BilingualFormatter.convertMphToUnit(speedLimitMph, unit)
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Color.White,
-                border = BorderStroke(2.5.dp, Color(0xFF0F172A)),
-                shadowElevation = 6.dp,
-                modifier = Modifier
-                    .width(64.dp)
-                    .testTag("speed_limit_sign")
-            ) {
-                Column(
-                    modifier = Modifier.padding(vertical = 5.dp, horizontal = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = strings.speedLimitTitle,
-                        fontSize = 8.sp,
-                        lineHeight = 9.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFF0F172A),
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = BilingualFormatter.formatNumber(displayLimit, language),
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = if (language == AppLanguage.PERSIAN) MaterialTheme.typography.headlineMedium.fontFamily else JetBrainsMonoFamily,
-                        color = Color(0xFF0F172A)
-                    )
-                }
-            }
-        }
-
-        Surface(
-            shape = CircleShape,
-            color = speedColor,
-            border = BorderStroke(2.dp, if (isOverspeed) Color.White else CyanBeacon),
-            shadowElevation = 8.dp,
-            modifier = Modifier.size(68.dp)
+        // Circular speedometer with high-contrast outer ring
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(72.dp)
+                .testTag("speedometer_ring")
         ) {
+            Surface(
+                shape = CircleShape,
+                color = dialColor,
+                shadowElevation = 8.dp,
+                modifier = Modifier.size(68.dp)
+            ) {}
+            Canvas(modifier = Modifier.size(70.dp)) {
+                val strokePx = 4.5.dp.toPx()
+                val radius = (size.minDimension - strokePx) / 2f
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.16f),
+                    radius = radius,
+                    style = Stroke(width = strokePx)
+                )
+                drawCircle(
+                    color = ringColor,
+                    radius = radius,
+                    style = Stroke(width = strokePx)
+                )
+            }
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -607,6 +616,51 @@ fun SpeedometerAndLimitCluster(
                     fontWeight = FontWeight.SemiBold,
                     color = Color.White.copy(alpha = 0.85f)
                 )
+            }
+        }
+
+        if (speedLimitMph != null) {
+            val displayLimit = BilingualFormatter.convertMphToUnit(speedLimitMph, unit)
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = Color.White,
+                border = BorderStroke(2.5.dp, Color(0xFF0F172A)),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .width(64.dp)
+                    .testTag("speed_limit_sign")
+            ) {
+                Column(
+                    modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = strings.speedLimitTitle,
+                        fontSize = 8.sp,
+                        lineHeight = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF0F172A),
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = BilingualFormatter.formatNumber(displayLimit, language),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = if (language == AppLanguage.PERSIAN) MaterialTheme.typography.headlineMedium.fontFamily else JetBrainsMonoFamily,
+                        color = if (effectiveOverspeed) AlertRed else Color(0xFF0F172A)
+                    )
+                    if (isEstimated) {
+                        Text(
+                            text = strings.speedLimitEstimatedLabel,
+                            fontSize = 8.5.sp,
+                            lineHeight = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF475569),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("speed_limit_est_label")
+                        )
+                    }
+                }
             }
         }
     }

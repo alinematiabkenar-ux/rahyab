@@ -30,6 +30,9 @@ class RahYabApplication : Application() {
     private val packManagerDelegate = lazy { StatePackManager(this, database.installedPackDao()) }
     val packManager: StatePackManager by packManagerDelegate
 
+    private val extrasDbReaderDelegate = lazy { com.example.data.packs.ExtrasDbReader(packManager) }
+    val extrasDbReader: com.example.data.packs.ExtrasDbReader by extrasDbReaderDelegate
+
     private val offlineSearchDelegate = lazy { OfflinePlaceSearchEngine(packManager, database.savedPlaceDao()) }
     val offlineSearchEngine: OfflinePlaceSearchEngine by offlineSearchDelegate
 

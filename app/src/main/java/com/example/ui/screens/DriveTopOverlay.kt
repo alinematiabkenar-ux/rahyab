@@ -127,6 +127,9 @@ internal fun DriveTopOverlay(
                 lanePulseTriggerKey = if (isDriveMode && navState.lanePulseManeuverIndex == activeManeuver.index) {
                     navState.lanePulseTriggerCount
                 } else 0,
+                laneChangeCuePulseKey = if (isDriveMode && navState.laneChangeCueManeuverIndex == activeManeuver.index) {
+                    navState.laneChangeCuePulseAtMs
+                } else 0L,
                 junctionManeuver = navState.activeJunctionManeuver ?: activeManeuver
             )
 

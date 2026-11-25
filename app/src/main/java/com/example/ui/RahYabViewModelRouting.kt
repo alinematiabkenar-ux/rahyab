@@ -16,8 +16,10 @@ import com.example.navigation.RoutePreference
 import com.example.navigation.TravelMode
 import com.example.navigation.ValhallaResponseParser
 import com.example.service.NavigationForegroundService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal fun formatModeNotificationTitle(
     mode: TravelMode,
@@ -79,6 +81,7 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
     val dest = _selectedPlace.value ?: return
     val s = settings.value
     navController.reset()
+    hpmsFallbackCache.reset()
     voiceManager.resetDeduplication()
     val initialManeuver = newRoute.maneuvers.firstOrNull()
     val startLoc = _navigationState.value.snappedLocation
@@ -118,21 +121,30 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
         body = firstInstruction,
         force = true
     )
+    loadFraCrossingsForRouteImpl(newRoute, cachedDbHazards)
 }
 
 internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null) {
     val routes = _candidateRoutes.value
     if (routes.isEmpty()) return
     val safeIdx = _selectedRouteIndex.value.coerceIn(0, routes.lastIndex)
-    val route = routes[safeIdx]
+    val rawRoute = routes[safeIdx]
     val dest = _selectedPlace.value ?: return
     val s = settings.value
     val shouldSimulate = forceSimulate ?: s.simulateDriveEnabled
+    val route = if (shouldSimulate && rawRoute.travelMode == TravelMode.DRIVE) {
+        enrichHighwayExitLanesForSimulation(rawRoute)
+    } else {
+        rawRoute
+    }
     val wasAlreadyNavigating = _navigationState.value.isNavigating
 
     stopInternalNavJobsImpl()
     navController.reset()
+    hpmsFallbackCache.reset()
     speedBumpEvaluator.reset()
+    trafficLightVoiceEvaluator.reset()
+    laneChangeCueTracker.reset()
     voiceManager.resetDeduplication()
     locationTracker.setNavigationMode(true)
     compassTracker.setNavigationMode(true)
@@ -194,6 +206,7 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
             if (routeCams.isNotEmpty()) {
                 _visibleCameras.value = mergeUniqueCamerasImpl(_visibleCameras.value, routeCams)
             }
+            loadFraCrossingsForRouteImpl(route, hazards)
         }
     }
 
@@ -294,6 +307,7 @@ internal fun RahYabViewModel.stopNavigationImpl() {
     compassTracker.setNavigationMode(false)
     _navigationState.value = ActiveNavigationState()
     navController.reset()
+    hpmsFallbackCache.reset()
     NavigationForegroundService.stop(app)
     _isCameraFollowing.value = true
     val ref = getEffectiveReferenceLocation()
@@ -319,4 +333,39 @@ internal fun RahYabViewModel.stopInternalNavJobsImpl() {
     simulationJob = null
     arrivalEndJob?.cancel()
     arrivalEndJob = null
+}
+
+/** X6: Queries optional FRA rail crossings along DRIVE/BIKE routes strictly on Dispatchers.IO. */
+internal fun RahYabViewModel.loadFraCrossingsForRouteImpl(
+    route: OfflineRoute,
+    osmHazards: List<com.example.data.search.RoadHazardPoint> = cachedDbHazards
+) {
+    if (route.travelMode == TravelMode.WALK || route.shape.size < 2) {
+        cachedFraCrossings = emptyList()
+        return
+    }
+    viewModelScope.launch {
+        val minLat = route.shape.minOf { it.lat } - 0.001
+        val maxLat = route.shape.maxOf { it.lat } + 0.001
+        val minLon = route.shape.minOf { it.lon } - 0.0015
+        val maxLon = route.shape.maxOf { it.lon } + 0.0015
+        val crossings = withContext(Dispatchers.IO) {
+            app.extrasDbReader.queryFraCrossingsInBounds(minLat, maxLat, minLon, maxLon)
+        }
+        cachedFraCrossings = crossings
+        if (crossings.isEmpty()) return@launch
+        val fraOnly = withContext(Dispatchers.Default) {
+            com.example.data.packs.ExtrasMatchingHelper.buildFraOnlyRouteAlerts(route.shape, osmHazards, crossings)
+        }
+        if (fraOnly.isEmpty()) return@launch
+        val nav = _navigationState.value
+        val activeRoute = nav.route
+        if (nav.isNavigating && activeRoute != null && activeRoute.id == route.id) {
+            val existingIds = activeRoute.roadAlerts.mapTo(mutableSetOf()) { it.id }
+            val toAdd = fraOnly.filterNot { it.id in existingIds }
+            if (toAdd.isNotEmpty()) {
+                _navigationState.value = nav.copy(route = activeRoute.copy(roadAlerts = activeRoute.roadAlerts + toAdd))
+            }
+        }
+    }
 }

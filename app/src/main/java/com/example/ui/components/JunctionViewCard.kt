@@ -50,10 +50,21 @@ fun JunctionViewCard(
     distanceText: String,
     isNightMode: Boolean,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    laneChangeCuePulseKey: Long = 0L
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
+    val cuePulse = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(laneChangeCuePulseKey) {
+        if (laneChangeCuePulseKey > 0L) {
+            repeat(5) {
+                cuePulse.animateTo(1f, androidx.compose.animation.core.tween(300))
+                cuePulse.animateTo(0.25f, androidx.compose.animation.core.tween(300))
+            }
+            cuePulse.animateTo(0f, androidx.compose.animation.core.tween(200))
+        }
+    }
     val imageBitmap = remember(scene, isNightMode) {
         JunctionViewRenderer.render(
             scene = scene,
@@ -64,11 +75,16 @@ fun JunctionViewCard(
     }
     val subtitle = scene.destinationLines.firstOrNull().orEmpty()
     val exitPrefix = scene.exitNumber?.let { "${strings.exitLabel} $it" }.orEmpty()
+    val borderColor = if (cuePulse.value > 0.05f) {
+        CyanBeacon.copy(alpha = (0.55f + 0.45f * cuePulse.value).coerceIn(0f, 1f))
+    } else {
+        HighwaySignBorder.copy(alpha = 0.78f)
+    }
 
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = CockpitMidnight,
-        border = BorderStroke(1.5.dp, HighwaySignBorder.copy(alpha = 0.78f)),
+        border = BorderStroke(if (cuePulse.value > 0.05f) 3.dp else 1.5.dp, borderColor),
         shadowElevation = 10.dp,
         modifier = modifier
             .fillMaxWidth()
@@ -85,6 +101,13 @@ fun JunctionViewCard(
                         .fillMaxWidth()
                         .aspectRatio(2.0f)
                 )
+                if (cuePulse.value > 0.05f) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(CyanBeacon.copy(alpha = 0.16f * cuePulse.value))
+                    )
+                }
             }
             Row(
                 modifier = Modifier

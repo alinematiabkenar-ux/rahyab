@@ -240,9 +240,7 @@ class CarMapSurfaceRenderer(
 
         s.launch {
             app.preferencesRepository.settingsFlow.collectLatest { settings ->
-                currentSettings = settings
-                reloadMapStyleIfNeeded(force = false)
-                refreshSpeedOverlay()
+                currentSettings = settings; reloadMapStyleIfNeeded(force = false); updateExtraLayers(); refreshSpeedOverlay()
             }
         }
         s.launch {
@@ -274,7 +272,7 @@ class CarMapSurfaceRenderer(
                 .collectLatest { updatePositionAndRoutes() }
         }
         s.launch {
-            combine(hub.visibleCameras, hub.visibleTrafficLights, hub.visibleSpeedBumps) { c, t, b -> Triple(c, t, b) }
+            combine(hub.visibleCameras, hub.visibleTrafficLights, hub.visibleSpeedBumps, hub.visibleStopSigns) { _, _, _, _ -> Unit }
                 .collectLatest { updateExtraLayers() }
         }
     }
@@ -302,7 +300,9 @@ class CarMapSurfaceRenderer(
 
     private fun updatePositionAndRoutes() = CarMapStyleHelper.updatePositionAndRoutes(app, loadedStyle)
 
-    private fun updateExtraLayers() = CarMapStyleHelper.updateExtraLayers(app, loadedStyle)
+    private fun updateExtraLayers() = CarMapStyleHelper.updateExtraLayers(
+        app, loadedStyle, currentSettings.showTrafficLights, currentSettings.showStopSignsOnMap
+    )
 
     private fun followCurrentLocation(forceImmediate: Boolean) {
         val hub = app.navigationHub
@@ -372,8 +372,8 @@ class CarMapSurfaceRenderer(
             currentLimitMph = nav.currentSpeedLimitMph,
             overspeed = nav.isOverspeed,
             unit = currentSettings.distanceUnit,
-            lang = currentSettings.language,
-            darkMode = isDarkMode
+            lang = currentSettings.language, darkMode = isDarkMode,
+            toleranceMph = currentSettings.speedWarningThresholdMph, limitSource = nav.speedLimitSource
         )
     }
 
