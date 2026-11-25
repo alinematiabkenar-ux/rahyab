@@ -7,18 +7,80 @@ Stdlib-only Python (urllib.request, json, sqlite3, math). No new pip packages.
 
 from __future__ import annotations
 
-import datetime
 import json
 import math
 import sqlite3
+import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 FRA_DATASET_ID = "m2f8-22s6"
 FRA_COLUMNS_URL = f"https://data.transportation.gov/api/views/{FRA_DATASET_ID}/columns.json"
 FRA_RESOURCE_URL = f"https://data.transportation.gov/resource/{FRA_DATASET_ID}.json"
+
+FRA_SELECT_FIELDS: tuple[str, ...] = (
+    "crossingid",
+    "latitude",
+    "longitude",
+    "geocoded_lat_long",
+    "statecode",
+    "street",
+    "railroadname",
+    "crossingclosed",
+    "crossingpositioncode",
+    "crossingtypecode",
+    "wdcode",
+    "countroadwaygatearms",
+    "countflashinglightpair",
+    "countmastmountedflashinglight",
+    "numberofmaintracks",
+    "numberofsidingtracks",
+    "totaldaylightthrutrains",
+    "totalnighttimethrutrains",
+    "totalswitchingtrains",
+)
+
+FRA_VERIFIED_COL_MAP: dict[str, str | None] = {
+    "crossing_id": "crossingid",
+    "lat": "latitude",
+    "lon": "longitude",
+    "geo": "geocoded_lat_long",
+    "state": "statecode",
+    "street": "street",
+    "railroad": "railroadname",
+    "closed": "crossingclosed",
+    "position": "crossingpositioncode",
+    "type_xing": "crossingtypecode",
+    "wdcode": "wdcode",
+    "gates": "countroadwaygatearms",
+    "lights": "countflashinglightpair",
+    "mast_lights": "countmastmountedflashinglight",
+    "main_tracks": "numberofmaintracks",
+    "other_tracks": "numberofsidingtracks",
+    "day_trains": "totaldaylightthrutrains",
+    "night_trains": "totalnighttimethrutrains",
+    "switching_trains": "totalswitchingtrains",
+}
+
+HPMS_DATASET_ID = "42um-tgh5"
+HPMS_COLUMNS_URL = f"https://data.transportation.gov/api/views/{HPMS_DATASET_ID}/columns.json"
+HPMS_RESOURCE_URL = f"https://data.transportation.gov/resource/{HPMS_DATASET_ID}.json"
+
+HPMS_SELECT_FIELDS: tuple[str, ...] = (
+    "speed_limit",
+    "routename",
+    "route_number",
+    "line",
+)
+
+HPMS_VERIFIED_COL_MAP: dict[str, str | None] = {
+    "speed": "speed_limit",
+    "state": "stateid",
+    "route_name": "routename",
+    "route_number": "route_number",
+    "geometry": "line",
+}
 
 HTTP_USER_AGENT = "RahYab-Pipeline/25.0"
 
@@ -42,8 +104,21 @@ def http_get_json(url: str, timeout_sec: int = 45) -> Any:
         url,
         headers={"User-Agent": HTTP_USER_AGENT, "Accept": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            raw = exc.read()
+            if isinstance(raw, bytes):
+                body = raw.decode("utf-8", errors="replace")[:300]
+            elif raw is not None:
+                body = str(raw)[:300]
+        except Exception:
+            body = ""
+        print(f"[error] HTTP {exc.code} for {url}: {body}", flush=True)
+        raise
 
 
 def find_column_field(columns: list[dict[str, Any]], candidates: tuple[str, ...]) -> str | None:
@@ -102,25 +177,42 @@ def _to_bool_int(val: Any) -> int:
 
 
 def discover_fra_columns(columns: list[dict[str, Any]]) -> dict[str, str | None]:
-    """Resolve FRA crossing field names dynamically from Socrata columns.json."""
+    """Fallback dynamic resolver for FRA crossing field names from Socrata columns.json."""
     return {
         "crossing_id": find_column_field(columns, ("crossingid", "crossing_id", "crossing id", "dot_crossing")),
         "lat": find_column_field(columns, ("latitude", "lat")),
         "lon": find_column_field(columns, ("longitude", "lon", "long")),
+        "geo": find_column_field(columns, ("geocoded_lat_long", "location", "geom", "point")),
         "street": find_column_field(columns, ("street", "highway", "roadway", "street_name")),
-        "railroad": find_column_field(columns, ("railroad", "railroad_name", "rr_name", "reporting_agency")),
-        "gates": find_column_field(columns, ("gates", "gate_arms", "quad_gates", "has_gates", "highway_gates")),
-        "lights": find_column_field(columns, ("flashing_lights", "flashers", "cantilever", "lights", "bells", "wdcode")),
+        "railroad": find_column_field(columns, ("railroadname", "railroad", "railroad_name", "rr_name")),
+        "gates": find_column_field(columns, ("countroadwaygatearms", "gates", "gate_arms", "quad_gates", "has_gates")),
+        "lights": find_column_field(columns, ("countflashinglightpair", "flashing_lights", "flashers", "lights")),
+        "mast_lights": find_column_field(columns, ("countmastmountedflashinglight", "mast_mounted", "cantilever")),
         "wdcode": find_column_field(columns, ("wdcode", "warning_device_code", "warning_device")),
-        "main_tracks": find_column_field(columns, ("maintrk", "main_tracks", "total_tracks", "tracks")),
-        "other_tracks": find_column_field(columns, ("othrtrk", "other_tracks", "siding_tracks")),
-        "day_trains": find_column_field(columns, ("daythru", "day_thru_trains", "total_trains", "daily_trains")),
-        "night_trains": find_column_field(columns, ("nghtthru", "night_thru_trains", "switching_trains")),
+        "main_tracks": find_column_field(columns, ("numberofmaintracks", "maintrk", "main_tracks", "total_tracks")),
+        "other_tracks": find_column_field(columns, ("numberofsidingtracks", "othrtrk", "other_tracks", "siding_tracks")),
+        "day_trains": find_column_field(columns, ("totaldaylightthrutrains", "daythru", "day_thru_trains", "daily_trains")),
+        "night_trains": find_column_field(columns, ("totalnighttimethrutrains", "nghtthru", "night_thru_trains")),
+        "switching_trains": find_column_field(columns, ("totalswitchingtrains", "switching_trains")),
         "closed": find_column_field(columns, ("crossingclosed", "crossing_closed", "closed", "status")),
-        "position": find_column_field(columns, ("posxing", "crossing_position", "position")),
-        "type_xing": find_column_field(columns, ("typexing", "crossing_type", "type_of_crossing", "public_private")),
-        "state": find_column_field(columns, ("stateab", "state_abbr", "statecd", "state_code", "state")),
+        "position": find_column_field(columns, ("crossingpositioncode", "posxing", "crossing_position", "position")),
+        "type_xing": find_column_field(columns, ("crossingtypecode", "typexing", "crossing_type", "public_private")),
+        "state": find_column_field(columns, ("statecode", "statecd", "stateab", "state_abbr", "state_code", "state")),
     }
+
+
+def _extract_point_lat_lon(val: Any) -> tuple[float | None, float | None]:
+    if isinstance(val, dict):
+        coords = val.get("coordinates")
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            lon = _to_float(coords[0])
+            lat = _to_float(coords[1])
+            return lat, lon
+        lat = _to_float(val.get("latitude"))
+        lon = _to_float(val.get("longitude"))
+        if lat is not None and lon is not None:
+            return lat, lon
+    return None, None
 
 
 def parse_fra_row(
@@ -131,17 +223,21 @@ def parse_fra_row(
     """
     Validate and transform one FRA Socrata row into a `fra_crossings` tuple:
     (crossing_id, lat, lon, street, railroad, has_gates, has_lights, tracks, daily_trains).
-    Filters strictly to open, at-grade, public crossings inside `bbox`.
+    Filters strictly to open, at-grade ("1"), public ("3") crossings inside `bbox`.
     """
     cid_f = col_map.get("crossing_id")
     lat_f = col_map.get("lat")
     lon_f = col_map.get("lon")
-    if not cid_f or not lat_f or not lon_f:
+    if not cid_f:
         return None
 
     crossing_id = str(row.get(cid_f) or "").strip()
-    lat = _to_float(row.get(lat_f))
-    lon = _to_float(row.get(lon_f))
+    lat = _to_float(row.get(lat_f)) if lat_f else None
+    lon = _to_float(row.get(lon_f)) if lon_f else None
+    if (lat is None or lon is None) and col_map.get("geo"):
+        plat, plon = _extract_point_lat_lon(row.get(col_map["geo"]))
+        lat = lat if lat is not None else plat
+        lon = lon if lon is not None else plon
     if not crossing_id or lat is None or lon is None:
         return None
 
@@ -149,41 +245,47 @@ def parse_fra_row(
     if not (min_lat <= lat <= max_lat and min_lon <= lon <= max_lon):
         return None
 
-    # Filter: must be open (not closed)
+    # Filter: must be open (crossingclosed not "Yes")
     closed_f = col_map.get("closed")
     if closed_f and closed_f in row:
         cval = str(row.get(closed_f) or "").strip().lower()
         if cval in ("yes", "y", "true", "1", "closed"):
             return None
 
-    # Filter: must be at-grade (FRA posxing == "1" or "at grade")
+    # Filter: must be at-grade (crossingpositioncode == "1")
     pos_f = col_map.get("position")
     if pos_f and pos_f in row:
         pval = str(row.get(pos_f) or "").strip().lower()
-        if pval and not (pval == "1" or "at grade" in pval or "at-grade" in pval):
+        if not (pval == "1" or "at grade" in pval or "at-grade" in pval):
             return None
 
-    # Filter: must be public (FRA typexing == "3" or contains "public")
+    # Filter: must be public (crossingtypecode == "3")
     type_f = col_map.get("type_xing")
     if type_f and type_f in row:
         tval = str(row.get(type_f) or "").strip().lower()
-        if tval and not (tval == "3" or "public" in tval):
+        if not (tval == "3" or "public" in tval):
             return None
 
     street = str(row.get(col_map["street"]) or "").strip() if col_map.get("street") else ""
     railroad = str(row.get(col_map["railroad"]) or "").strip() if col_map.get("railroad") else ""
 
-    has_gates = _to_bool_int(row.get(col_map["gates"])) if col_map.get("gates") else 0
-    has_lights = _to_bool_int(row.get(col_map["lights"])) if col_map.get("lights") else 0
+    gate_count = _to_bool_int(row.get(col_map["gates"])) if col_map.get("gates") else 0
+    flash_pair = _to_bool_int(row.get(col_map["lights"])) if col_map.get("lights") else 0
+    mast_lights = _to_bool_int(row.get(col_map["mast_lights"])) if col_map.get("mast_lights") else 0
 
-    # FRA warning device code (wdcode): 8/9 = gates (implies lights too), 7 = flashing lights
+    has_gates = 1 if gate_count > 0 else 0
+    has_lights = 1 if (flash_pair > 0 or mast_lights > 0) else 0
+
+    # FRA wdcode: 8/9 = gates (and lights), 7 = flashing lights, 6 = signals/wigwags/bells, 1-5 = signs/none
     wd_f = col_map.get("wdcode")
     if wd_f and wd_f in row:
-        wd = str(row.get(wd_f) or "").strip().lower()
-        if wd in ("8", "9") or "gate" in wd:
+        wd_raw = row.get(wd_f)
+        wd_str = str(wd_raw or "").strip().lower()
+        wd_num = _to_int(wd_raw, -1)
+        if wd_num in (8, 9) or "gate" in wd_str:
             has_gates = 1
             has_lights = 1
-        elif wd == "7" or "flash" in wd or "light" in wd:
+        elif wd_num in (6, 7) or "flash" in wd_str or "light" in wd_str:
             has_lights = 1
     if has_gates == 1:
         has_lights = 1
@@ -194,7 +296,8 @@ def parse_fra_row(
 
     day_tr = _to_int(row.get(col_map["day_trains"]), 0) if col_map.get("day_trains") else 0
     night_tr = _to_int(row.get(col_map["night_trains"]), 0) if col_map.get("night_trains") else 0
-    daily_trains = max(0, day_tr + night_tr)
+    switch_tr = _to_int(row.get(col_map["switching_trains"]), 0) if col_map.get("switching_trains") else 0
+    daily_trains = max(0, day_tr + night_tr + switch_tr)
 
     return (crossing_id, lat, lon, street, railroad, has_gates, has_lights, tracks, daily_trains)
 
@@ -238,6 +341,35 @@ def init_extras_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def _fetch_fra_pages(
+    where_clause: str,
+    select_fields: str | None,
+    order_field: str | None,
+    page_size: int,
+) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        query: dict[str, str] = {
+            "$where": where_clause,
+            "$limit": str(page_size),
+            "$offset": str(offset),
+        }
+        if select_fields:
+            query["$select"] = select_fields
+        if order_field:
+            query["$order"] = order_field
+        params = urllib.parse.urlencode(query)
+        rows = http_get_json(f"{FRA_RESOURCE_URL}?{params}")
+        if not isinstance(rows, list) or not rows:
+            break
+        collected.extend(r for r in rows if isinstance(r, dict))
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return collected
+
+
 def populate_fra_crossings(
     conn: sqlite3.Connection,
     state_abbr: str,
@@ -245,73 +377,74 @@ def populate_fra_crossings(
     page_size: int = 20000,
 ) -> int:
     """
-    X2: Fetch FRA rail crossings (`m2f8-22s6`) dynamically via Socrata columns.json
-    and insert open, at-grade, public crossings inside `bbox` into `fra_crossings`.
+    FX1: Fetch FRA rail crossings (`m2f8-22s6`) using verified Socrata fields:
+    1) Primary query: `$where=within_box(geocoded_lat_long, MAX_LAT, MIN_LON, MIN_LAT, MAX_LON)`
+    2) HTTP error fallback: `$where=statecode='FIPS'` with Python float bbox filtering
+    3) Last-resort fallback: dynamic discovery via `columns.json`
     """
-    columns = http_get_json(FRA_COLUMNS_URL)
-    if not isinstance(columns, list):
-        raise RuntimeError("FRA columns.json did not return a list")
-
-    col_map = discover_fra_columns(columns)
-    lat_f = col_map.get("lat")
-    lon_f = col_map.get("lon")
-    if not col_map.get("crossing_id") or not lat_f or not lon_f:
-        raise RuntimeError(f"FRA required columns missing: {col_map}")
-
     min_lon, min_lat, max_lon, max_lat = bbox
-    where_clause = (
-        f"{lat_f} >= {min_lat:.6f} AND {lat_f} <= {max_lat:.6f} "
-        f"AND {lon_f} >= {min_lon:.6f} AND {lon_f} <= {max_lon:.6f}"
+    abbr_up = state_abbr.strip().upper()
+    fips = US_STATE_FIPS.get(abbr_up, "")
+    select_str = ",".join(FRA_SELECT_FIELDS)
+    col_map: dict[str, str | None] = dict(FRA_VERIFIED_COL_MAP)
+
+    # 1. Primary spatial query (north-west corner first, then south-east)
+    within_where = (
+        f"within_box(geocoded_lat_long, {max_lat:.6f}, {min_lon:.6f}, "
+        f"{min_lat:.6f}, {max_lon:.6f})"
     )
+    rows: list[dict[str, Any]]
+    try:
+        rows = _fetch_fra_pages(within_where, select_str, "crossingid", page_size)
+    except urllib.error.HTTPError as primary_exc:
+        if fips:
+            print(
+                f"[warn] FRA within_box query failed (HTTP {primary_exc.code}), "
+                f"falling back to statecode='{fips}'",
+                flush=True,
+            )
+            try:
+                rows = _fetch_fra_pages(f"statecode='{fips}'", select_str, "crossingid", page_size)
+            except urllib.error.HTTPError:
+                # Last-resort dynamic column discovery fallback
+                columns = http_get_json(FRA_COLUMNS_URL)
+                if not isinstance(columns, list):
+                    raise
+                col_map = discover_fra_columns(columns)
+                state_f = col_map.get("state")
+                if not state_f:
+                    raise
+                rows = _fetch_fra_pages(f"{state_f}='{fips}'", None, col_map.get("crossing_id"), page_size)
+        else:
+            raise
+
+    batch: list[tuple[str, float, float, str, str, int, int, int, int]] = []
+    for row in rows:
+        parsed = parse_fra_row(row, col_map, bbox)
+        if parsed is not None:
+            batch.append(parsed)
 
     inserted = 0
-    offset = 0
-    while True:
-        params = urllib.parse.urlencode(
-            {
-                "$where": where_clause,
-                "$limit": str(page_size),
-                "$offset": str(offset),
-            }
+    if batch:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO fra_crossings
+                (crossing_id, lat, lon, street, railroad, has_gates, has_lights, tracks, daily_trains)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            batch,
         )
-        rows = http_get_json(f"{FRA_RESOURCE_URL}?{params}")
-        if not isinstance(rows, list) or not rows:
-            break
-
-        batch: list[tuple[str, float, float, str, str, int, int, int, int]] = []
-        for row in rows:
-            if isinstance(row, dict):
-                parsed = parse_fra_row(row, col_map, bbox)
-                if parsed is not None:
-                    batch.append(parsed)
-
-        if batch:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO fra_crossings
-                    (crossing_id, lat, lon, street, railroad, has_gates, has_lights, tracks, daily_trains)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                batch,
-            )
-            inserted += len(batch)
-
-        if len(rows) < page_size:
-            break
-        offset += page_size
+        inserted = len(batch)
 
     conn.commit()
-    print(f"[check] fra_crossings count={inserted} state={state_abbr.upper()}", flush=True)
+    if inserted == 0:
+        print("[warn] extras step fra: 0 rows inserted", flush=True)
+    print(f"[check] fra_crossings count={inserted} state={abbr_up}", flush=True)
     return inserted
 
 
-HPMS_DATASET_ID = "42um-tgh5"
-HPMS_COLUMNS_URL = f"https://data.transportation.gov/api/views/{HPMS_DATASET_ID}/columns.json"
-HPMS_RESOURCE_URL = f"https://data.transportation.gov/resource/{HPMS_DATASET_ID}.json"
-
-
 def discover_hpms_columns(columns: list[dict[str, Any]]) -> dict[str, str | None]:
-    """Resolve HPMS 2024 speed-limit field names dynamically from Socrata columns.json."""
+    """Fallback dynamic resolver for HPMS speed-limit field names from Socrata columns.json."""
     geom_field = None
     for col in columns:
         if not isinstance(col, dict):
@@ -323,18 +456,19 @@ def discover_hpms_columns(columns: list[dict[str, Any]]) -> dict[str, str | None
             break
     if not geom_field:
         geom_field = find_column_field(
-            columns, ("the_geom", "geo_shape", "geometry", "geom", "shape", "wkt", "polyline")
+            columns, ("line", "the_geom", "geo_shape", "geometry", "geom", "shape", "wkt", "polyline")
         )
     return {
         "speed": find_column_field(
             columns, ("speed_limit", "speedlimit", "speed_mph", "posted_speed", "value_numeric", "speed")
         ),
         "state": find_column_field(
-            columns, ("state_code", "state_id", "statecd", "state_fips", "state_abbr", "state")
+            columns, ("stateid", "state_code", "state_id", "statecd", "state_fips", "state_abbr", "state")
         ),
         "route_name": find_column_field(
-            columns, ("route_id", "route_name", "route_number", "road_name", "street", "facility")
+            columns, ("routename", "route_name", "route_id", "road_name", "street", "facility")
         ),
+        "route_number": find_column_field(columns, ("route_number", "routenumber")),
         "geometry": geom_field,
     }
 
@@ -434,7 +568,6 @@ def extract_polylines_from_geometry(geom: Any) -> list[list[tuple[float, float]]
             if "LINESTRING" not in upper:
                 return []
             lines: list[list[tuple[float, float]]] = []
-            # Split inner coordinate groups enclosed in parentheses
             start = s.find("(")
             end = s.rfind(")")
             if start < 0 or end <= start:
@@ -474,6 +607,18 @@ def extract_polylines_from_geometry(geom: Any) -> list[list[tuple[float, float]]
     return []
 
 
+def _format_route_number(val: Any) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    f = _to_float(s)
+    if f is not None and f.is_integer():
+        return str(int(f))
+    return s
+
+
 def parse_hpms_row(
     row: dict[str, Any],
     col_map: dict[str, str | None],
@@ -493,6 +638,11 @@ def parse_hpms_row(
         return []
 
     route_name = str(row.get(col_map["route_name"]) or "").strip() if col_map.get("route_name") else ""
+    if not route_name and col_map.get("route_number"):
+        rn = _format_route_number(row.get(col_map["route_number"]))
+        if rn:
+            route_name = f"Route {rn}"
+
     lines = extract_polylines_from_geometry(row.get(geom_f))
     if not lines:
         return []
@@ -517,6 +667,35 @@ def parse_hpms_row(
     return results
 
 
+def _fetch_hpms_pages(
+    where_clause: str,
+    select_fields: str | None,
+    order_field: str | None,
+    page_size: int,
+) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        query: dict[str, str] = {
+            "$where": where_clause,
+            "$limit": str(page_size),
+            "$offset": str(offset),
+        }
+        if select_fields:
+            query["$select"] = select_fields
+        if order_field:
+            query["$order"] = order_field
+        params = urllib.parse.urlencode(query)
+        rows = http_get_json(f"{HPMS_RESOURCE_URL}?{params}")
+        if not isinstance(rows, list) or not rows:
+            break
+        collected.extend(r for r in rows if isinstance(r, dict))
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return collected
+
+
 def populate_hpms_speed(
     conn: sqlite3.Connection,
     state_abbr: str,
@@ -524,67 +703,70 @@ def populate_hpms_speed(
     page_size: int = 20000,
 ) -> int:
     """
-    X3: Fetch HPMS 2024 speed limits (`42um-tgh5`) dynamically via Socrata columns.json,
-    simplify polylines, and store in `hpms_speed` with bbox index.
+    FX2: Fetch HPMS 2024 speed limits (`42um-tgh5`) using verified Socrata fields:
+    `$where=stateid = <FIPS_INT> AND speed_limit > 0`, `$select=speed_limit,routename,route_number,line`,
+    `$order=:id`, `$limit=20000` with `$offset` paging. Keeps `columns.json` dynamic discovery as fallback.
     """
-    columns = http_get_json(HPMS_COLUMNS_URL)
-    if not isinstance(columns, list):
-        raise RuntimeError("HPMS columns.json did not return a list")
-
-    col_map = discover_hpms_columns(columns)
-    speed_f = col_map.get("speed")
-    geom_f = col_map.get("geometry")
-    if not speed_f or not geom_f:
-        raise RuntimeError(f"HPMS speed or geometry column missing: {col_map}")
-
-    state_f = col_map.get("state")
     abbr_up = state_abbr.strip().upper()
     fips = US_STATE_FIPS.get(abbr_up, "")
+    col_map: dict[str, str | None] = dict(HPMS_VERIFIED_COL_MAP)
+    select_str = ",".join(HPMS_SELECT_FIELDS)
 
-    where_parts = [f"{speed_f} IS NOT NULL"]
-    if state_f and fips:
-        fips_int = str(int(fips))
-        where_parts.append(
-            f"({state_f} = '{fips}' OR {state_f} = '{fips_int}' OR upper({state_f}) = '{abbr_up}')"
+    if fips:
+        where_clause = f"stateid = {int(fips)} AND speed_limit > 0"
+    else:
+        where_clause = "speed_limit > 0"
+
+    rows: list[dict[str, Any]]
+    try:
+        rows = _fetch_hpms_pages(where_clause, select_str, ":id", page_size)
+    except urllib.error.HTTPError as primary_exc:
+        # Fallback to dynamic columns.json discovery if verified schema ever changes
+        print(
+            f"[warn] HPMS verified query failed (HTTP {primary_exc.code}), "
+            "falling back to columns.json discovery",
+            flush=True,
         )
-    elif state_f:
-        where_parts.append(f"upper({state_f}) = '{abbr_up}'")
-    where_clause = " AND ".join(where_parts)
+        columns = http_get_json(HPMS_COLUMNS_URL)
+        if not isinstance(columns, list):
+            raise
+        col_map = discover_hpms_columns(columns)
+        speed_f = col_map.get("speed")
+        geom_f = col_map.get("geometry")
+        if not speed_f or not geom_f:
+            raise RuntimeError(f"HPMS speed or geometry column missing: {col_map}")
+        state_f = col_map.get("state")
+        fb_where = f"{speed_f} > 0"
+        if state_f and fips:
+            state_dt = ""
+            for c in columns:
+                if isinstance(c, dict) and str(c.get("fieldName") or "").strip() == state_f:
+                    state_dt = str(c.get("dataTypeName") or "").lower()
+                    break
+            if state_dt == "number":
+                fb_where = f"{state_f} = {int(fips)} AND {speed_f} > 0"
+            else:
+                fb_where = f"{state_f} = '{fips}' AND {speed_f} > 0"
+        rows = _fetch_hpms_pages(fb_where, None, ":id", page_size)
+
+    batch: list[tuple[int, str, float, float, float, float, str]] = []
+    for row in rows:
+        batch.extend(parse_hpms_row(row, col_map, bbox))
 
     inserted = 0
-    offset = 0
-    while True:
-        params = urllib.parse.urlencode(
-            {
-                "$where": where_clause,
-                "$limit": str(page_size),
-                "$offset": str(offset),
-            }
+    if batch:
+        conn.executemany(
+            """
+            INSERT INTO hpms_speed
+                (speed_mph, route_name, min_lat, min_lon, max_lat, max_lon, polyline)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            batch,
         )
-        rows = http_get_json(f"{HPMS_RESOURCE_URL}?{params}")
-        if not isinstance(rows, list) or not rows:
-            break
-
-        batch: list[tuple[int, str, float, float, float, float, str]] = []
-        for row in rows:
-            if isinstance(row, dict):
-                batch.extend(parse_hpms_row(row, col_map, bbox))
-
-        if batch:
-            conn.executemany(
-                """
-                INSERT INTO hpms_speed
-                    (speed_mph, route_name, min_lat, min_lon, max_lat, max_lon, polyline)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                batch,
-            )
-            inserted += len(batch)
-
-        if len(rows) < page_size:
-            break
-        offset += page_size
+        inserted = len(batch)
 
     conn.commit()
+    if inserted == 0:
+        print("[warn] extras step hpms: 0 rows inserted", flush=True)
     print(f"[check] hpms_speed count={inserted} state={abbr_up}", flush=True)
     return inserted
