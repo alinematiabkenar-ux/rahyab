@@ -7,9 +7,12 @@ Stdlib-only Python (urllib.request, json, sqlite3, math). No new pip packages.
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
+import socket
 import sqlite3
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -81,6 +84,11 @@ HPMS_VERIFIED_COL_MAP: dict[str, str | None] = {
     "route_number": "route_number",
     "geometry": "line",
 }
+
+HPMS_PAGE_SIZE = 5000
+HPMS_TIMEOUT_SEC = 180
+HPMS_RETRY_DELAYS_SEC: tuple[int, ...] = (5, 15, 30, 60)
+HPMS_RETRYABLE_HTTP_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 HTTP_USER_AGENT = "RahYab-Pipeline/25.0"
 
@@ -667,14 +675,56 @@ def parse_hpms_row(
     return results
 
 
-def _fetch_hpms_pages(
+def _is_retryable_hpms_error(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in HPMS_RETRYABLE_HTTP_CODES
+    return isinstance(
+        exc,
+        (
+            TimeoutError,
+            socket.timeout,
+            ConnectionError,
+            urllib.error.URLError,
+            http.client.HTTPException,
+        ),
+    )
+
+
+def _http_get_hpms_page_with_retry(
+    url: str,
+    timeout_sec: int = HPMS_TIMEOUT_SEC,
+    retry_delays: tuple[int, ...] = HPMS_RETRY_DELAYS_SEC,
+) -> Any:
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            return http_get_json(url, timeout_sec=timeout_sec)
+        except Exception as exc:
+            if attempt < len(retry_delays) and _is_retryable_hpms_error(exc):
+                delay = retry_delays[attempt]
+                print(
+                    f"[warn] HPMS page request failed ({type(exc).__name__}: {exc}); "
+                    f"retrying in {delay}s ({attempt + 1}/{len(retry_delays)})",
+                    flush=True,
+                )
+                time.sleep(delay)
+                continue
+            raise
+
+
+def _stream_hpms_pages_into_db(
+    conn: sqlite3.Connection,
     where_clause: str,
     select_fields: str | None,
     order_field: str | None,
+    col_map: dict[str, str | None],
+    bbox: tuple[float, float, float, float],
     page_size: int,
-) -> list[dict[str, Any]]:
-    collected: list[dict[str, Any]] = []
+    timeout_sec: int,
+    allow_schema_fallback: bool = False,
+) -> int:
+    total_inserted = 0
     offset = 0
+    page_num = 0
     while True:
         query: dict[str, str] = {
             "$where": where_clause,
@@ -686,26 +736,70 @@ def _fetch_hpms_pages(
         if order_field:
             query["$order"] = order_field
         params = urllib.parse.urlencode(query)
-        rows = http_get_json(f"{HPMS_RESOURCE_URL}?{params}")
+        url = f"{HPMS_RESOURCE_URL}?{params}"
+
+        try:
+            rows = _http_get_hpms_page_with_retry(url, timeout_sec=timeout_sec)
+        except Exception as exc:
+            if (
+                allow_schema_fallback
+                and offset == 0
+                and isinstance(exc, urllib.error.HTTPError)
+                and exc.code not in HPMS_RETRYABLE_HTTP_CODES
+            ):
+                raise
+            print(
+                f"[warn] extras step hpms: stopped at offset {offset}: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            break
+
         if not isinstance(rows, list) or not rows:
             break
-        collected.extend(r for r in rows if isinstance(r, dict))
+
+        page_num += 1
+        page_batch: list[tuple[int, str, float, float, float, float, str]] = []
+        for row in rows:
+            if isinstance(row, dict):
+                page_batch.extend(parse_hpms_row(row, col_map, bbox))
+
+        if page_batch:
+            conn.executemany(
+                """
+                INSERT INTO hpms_speed
+                    (speed_mph, route_name, min_lat, min_lon, max_lat, max_lon, polyline)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                page_batch,
+            )
+            total_inserted += len(page_batch)
+        conn.commit()
+
+        if page_num % 5 == 0:
+            print(
+                f"[extras] hpms page {page_num} rows={len(rows)} inserted={total_inserted}",
+                flush=True,
+            )
+
         if len(rows) < page_size:
             break
         offset += page_size
-    return collected
+
+    return total_inserted
 
 
 def populate_hpms_speed(
     conn: sqlite3.Connection,
     state_abbr: str,
     bbox: tuple[float, float, float, float],
-    page_size: int = 20000,
+    page_size: int = HPMS_PAGE_SIZE,
+    timeout_sec: int = HPMS_TIMEOUT_SEC,
 ) -> int:
     """
     FX2: Fetch HPMS 2024 speed limits (`42um-tgh5`) using verified Socrata fields:
     `$where=stateid = <FIPS_INT> AND speed_limit > 0`, `$select=speed_limit,routename,route_number,line`,
-    `$order=:id`, `$limit=20000` with `$offset` paging. Keeps `columns.json` dynamic discovery as fallback.
+    `$order=:id`, `$limit=5000` with `$offset` paging, 180s timeout, retries with backoff, and
+    per-page streaming inserts/commits. Keeps `columns.json` dynamic discovery as fallback.
     """
     abbr_up = state_abbr.strip().upper()
     fips = US_STATE_FIPS.get(abbr_up, "")
@@ -717,9 +811,18 @@ def populate_hpms_speed(
     else:
         where_clause = "speed_limit > 0"
 
-    rows: list[dict[str, Any]]
     try:
-        rows = _fetch_hpms_pages(where_clause, select_str, ":id", page_size)
+        inserted = _stream_hpms_pages_into_db(
+            conn=conn,
+            where_clause=where_clause,
+            select_fields=select_str,
+            order_field=":id",
+            col_map=col_map,
+            bbox=bbox,
+            page_size=page_size,
+            timeout_sec=timeout_sec,
+            allow_schema_fallback=True,
+        )
     except urllib.error.HTTPError as primary_exc:
         # Fallback to dynamic columns.json discovery if verified schema ever changes
         print(
@@ -727,7 +830,7 @@ def populate_hpms_speed(
             "falling back to columns.json discovery",
             flush=True,
         )
-        columns = http_get_json(HPMS_COLUMNS_URL)
+        columns = http_get_json(HPMS_COLUMNS_URL, timeout_sec=timeout_sec)
         if not isinstance(columns, list):
             raise
         col_map = discover_hpms_columns(columns)
@@ -747,25 +850,18 @@ def populate_hpms_speed(
                 fb_where = f"{state_f} = {int(fips)} AND {speed_f} > 0"
             else:
                 fb_where = f"{state_f} = '{fips}' AND {speed_f} > 0"
-        rows = _fetch_hpms_pages(fb_where, None, ":id", page_size)
-
-    batch: list[tuple[int, str, float, float, float, float, str]] = []
-    for row in rows:
-        batch.extend(parse_hpms_row(row, col_map, bbox))
-
-    inserted = 0
-    if batch:
-        conn.executemany(
-            """
-            INSERT INTO hpms_speed
-                (speed_mph, route_name, min_lat, min_lon, max_lat, max_lon, polyline)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            batch,
+        inserted = _stream_hpms_pages_into_db(
+            conn=conn,
+            where_clause=fb_where,
+            select_fields=None,
+            order_field=":id",
+            col_map=col_map,
+            bbox=bbox,
+            page_size=page_size,
+            timeout_sec=timeout_sec,
+            allow_schema_fallback=False,
         )
-        inserted = len(batch)
 
-    conn.commit()
     if inserted == 0:
         print("[warn] extras step hpms: 0 rows inserted", flush=True)
     print(f"[check] hpms_speed count={inserted} state={abbr_up}", flush=True)

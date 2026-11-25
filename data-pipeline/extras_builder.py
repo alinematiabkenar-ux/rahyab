@@ -281,7 +281,7 @@ def build_extras_db(
                 if hpms_count > 0:
                     sources_used.append("FHWA HPMS 42um-tgh5")
             except Exception as exc:
-                print(f"[warn] extras step hpms_speed skipped: {exc}", flush=True)
+                print(f"[warn] extras step hpms_speed skipped: {type(exc).__name__}: {exc}", flush=True)
 
             built_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
             meta_rows = [

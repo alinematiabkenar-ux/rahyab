@@ -426,8 +426,11 @@ class ExtrasPipelineUnitTest(unittest.TestCase):
             },
         ]
 
+        captured_timeouts: list[int] = []
+
         def fake_get(url: str, timeout_sec: int = 45):
             captured_urls.append(url)
+            captured_timeouts.append(timeout_sec)
             return sample_rows
 
         conn = sqlite3.connect(":memory:")
@@ -437,6 +440,7 @@ class ExtrasPipelineUnitTest(unittest.TestCase):
 
         self.assertEqual(count, 3)  # 1 from LineString + 2 from MultiLineString
         self.assertEqual(len(captured_urls), 1)
+        self.assertEqual(captured_timeouts, [180])
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(captured_urls[0]).query)
         where_val = qs["$where"][0]
         self.assertIn("stateid = 41", where_val)
@@ -445,7 +449,7 @@ class ExtrasPipelineUnitTest(unittest.TestCase):
         self.assertEqual(where_val, "stateid = 41 AND speed_limit > 0")
         self.assertEqual(qs["$select"][0], "speed_limit,routename,route_number,line")
         self.assertEqual(qs["$order"][0], ":id")
-        self.assertEqual(qs["$limit"][0], "20000")
+        self.assertEqual(qs["$limit"][0], "5000")
 
         stored = conn.execute("SELECT speed_mph, route_name FROM hpms_speed ORDER BY id").fetchall()
         self.assertEqual(stored, [(65, "I-5"), (55, "Route 126"), (55, "Route 126")])
@@ -460,6 +464,105 @@ class ExtrasPipelineUnitTest(unittest.TestCase):
         self.assertEqual(count_zero, 0)
         self.assertIn("[warn] extras step hpms: 0 rows inserted", buf.getvalue())
         conn2.close()
+
+    def test_populate_hpms_retries_timeout_then_succeeds_with_5000_limit_and_180_timeout(self):
+        or_bbox = (-124.57, 41.99, -116.46, 46.29)
+        sample_row = {
+            "speed_limit": "55",
+            "routename": "Interstate Route 5",
+            "route_number": "5",
+            "line": {
+                "type": "LineString",
+                "coordinates": [[-123.0900, 44.0500], [-123.0800, 44.0600]],
+            },
+        }
+        calls: list[tuple[str, int]] = []
+        sleeps: list[int] = []
+
+        def fake_get(url: str, timeout_sec: int = 45):
+            calls.append((url, timeout_sec))
+            if len(calls) == 1:
+                raise TimeoutError("read timed out")
+            return [sample_row]
+
+        conn = sqlite3.connect(":memory:")
+        init_extras_schema(conn)
+        with mock.patch("extras_fra_hpms.http_get_json", side_effect=fake_get), \
+             mock.patch("extras_fra_hpms.time.sleep", side_effect=sleeps.append):
+            count = populate_hpms_speed(conn, "or", or_bbox)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [5])
+        for url, timeout_sec in calls:
+            self.assertEqual(timeout_sec, 180)
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            self.assertEqual(qs["$limit"][0], "5000")
+            self.assertEqual(qs["$offset"][0], "0")
+        stored = conn.execute("SELECT speed_mph, route_name FROM hpms_speed").fetchall()
+        self.assertEqual(stored, [(55, "Interstate Route 5")])
+        conn.close()
+
+    def test_populate_hpms_later_page_failure_after_retries_keeps_earlier_pages_and_logs_progress(self):
+        or_bbox = (-124.57, 41.99, -116.46, 46.29)
+
+        def make_row(idx: int) -> dict[str, object]:
+            return {
+                "speed_limit": "55",
+                "routename": f"Highway {idx}",
+                "route_number": str(idx),
+                "line": {
+                    "type": "LineString",
+                    "coordinates": [[-123.0900, 44.0500], [-123.0800, 44.0600]],
+                },
+            }
+
+        sleeps: list[int] = []
+        seen_timeouts: list[int] = []
+
+        def fake_get(url: str, timeout_sec: int = 45):
+            seen_timeouts.append(timeout_sec)
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            offset = int(qs["$offset"][0])
+            # Succeed for 5 full pages (offsets 0, 2, 4, 6, 8), then fail every attempt at offset 10
+            if offset < 10:
+                return [make_row(offset + 1), make_row(offset + 2)]
+            raise urllib.error.HTTPError(
+                url, 503, "Service Unavailable", hdrs=None, fp=io.BytesIO(b"upstream busy")
+            )
+
+        conn = sqlite3.connect(":memory:")
+        init_extras_schema(conn)
+        buf = io.StringIO()
+        with mock.patch("extras_fra_hpms.http_get_json", side_effect=fake_get), \
+             mock.patch("extras_fra_hpms.time.sleep", side_effect=sleeps.append), \
+             redirect_stdout(buf):
+            count = populate_hpms_speed(conn, "or", or_bbox, page_size=2)
+
+        self.assertEqual(count, 10)
+        self.assertEqual(sleeps, [5, 15, 30, 60])
+        self.assertTrue(all(t == 180 for t in seen_timeouts))
+        stored_count = conn.execute("SELECT COUNT(*) FROM hpms_speed").fetchone()[0]
+        self.assertEqual(stored_count, 10)
+
+        out = buf.getvalue()
+        self.assertIn("[extras] hpms page 5 rows=2 inserted=10", out)
+        self.assertIn("[warn] extras step hpms: stopped at offset 10: HTTPError:", out)
+        conn.close()
+
+    def test_build_extras_db_hpms_warning_includes_exception_type_and_message(self):
+        from extras_builder import build_extras_db
+
+        or_bbox = (-124.57, 41.99, -116.46, 46.29)
+        buf = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            out_db = Path(tmp) / "or_extras.db"
+            with mock.patch("extras_fra_hpms.populate_fra_crossings", return_value=0), \
+                 mock.patch("extras_fra_hpms.populate_hpms_speed", side_effect=RuntimeError("boom")), \
+                 redirect_stdout(buf):
+                result = build_extras_db("or", "OR", or_bbox, out_db)
+            self.assertEqual(result, out_db)
+        self.assertIn("[warn] extras step hpms_speed skipped: RuntimeError: boom", buf.getvalue())
 
     def test_http_get_json_logs_status_and_first_300_chars_on_http_error(self):
         long_body = ("ERR_DETAIL_" * 50).encode("utf-8")
