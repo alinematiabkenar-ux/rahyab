@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import androidx.car.app.model.CarIcon
 import androidx.core.graphics.drawable.IconCompat
+import com.example.navigation.LaneConfidence
 import com.example.navigation.LaneDirection
 import com.example.navigation.LaneInfo
 
@@ -16,8 +17,11 @@ import com.example.navigation.LaneInfo
  */
 object CarLaneBitmapRenderer {
 
-    fun renderLanesIcon(lanes: List<LaneInfo>): CarIcon? {
-        if (lanes.isEmpty()) return null
+    fun renderLanesIcon(
+        lanes: List<LaneInfo>,
+        confidence: LaneConfidence = LaneConfidence.HIGH
+    ): CarIcon? {
+        if (lanes.isEmpty() || confidence == LaneConfidence.LOW) return null
         val visible = lanes.take(8)
         val laneW = 48
         val laneH = 64
@@ -30,9 +34,13 @@ object CarLaneBitmapRenderer {
             strokeWidth = 2f
         }
         val activePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = if (confidence == LaneConfidence.MEDIUM) {
+                Color.argb(175, 147, 197, 253)
+            } else {
+                Color.WHITE
+            }
             style = Paint.Style.STROKE
-            strokeWidth = 5.2f
+            strokeWidth = if (confidence == LaneConfidence.MEDIUM) 4.6f else 5.2f
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }

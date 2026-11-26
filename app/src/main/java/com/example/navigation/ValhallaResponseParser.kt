@@ -36,7 +36,8 @@ object ValhallaResponseParser {
         val speedLimitsByShapeIndex: Map<Int, Int>,
         val laneCountsByShapeIndex: Map<Int, Int>,
         val gradeSpans: List<EdgeGradeSpan> = emptyList(),
-        val oneWayByShapeIndex: Map<Int, Boolean> = emptyMap()
+        val oneWayByShapeIndex: Map<Int, Boolean> = emptyMap(),
+        val wayIdsByShapeIndex: Map<Int, Long> = emptyMap()
     )
 
     fun parseTraceAttributes(traceJson: String, shapeSize: Int): TraceAttributesData =
@@ -106,6 +107,8 @@ object ValhallaResponseParser {
             var previousSpeedLimit: Int? = null
             var pendingApproachLanes: List<LaneInfo> = emptyList()
             var pendingApproachDistanceMeters = 0.0
+            var pendingApproachHadInterveningIntersection = false
+            var pendingApproachRawJson = ""
 
             for (m in 0 until maneuversArr.length()) {
                 val mObj = maneuversArr.optJSONObject(m) ?: continue
@@ -132,15 +135,42 @@ object ValhallaResponseParser {
                     maneuverType = type
                 )
 
-                val resolvedLanes = when {
-                    directLanes.isNotEmpty() -> directLanes
-                    edgeApproachLanes.isNotEmpty() && ValhallaApproachLaneResolver.isTurnOrExitManeuver(type) ->
-                        edgeApproachLanes
+                val laneSource: LaneSource
+                val resolvedLanes: List<LaneInfo>
+                val carriedDistanceMeters: Double
+                val carriedHadIntervening: Boolean
+                val rawLaneJson: String
+                when {
+                    directLanes.isNotEmpty() -> {
+                        laneSource = LaneSource.DIRECT
+                        resolvedLanes = directLanes
+                        carriedDistanceMeters = 0.0
+                        carriedHadIntervening = false
+                        rawLaneJson = extractRawLaneJson(mObj).ifBlank { serializeLanesFallback(directLanes) }
+                    }
+                    edgeApproachLanes.isNotEmpty() && ValhallaApproachLaneResolver.isTurnOrExitManeuver(type) -> {
+                        laneSource = LaneSource.EDGE_APPROACH
+                        resolvedLanes = edgeApproachLanes
+                        carriedDistanceMeters = 0.0
+                        carriedHadIntervening = false
+                        rawLaneJson = serializeLanesFallback(edgeApproachLanes)
+                    }
                     pendingApproachLanes.isNotEmpty() &&
                         pendingApproachDistanceMeters <= ValhallaApproachLaneResolver.MAX_APPROACH_LANE_LOOKBACK_METERS &&
-                        ValhallaApproachLaneResolver.isTurnOrExitManeuver(type) ->
-                        ValhallaApproachLaneResolver.alignApproachLanesWithManeuver(pendingApproachLanes, type)
-                    else -> emptyList()
+                        ValhallaApproachLaneResolver.isTurnOrExitManeuver(type) -> {
+                        laneSource = LaneSource.CARRIED_ALIGNED
+                        resolvedLanes = ValhallaApproachLaneResolver.alignApproachLanesWithManeuver(pendingApproachLanes, type)
+                        carriedDistanceMeters = pendingApproachDistanceMeters
+                        carriedHadIntervening = pendingApproachHadInterveningIntersection
+                        rawLaneJson = pendingApproachRawJson.ifBlank { serializeLanesFallback(resolvedLanes) }
+                    }
+                    else -> {
+                        laneSource = LaneSource.NONE
+                        resolvedLanes = emptyList()
+                        carriedDistanceMeters = 0.0
+                        carriedHadIntervening = false
+                        rawLaneJson = ""
+                    }
                 }
 
                 // Track lane data stored on approaching road segments leading into the next turn
@@ -153,14 +183,23 @@ object ValhallaResponseParser {
                 if (carryFromThisSegment.isNotEmpty()) {
                     pendingApproachLanes = carryFromThisSegment
                     pendingApproachDistanceMeters = segmentLengthMeters
+                    pendingApproachHadInterveningIntersection = false
+                    pendingApproachRawJson = extractRawLaneJson(mObj).ifBlank { serializeLanesFallback(carryFromThisSegment) }
                 } else if (type == ManeuverType.STRAIGHT || type == ManeuverType.DEPART || type == ManeuverType.MERGE) {
+                    if (pendingApproachLanes.isNotEmpty()) {
+                        pendingApproachHadInterveningIntersection = true
+                    }
                     pendingApproachDistanceMeters += segmentLengthMeters
                     if (pendingApproachDistanceMeters > ValhallaApproachLaneResolver.MAX_APPROACH_LANE_LOOKBACK_METERS) {
                         pendingApproachLanes = emptyList()
+                        pendingApproachHadInterveningIntersection = false
+                        pendingApproachRawJson = ""
                     }
                 } else {
                     pendingApproachLanes = emptyList()
                     pendingApproachDistanceMeters = 0.0
+                    pendingApproachHadInterveningIntersection = false
+                    pendingApproachRawJson = ""
                 }
 
                 val isToll = mObj.optBoolean("toll", false)
@@ -270,7 +309,11 @@ object ValhallaResponseParser {
                         hasToll = isToll,
                         speedLimitMph = speedLimitMph,
                         laneCount = explicitLaneCount,
-                        isMultiLaneRoad = isMultiLaneRoad
+                        isMultiLaneRoad = isMultiLaneRoad,
+                        laneSource = laneSource,
+                        carriedLaneDistanceMeters = carriedDistanceMeters,
+                        carriedLaneHadInterveningIntersection = carriedHadIntervening,
+                        rawLaneJson = rawLaneJson
                     )
                 )
             }
@@ -321,4 +364,29 @@ object ValhallaResponseParser {
 
     fun angleDiffDegrees(b1: Double, b2: Double): Double =
         ValhallaPolylineAndGeo.angleDiffDegrees(b1, b2)
+
+    private fun extractRawLaneJson(mObj: JSONObject): String {
+        val keys = listOf("turn_lanes", "lanes", "approach_lanes", "approach_turn_lanes", "intersections", "banner_instructions")
+        for (key in keys) {
+            val arr = mObj.optJSONArray(key)
+            if (arr != null && arr.length() > 0) return arr.toString()
+            val str = mObj.optString(key, "")
+            if (str.isNotBlank()) return str
+        }
+        return ""
+    }
+
+    private fun serializeLanesFallback(lanes: List<LaneInfo>): String {
+        val arr = JSONArray()
+        lanes.forEach { lane ->
+            arr.put(
+                JSONObject().apply {
+                    put("dirs", JSONArray(lane.directions.map { it.name }))
+                    put("active", lane.isActive)
+                    put("valid", lane.isValid)
+                }
+            )
+        }
+        return arr.toString()
+    }
 }

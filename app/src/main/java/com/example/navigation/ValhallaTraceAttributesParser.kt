@@ -26,6 +26,7 @@ internal object ValhallaTraceAttributesParser {
             ?: return ValhallaResponseParser.TraceAttributesData(emptyMap(), emptyMap(), emptyList())
         val speedLimits = mutableMapOf<Int, Int>()
         val laneCounts = mutableMapOf<Int, Int>()
+        val wayIds = mutableMapOf<Int, Long>()
         val oneWayMap = mutableMapOf<Int, Boolean>()
         val gradeSpans = mutableListOf<EdgeGradeSpan>()
         val lastIdx = shapeSize - 1
@@ -68,6 +69,17 @@ internal object ValhallaTraceAttributesParser {
                 }
             }
 
+            val wayId = if (edge.has("way_id") && !edge.isNull("way_id")) {
+                edge.optLong("way_id", 0L)
+            } else {
+                0L
+            }
+            if (wayId > 0L) {
+                for (idx in beginIdx..ownedEndIdx) {
+                    wayIds[idx] = wayId
+                }
+            }
+
             val traversability = edge.optString("traversability", "").trim().lowercase()
             val isOneWayEdge = when (traversability) {
                 "forward", "backward" -> true
@@ -101,7 +113,8 @@ internal object ValhallaTraceAttributesParser {
             speedLimitsByShapeIndex = speedLimits,
             laneCountsByShapeIndex = laneCounts,
             gradeSpans = gradeSpans,
-            oneWayByShapeIndex = oneWayMap
+            oneWayByShapeIndex = oneWayMap,
+            wayIdsByShapeIndex = wayIds
         )
     }
 
@@ -134,6 +147,7 @@ internal object ValhallaTraceAttributesParser {
 
         if (traceData.speedLimitsByShapeIndex.isEmpty() &&
             traceData.laneCountsByShapeIndex.isEmpty() &&
+            traceData.wayIdsByShapeIndex.isEmpty() &&
             traceData.oneWayByShapeIndex.isEmpty() &&
             steepGradeAlerts.isEmpty()
         ) {
@@ -151,6 +165,18 @@ internal object ValhallaTraceAttributesParser {
         )
         mergedOneWay.putAll(route.oneWayByShapeIndex)
         mergedOneWay.putAll(traceData.oneWayByShapeIndex)
+
+        val mergedEdgeLaneCounts = LinkedHashMap<Int, Int>(
+            route.edgeLaneCountsByShapeIndex.size + traceData.laneCountsByShapeIndex.size
+        )
+        mergedEdgeLaneCounts.putAll(route.edgeLaneCountsByShapeIndex)
+        mergedEdgeLaneCounts.putAll(traceData.laneCountsByShapeIndex)
+
+        val mergedEdgeWayIds = LinkedHashMap<Int, Long>(
+            route.edgeWayIdsByShapeIndex.size + traceData.wayIdsByShapeIndex.size
+        )
+        mergedEdgeWayIds.putAll(route.edgeWayIdsByShapeIndex)
+        mergedEdgeWayIds.putAll(traceData.wayIdsByShapeIndex)
 
         val updatedManeuvers = route.maneuvers.map { maneuver ->
             val edgeSpeedMph = mergedSpeedLimits[maneuver.beginShapeIndex]
@@ -200,6 +226,8 @@ internal object ValhallaTraceAttributesParser {
             maneuvers = updatedManeuvers,
             speedLimitsByShapeIndex = mergedSpeedLimits,
             oneWayByShapeIndex = mergedOneWay,
+            edgeLaneCountsByShapeIndex = mergedEdgeLaneCounts,
+            edgeWayIdsByShapeIndex = mergedEdgeWayIds,
             roadAlerts = if (extraAlerts.isEmpty()) route.roadAlerts else route.roadAlerts + extraAlerts
         )
     }

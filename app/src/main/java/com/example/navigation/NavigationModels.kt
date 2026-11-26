@@ -55,6 +55,19 @@ enum class LaneHighlightTier {
     INACTIVE
 }
 
+enum class LaneSource {
+    DIRECT,
+    EDGE_APPROACH,
+    CARRIED_ALIGNED,
+    NONE
+}
+
+enum class LaneConfidence {
+    HIGH,
+    MEDIUM,
+    LOW
+}
+
 data class LaneInfo(
     val directions: List<LaneDirection>,
     val activeDirections: List<LaneDirection>,
@@ -104,7 +117,11 @@ data class RouteManeuver(
     val hasToll: Boolean = false,
     val speedLimitMph: Int? = null,
     val laneCount: Int = lanes.size,
-    val isMultiLaneRoad: Boolean = lanes.size >= 2
+    val isMultiLaneRoad: Boolean = lanes.size >= 2,
+    val laneSource: LaneSource = if (lanes.isNotEmpty()) LaneSource.DIRECT else LaneSource.NONE,
+    val carriedLaneDistanceMeters: Double = 0.0,
+    val carriedLaneHadInterveningIntersection: Boolean = false,
+    val rawLaneJson: String = ""
 )
 
 enum class RoadAlertKind {
@@ -157,6 +174,8 @@ data class OfflineRoute(
     val maneuvers: List<RouteManeuver>,
     val speedLimitsByShapeIndex: Map<Int, Int> = emptyMap(),
     val oneWayByShapeIndex: Map<Int, Boolean> = emptyMap(),
+    val edgeLaneCountsByShapeIndex: Map<Int, Int> = emptyMap(),
+    val edgeWayIdsByShapeIndex: Map<Int, Long> = emptyMap(),
     val roadAlerts: List<AheadAlert> = emptyList(),
     val crossesStateLines: Boolean = false,
     val statesCrossed: List<String> = emptyList(),
@@ -230,6 +249,9 @@ data class ActiveNavigationState(
     val showJunctionPreview: Boolean = false,
     val activeJunctionManeuverIndex: Int = -1,
     val dismissedJunctionManeuverIndex: Int = -1,
+    val laneConfidence: LaneConfidence = LaneConfidence.HIGH,
+    val laneConfidenceReasons: List<String> = emptyList(),
+    val laneSideHint: LaneTargetSide? = null,
     val travelMode: TravelMode = TravelMode.DRIVE,
     val isWalkingMode: Boolean = (travelMode == TravelMode.WALK)
 ) {

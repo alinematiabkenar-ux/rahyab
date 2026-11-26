@@ -34,6 +34,8 @@ import com.example.i18n.AppLanguage
 import com.example.i18n.LocalAppLanguage
 import com.example.i18n.LocalAppStrings
 import com.example.navigation.JunctionScene
+import com.example.navigation.LaneConfidence
+import com.example.navigation.LaneTargetSide
 import com.example.ui.theme.CockpitMidnight
 import com.example.ui.theme.CyanBeacon
 import com.example.ui.theme.HighwaySignBorder
@@ -51,7 +53,9 @@ fun JunctionViewCard(
     isNightMode: Boolean,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
-    laneChangeCuePulseKey: Long = 0L
+    laneChangeCuePulseKey: Long = 0L,
+    laneConfidence: LaneConfidence = LaneConfidence.HIGH,
+    laneSideHint: LaneTargetSide? = null
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
@@ -65,15 +69,20 @@ fun JunctionViewCard(
             cuePulse.animateTo(0f, androidx.compose.animation.core.tween(200))
         }
     }
-    val imageBitmap = remember(scene, isNightMode) {
+    val imageBitmap = remember(scene, isNightMode, laneConfidence) {
         JunctionViewRenderer.render(
             scene = scene,
             widthPx = 720,
             heightPx = 360,
-            isNightMode = isNightMode
+            isNightMode = isNightMode,
+            laneConfidence = laneConfidence
         ).asImageBitmap()
     }
-    val subtitle = scene.destinationLines.firstOrNull().orEmpty()
+    val subtitle = if (laneConfidence == LaneConfidence.LOW && laneSideHint != null) {
+        formatLaneSideHint(laneSideHint, strings)
+    } else {
+        scene.destinationLines.firstOrNull().orEmpty()
+    }
     val exitPrefix = scene.exitNumber?.let { "${strings.exitLabel} $it" }.orEmpty()
     val borderColor = if (cuePulse.value > 0.05f) {
         CyanBeacon.copy(alpha = (0.55f + 0.45f * cuePulse.value).coerceIn(0f, 1f))

@@ -11,6 +11,7 @@ import android.graphics.Shader
 import com.example.navigation.JunctionScene
 import com.example.navigation.JunctionSceneType
 import com.example.navigation.JunctionSide
+import com.example.navigation.LaneConfidence
 
 /**
  * J2: Shared Android Canvas renderer producing Sygic-style highway junction view [Bitmap]s
@@ -70,7 +71,8 @@ object JunctionViewRenderer {
         scene: JunctionScene,
         widthPx: Int = 720,
         heightPx: Int = 360,
-        isNightMode: Boolean = false
+        isNightMode: Boolean = false,
+        laneConfidence: LaneConfidence = LaneConfidence.HIGH
     ): Bitmap {
         val w = widthPx.coerceIn(240, 1280)
         val h = heightPx.coerceIn(140, 720)
@@ -80,7 +82,7 @@ object JunctionViewRenderer {
 
         val horizonY = h * 0.46f
         drawSkyAndTerrain(canvas, w.toFloat(), h.toFloat(), horizonY, p)
-        drawPerspectiveRoadAndBranch(canvas, w.toFloat(), h.toFloat(), horizonY, scene, p)
+        drawPerspectiveRoadAndBranch(canvas, w.toFloat(), h.toFloat(), horizonY, scene, p, laneConfidence)
         JunctionViewSignDrawer.drawOverheadGantryAndSign(
             canvas = canvas,
             w = w.toFloat(),
@@ -112,7 +114,8 @@ object JunctionViewRenderer {
         h: Float,
         horizonY: Float,
         scene: JunctionScene,
-        p: Palette
+        p: Palette,
+        laneConfidence: LaneConfidence
     ) {
         val total = scene.totalLanes.coerceIn(2, 7)
         val roadBottomLeft = w * 0.10f
@@ -169,40 +172,45 @@ object JunctionViewRenderer {
         val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
             color = p.routeGlow
+            if (laneConfidence == LaneConfidence.MEDIUM) {
+                alpha = (Color.alpha(p.routeGlow) * 0.5f).toInt().coerceAtLeast(35)
+            }
         }
 
-        val recSet = scene.recommendedLaneIndices.toSet()
-        for (idx in 0 until total) {
-            val t0 = idx.toFloat() / total
-            val t1 = (idx + 1).toFloat() / total
-            val b0 = lerp(roadBottomLeft, roadBottomRight, t0)
-            val b1 = lerp(roadBottomLeft, roadBottomRight, t1)
-            val top0 = lerp(roadTopLeft, roadTopRight, t0)
-            val top1 = lerp(roadTopLeft, roadTopRight, t1)
+        if (laneConfidence != LaneConfidence.LOW) {
+            val recSet = scene.recommendedLaneIndices.toSet()
+            for (idx in 0 until total) {
+                val t0 = idx.toFloat() / total
+                val t1 = (idx + 1).toFloat() / total
+                val b0 = lerp(roadBottomLeft, roadBottomRight, t0)
+                val b1 = lerp(roadBottomLeft, roadBottomRight, t1)
+                val top0 = lerp(roadTopLeft, roadTopRight, t0)
+                val top1 = lerp(roadTopLeft, roadTopRight, t1)
 
-            val isRec = idx in recSet
-            val isExitLane = idx in scene.exitLaneIndices && scene.type != JunctionSceneType.LANE_DROP
-            val lanePath = Path()
-            if (isRec && isExitLane && scene.side == JunctionSide.RIGHT) {
-                lanePath.moveTo(b0, h)
-                lanePath.quadTo(lerp(b0, w * 0.85f, 0.45f), splitY + (h - splitY) * 0.15f, w * 0.93f, horizonY + (h - horizonY) * 0.20f)
-                lanePath.lineTo(w * 0.99f, horizonY + (h - horizonY) * 0.34f)
-                lanePath.quadTo(lerp(b1, w * 0.90f, 0.45f), splitY + (h - splitY) * 0.28f, b1, h)
-                lanePath.close()
-            } else if (isRec && isExitLane && scene.side == JunctionSide.LEFT) {
-                lanePath.moveTo(b0, h)
-                lanePath.quadTo(lerp(b0, w * 0.10f, 0.45f), splitY + (h - splitY) * 0.28f, w * 0.01f, horizonY + (h - horizonY) * 0.34f)
-                lanePath.lineTo(w * 0.07f, horizonY + (h - horizonY) * 0.20f)
-                lanePath.quadTo(lerp(b1, w * 0.15f, 0.45f), splitY + (h - splitY) * 0.15f, b1, h)
-                lanePath.close()
-            } else {
-                lanePath.moveTo(b0, h)
-                lanePath.lineTo(top0, horizonY)
-                lanePath.lineTo(top1, horizonY)
-                lanePath.lineTo(b1, h)
-                lanePath.close()
+                val isRec = idx in recSet
+                val isExitLane = idx in scene.exitLaneIndices && scene.type != JunctionSceneType.LANE_DROP
+                val lanePath = Path()
+                if (isRec && isExitLane && scene.side == JunctionSide.RIGHT) {
+                    lanePath.moveTo(b0, h)
+                    lanePath.quadTo(lerp(b0, w * 0.85f, 0.45f), splitY + (h - splitY) * 0.15f, w * 0.93f, horizonY + (h - horizonY) * 0.20f)
+                    lanePath.lineTo(w * 0.99f, horizonY + (h - horizonY) * 0.34f)
+                    lanePath.quadTo(lerp(b1, w * 0.90f, 0.45f), splitY + (h - splitY) * 0.28f, b1, h)
+                    lanePath.close()
+                } else if (isRec && isExitLane && scene.side == JunctionSide.LEFT) {
+                    lanePath.moveTo(b0, h)
+                    lanePath.quadTo(lerp(b0, w * 0.10f, 0.45f), splitY + (h - splitY) * 0.28f, w * 0.01f, horizonY + (h - horizonY) * 0.34f)
+                    lanePath.lineTo(w * 0.07f, horizonY + (h - horizonY) * 0.20f)
+                    lanePath.quadTo(lerp(b1, w * 0.15f, 0.45f), splitY + (h - splitY) * 0.15f, b1, h)
+                    lanePath.close()
+                } else {
+                    lanePath.moveTo(b0, h)
+                    lanePath.lineTo(top0, horizonY)
+                    lanePath.lineTo(top1, horizonY)
+                    lanePath.lineTo(b1, h)
+                    lanePath.close()
+                }
+                canvas.drawPath(lanePath, if (isRec) highlightPaint else dimPaint)
             }
-            canvas.drawPath(lanePath, if (isRec) highlightPaint else dimPaint)
         }
 
         val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -225,7 +233,9 @@ object JunctionViewRenderer {
             canvas.drawLine(lerp(roadBottomLeft, roadBottomRight, t), h, lerp(roadTopLeft, roadTopRight, t), horizonY, dashPaint)
         }
 
-        drawRouteGuidanceArrow(canvas, w, h, horizonY, roadBottomLeft, roadBottomRight, roadTopLeft, roadTopRight, scene, p)
+        if (laneConfidence != LaneConfidence.LOW) {
+            drawRouteGuidanceArrow(canvas, w, h, horizonY, roadBottomLeft, roadBottomRight, roadTopLeft, roadTopRight, scene, p)
+        }
     }
 
     private fun drawRouteGuidanceArrow(

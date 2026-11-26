@@ -4,7 +4,9 @@ import android.app.Activity
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -34,6 +36,7 @@ import com.example.i18n.LocalAppStrings
 import com.example.ui.RahYabViewModel
 import com.example.ui.components.MapLibreMapContainer
 import com.example.ui.components.RouteProgressBar
+import com.example.ui.components.SimulationSpeedStepControls
 import com.example.ui.components.SpeedometerAndLimitCluster
 import com.example.ui.components.rememberVoiceCommandTrigger
 
@@ -163,15 +166,16 @@ fun DriveScreen(
                 } else {
                     com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
                 }
-                if (navState.isNavigating && !navState.hasArrived) {
+                if (navState.isNavigating && !navState.hasArrived && navState.laneConfidence != com.example.navigation.LaneConfidence.LOW) {
                     remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 15.0).toInt(), navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, navState.turnFocusActive, laneStartDist.toInt()) {
                         com.example.map.LaneOverlayBuilder.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, startDistanceMeters = laneStartDist, isFocusMode = navState.turnFocusActive)
                     }
                 } else null
             },
             enlargedManeuverArrow = navState.isNavigating && !navState.hasArrived && navState.turnFocusActive &&
-                (navState.route?.maneuvers?.getOrNull(navState.currentManeuverIndex)?.lanes?.size ?: 0) < 2,
+                (navState.laneConfidence == com.example.navigation.LaneConfidence.LOW || (navState.route?.maneuvers?.getOrNull(navState.currentManeuverIndex)?.lanes?.size ?: 0) < 2),
             laneHighlightColorHex = settings.laneHighlightColor.hex,
+            laneConfidence = navState.laneConfidence,
             destinationParkingSpots = destParkingSpots, show3DBuildings = settings.show3DBuildings,
             positionMarkerStyle = settings.positionMarkerStyle,
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),
@@ -218,23 +222,41 @@ fun DriveScreen(
             onNavigateToMaps = onNavigateToMaps,
             onEnableDevOregon = { viewModel.setDevOnlineOregonMode(true) },
             onStartVoiceCommand = onStartVoiceCommand,
+            onReportWrongLane = { viewModel.reportWrongLane() },
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp)
         )
 
-        // 3. Left / Start side: Speed Limit & Live Speedometer Cluster (hidden in walking mode)
-        if (!navState.isWalkingMode && (navState.isNavigating || gpsFix != null)) {
-            SpeedometerAndLimitCluster(
-                currentSpeedMps = navState.currentSpeedMps.takeIf { navState.isNavigating } ?: (gpsFix?.speedMps ?: 0f),
-                speedLimitMph = navState.currentSpeedLimitMph,
-                isOverspeed = navState.isOverspeed,
-                unit = settings.distanceUnit,
-                overspeedToleranceMph = settings.speedWarningThresholdMph,
-                speedLimitSource = navState.speedLimitSource,
-                upcomingSpeedLimitMph = navState.upcomingSpeedLimitMph, upcomingSpeedLimitDistanceMeters = navState.upcomingSpeedLimitDistanceMeters,
+        // 3. Left / Start side: Speed Limit & Live Speedometer Cluster + S1 Simulator Speed Buttons
+        val showSpeedCluster = !navState.isWalkingMode && (navState.isNavigating || gpsFix != null)
+        val showSimSpeedButtons = navState.isNavigating && navState.isSimulatingDrive
+        if (showSpeedCluster || showSimSpeedButtons) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalAlignment = Alignment.Start,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = 12.dp, bottom = bottomRailPadding)
-            )
+            ) {
+                if (showSpeedCluster) {
+                    SpeedometerAndLimitCluster(
+                        currentSpeedMps = navState.currentSpeedMps.takeIf { navState.isNavigating } ?: (gpsFix?.speedMps ?: 0f),
+                        speedLimitMph = navState.currentSpeedLimitMph,
+                        isOverspeed = navState.isOverspeed,
+                        unit = settings.distanceUnit,
+                        overspeedToleranceMph = settings.speedWarningThresholdMph,
+                        speedLimitSource = navState.speedLimitSource,
+                        upcomingSpeedLimitMph = navState.upcomingSpeedLimitMph,
+                        upcomingSpeedLimitDistanceMeters = navState.upcomingSpeedLimitDistanceMeters
+                    )
+                }
+                if (showSimSpeedButtons) {
+                    SimulationSpeedStepControls(
+                        currentSpeed = simulationSpeed,
+                        onStepDown = { viewModel.stepSimulationSpeedDown() },
+                        onStepUp = { viewModel.stepSimulationSpeedUp() }
+                    )
+                }
+            }
         }
 
         val routeProgressEvents = if (navState.isNavigating && !navState.hasArrived && !navState.isWalkingMode) {

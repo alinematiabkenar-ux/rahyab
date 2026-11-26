@@ -111,6 +111,7 @@ fun DiagnosticsScreen(
     val ttsDiag by viewModel.ttsDiagnostics.collectAsStateWithLifecycle()
     val parkedCar by viewModel.parkedCar.collectAsStateWithLifecycle()
     val navState by viewModel.navigationState.collectAsStateWithLifecycle()
+    val wrongLaneReports by viewModel.wrongLaneReports.collectAsStateWithLifecycle()
     val carScreenDiag by com.example.car.CarScreenDiagnosticsStore.state.collectAsStateWithLifecycle()
 
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -156,6 +157,8 @@ fun DiagnosticsScreen(
         settings.lastMapUpdateCheckResult,
         parkedCar,
         navState.speedLimitSource,
+        navState.currentManeuver?.laneSource,
+        wrongLaneReports,
         carScreenDiag
     ) {
         formatDiagnosticsReport(
@@ -175,6 +178,8 @@ fun DiagnosticsScreen(
             parkedCarTimeEpochMs = parkedCar?.parkedAtEpochMs,
             parkedCarAccuracyMeters = parkedCar?.accuracyMeters,
             speedLimitSource = navState.speedLimitSource,
+            currentManeuverLaneSource = navState.currentManeuver?.laneSource?.name ?: "NONE",
+            wrongLaneReports = wrongLaneReports,
             carScreenDiag = carScreenDiag
         )
     }
@@ -426,6 +431,10 @@ fun DiagnosticsScreen(
                         label = strings.diagSpeedLimitSourceLabel,
                         value = navState.speedLimitSource
                     )
+                    DiagKeyValueRow(
+                        label = strings.diagLaneSourceLabel,
+                        value = navState.currentManeuver?.laneSource?.name ?: "NONE"
+                    )
                 }
             }
 
@@ -574,6 +583,16 @@ fun DiagnosticsScreen(
                 }
             }
 
+            // 5b. Lane reports (L6)
+            item {
+                DiagnosticsLaneReportsCard(
+                    reports = wrongLaneReports,
+                    strings = strings,
+                    language = language,
+                    onClear = { viewModel.clearWrongLaneReports() }
+                )
+            }
+
             // 6. Last 20 Lines of App Error Log
             item {
                 DiagCard(title = strings.diagSectionErrorLog, icon = Icons.Filled.BugReport) {
@@ -691,6 +710,8 @@ fun formatDiagnosticsReport(
     parkedCarTimeEpochMs: Long? = null,
     parkedCarAccuracyMeters: Float? = null,
     speedLimitSource: String = "none",
+    currentManeuverLaneSource: String = "NONE",
+    wrongLaneReports: List<com.example.data.local.WrongLaneReportEntity> = emptyList(),
     carScreenDiag: com.example.car.CarScreenDiagnosticsSnapshot = com.example.car.CarScreenDiagnosticsSnapshot()
 ): String = buildString {
     appendLine("=== ${strings.appName} — ${strings.diagnosticsTitle} ===")
@@ -745,12 +766,15 @@ fun formatDiagnosticsReport(
         appendLine("${strings.diagRoutingTimeMs}: ${lastRoute.routingTimeMs} ms")
     }
     appendLine("${strings.diagSpeedLimitSourceLabel}: $speedLimitSource")
+    appendLine("${strings.diagLaneSourceLabel}: $currentManeuverLaneSource")
     appendLine()
     appendLine("[${strings.diagSectionTts}]")
     appendLine("${strings.diagPersianTtsEngine}: ${ttsInfo.persianEngineLabel.ifBlank { ttsInfo.persianEnginePackage.ifBlank { "—" } }}")
     appendLine("${strings.diagEnglishTtsEngine}: ${ttsInfo.englishEngineLabel.ifBlank { ttsInfo.englishEnginePackage.ifBlank { "—" } }}")
     appendLine("${strings.diagPersianVoiceStatus}: ${strings.diagAvailableLabel}=${yesNo(ttsInfo.isPersianAvailable, strings)}, ${strings.diagInstalledLabel}=${yesNo(ttsInfo.isPersianInstalled, strings)}")
     appendLine("${strings.diagEnglishVoiceStatus}: ${strings.diagAvailableLabel}=${yesNo(ttsInfo.isEnglishUsAvailable, strings)}, ${strings.diagInstalledLabel}=${yesNo(ttsInfo.isEnglishUsInstalled, strings)}")
+    appendLine()
+    appendLine(formatLaneReportsForCopyAll(wrongLaneReports, strings))
     appendLine()
     appendLine("[${strings.diagSectionErrorLog}]")
     if (errorLines.isEmpty()) {

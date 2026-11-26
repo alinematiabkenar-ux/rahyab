@@ -104,6 +104,7 @@ fun MapLibreMapContainer(
     enlargedManeuverArrow: Boolean = false,
     laneOverlay: com.example.map.LaneOverlayData? = null,
     laneHighlightColorHex: String = com.example.map.LaneHighlightColor.BLUE.hex,
+    laneConfidence: com.example.navigation.LaneConfidence = com.example.navigation.LaneConfidence.HIGH,
     destinationParkingSpots: List<com.example.navigation.DestinationParkingOption> = emptyList(),
     show3DBuildings: Boolean = true,
     positionMarkerStyle: String = "arrow",
@@ -459,9 +460,9 @@ fun MapLibreMapContainer(
         val style = loadedStyle ?: return@LaunchedEffect
         com.example.map.MapExtraLayersHelper.updateManeuverArrow(style, maneuverArrow, enlargedManeuverArrow)
     }
-    LaunchedEffect(loadedStyle, laneOverlay, laneHighlightColorHex) {
+    LaunchedEffect(loadedStyle, laneOverlay, laneHighlightColorHex, laneConfidence) {
         val style = loadedStyle ?: return@LaunchedEffect
-        com.example.map.LaneMapLayerHelper.updateLaneOverlay(style, laneOverlay, laneHighlightColorHex)
+        com.example.map.LaneMapLayerHelper.updateLaneOverlay(style, laneOverlay, laneHighlightColorHex, laneConfidence)
     }
     LaunchedEffect(loadedStyle, destinationParkingSpots) {
         val style = loadedStyle ?: return@LaunchedEffect

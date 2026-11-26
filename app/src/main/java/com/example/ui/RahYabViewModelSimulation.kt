@@ -239,6 +239,18 @@ internal fun RahYabViewModel.resetSimulationSpeedTo1xImpl() {
     _snackbarMessage.value = "${str.simulationSpeedChangedPrefix}: $speedLabel"
 }
 
+internal fun RahYabViewModel.stepSimulationSpeedUpImpl() {
+    val cur = _simulationSpeedMultiplier.value
+    val next = com.example.ui.components.SimulationSpeedStepper.stepUp(cur)
+    if (next != cur) _simulationSpeedMultiplier.value = next
+}
+
+internal fun RahYabViewModel.stepSimulationSpeedDownImpl() {
+    val cur = _simulationSpeedMultiplier.value
+    val next = com.example.ui.components.SimulationSpeedStepper.stepDown(cur)
+    if (next != cur) _simulationSpeedMultiplier.value = next
+}
+
 internal fun RahYabViewModel.triggerSimulatedWrongTurnImpl() {
     if (_navigationState.value.isNavigating && _navigationState.value.isSimulatingDrive) {
         simulatedWrongTurnTicksRemaining = 4

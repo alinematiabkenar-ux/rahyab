@@ -481,4 +481,20 @@ object PersianStrings : AppStrings {
     override val turnFocusWideHighwayToggle = "شروع زودتر در بزرگراههای عریض"
     override val turnFocusShortPhraseToggle = "جملهٔ کوتاه بعد از بوق"
     override val turnFocusShortPhraseSpoken = "به خط آبی بروید"
+    // S1: Simulator speed buttons
+    override val simSpeedDecreaseDesc = "کاهش سرعت شبیه‌سازی"
+    override val simSpeedIncreaseDesc = "افزایش سرعت شبیه‌سازی"
+    // L1, L4, L5, L6: Lane accuracy, confidence hints & wrong-lane reports
+    override val diagLaneSourceLabel = "منبع خطوط مانور فعلی"
+    override val laneHintUseRightLanes = "از خطوط سمت راست بروید"
+    override val laneHintUseLeftLanes = "از خطوط سمت چپ بروید"
+    override val laneHintUseMiddleLanes = "از خطوط میانی بروید"
+    override val reportWrongLaneDesc = "گزارش خط نادرست"
+    override val wrongLaneSavedMessage = "ذخیره شد. توصیهٔ خط در این تقاطع نشان داده نمیشود."
+    override val diagSectionLaneReports = "گزارش‌های خط"
+    override val diagNoLaneReports = "گزارش خط نادرستی ثبت نشده است."
+    override val diagClearLaneReports = "پاک کردن"
+    override val diagLaneReportsCleared = "گزارش‌های خط پاک شدند"
+    // D5: GNIS landmarks
+    override val gnisLandmarkBadge = "عارضه جغرافیایی"
 }

@@ -78,7 +78,8 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         turnFocusManeuverIndex = prevNav.turnFocusManeuverIndex,
         turnFocusTriggerDistanceMeters = prevNav.turnFocusTriggerDistanceMeters
     )
-    val effectiveState = evaluateTurnFocusImpl(baseState, speedMps)
+    val validatedState = evaluateLaneConfidenceImpl(baseState)
+    val effectiveState = evaluateTurnFocusImpl(validatedState, speedMps)
 
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc

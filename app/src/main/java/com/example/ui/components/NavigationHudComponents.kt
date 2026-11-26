@@ -137,7 +137,11 @@ fun TurnByTurnTopHud(
     isNightMode: Boolean = false,
     lanePulseTriggerKey: Int = 0,
     laneChangeCuePulseKey: Long = 0L,
-    junctionManeuver: RouteManeuver = maneuver
+    junctionManeuver: RouteManeuver = maneuver,
+    laneConfidence: com.example.navigation.LaneConfidence = com.example.navigation.LaneConfidence.HIGH,
+    laneSideHint: com.example.navigation.LaneTargetSide? = null,
+    showReportWrongLaneButton: Boolean = false,
+    onReportWrongLane: () -> Unit = {}
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
@@ -223,6 +227,9 @@ fun TurnByTurnTopHud(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    if (showReportWrongLaneButton) {
+                        ReportWrongLaneFlagButton(onClick = onReportWrongLane)
+                    }
                 }
 
                 // Integrated lane guidance (replaced by Highway Junction View while junction card is visible)
@@ -233,7 +240,9 @@ fun TurnByTurnTopHud(
                         isNightMode = isNightMode,
                         useHighwayGreen = useHighwayGreen,
                         pulseTriggerKey = lanePulseTriggerKey,
-                        laneChangeCuePulseKey = laneChangeCuePulseKey
+                        laneChangeCuePulseKey = laneChangeCuePulseKey,
+                        confidence = laneConfidence,
+                        sideHint = laneSideHint
                     )
                 }
             }
@@ -292,6 +301,8 @@ fun TurnByTurnTopHud(
                     isNightMode = isNightMode,
                     onDismiss = onDismissJunctionPreview,
                     laneChangeCuePulseKey = laneChangeCuePulseKey,
+                    laneConfidence = laneConfidence,
+                    laneSideHint = laneSideHint,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

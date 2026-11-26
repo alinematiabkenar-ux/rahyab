@@ -481,4 +481,20 @@ object EnglishStrings : AppStrings {
     override val turnFocusWideHighwayToggle = "Start earlier on wide highways"
     override val turnFocusShortPhraseToggle = "Short phrase after beeps"
     override val turnFocusShortPhraseSpoken = "Get in the blue lane"
+    // S1: Simulator speed buttons
+    override val simSpeedDecreaseDesc = "Decrease simulation speed"
+    override val simSpeedIncreaseDesc = "Increase simulation speed"
+    // L1, L4, L5, L6: Lane accuracy, confidence hints & wrong-lane reports
+    override val diagLaneSourceLabel = "Current maneuver lane source"
+    override val laneHintUseRightLanes = "Use the right lanes"
+    override val laneHintUseLeftLanes = "Use the left lanes"
+    override val laneHintUseMiddleLanes = "Use the middle lanes"
+    override val reportWrongLaneDesc = "Report wrong lane"
+    override val wrongLaneSavedMessage = "Saved. This lane advice will be hidden here."
+    override val diagSectionLaneReports = "Lane reports"
+    override val diagNoLaneReports = "No wrong-lane reports saved."
+    override val diagClearLaneReports = "Clear"
+    override val diagLaneReportsCleared = "Lane reports cleared"
+    // D5: GNIS landmarks
+    override val gnisLandmarkBadge = "Landmark"
 }

@@ -7,10 +7,13 @@ import androidx.car.app.navigation.model.Maneuver
 import androidx.car.app.navigation.model.TravelEstimate
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
+import com.example.navigation.LaneConfidence
 import com.example.navigation.LaneDirection
 import com.example.navigation.LaneInfo
+import com.example.navigation.LaneTargetSide
 import com.example.navigation.ManeuverType
 import com.example.navigation.RouteManeuver
+import com.example.ui.components.formatCarLaneSideHint
 import java.util.TimeZone
 import kotlin.math.roundToLong
 
@@ -248,9 +251,20 @@ object CarManeuverMapper {
         maneuver: RouteManeuver?,
         language: AppLanguage,
         includeLanes: Boolean = false,
-        lanesImageProvider: ((List<LaneInfo>) -> androidx.car.app.model.CarIcon?)? = null
+        lanesImageProvider: ((List<LaneInfo>) -> androidx.car.app.model.CarIcon?)? = null,
+        laneConfidence: LaneConfidence = LaneConfidence.HIGH,
+        laneSideHint: LaneTargetSide? = null
     ): androidx.car.app.navigation.model.Step {
-        val cue = formatFallbackStepCue(maneuver, language)
+        val baseCue = formatFallbackStepCue(maneuver, language)
+        val useLowConfidenceHint = includeLanes &&
+            maneuver != null &&
+            maneuver.lanes.isNotEmpty() &&
+            laneConfidence == LaneConfidence.LOW
+        val cue = if (useLowConfidenceHint && laneSideHint != null) {
+            "$baseCue · ${formatCarLaneSideHint(laneSideHint, language)}"
+        } else {
+            baseCue
+        }
         val carManeuver = if (maneuver != null) {
             toCarManeuver(maneuver)
         } else {
@@ -265,7 +279,7 @@ object CarManeuverMapper {
             stepBuilder.setRoad(roadName)
         }
 
-        if (includeLanes && maneuver != null && maneuver.lanes.isNotEmpty()) {
+        if (includeLanes && !useLowConfidenceHint && maneuver != null && maneuver.lanes.isNotEmpty()) {
             toCarLanes(maneuver.lanes).forEach { lane ->
                 stepBuilder.addLane(lane)
             }

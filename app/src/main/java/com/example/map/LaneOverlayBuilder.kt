@@ -2,6 +2,7 @@ package com.example.map
 
 import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.navigation.LaneDirection
+import com.example.navigation.LaneGuidanceValidator
 import com.example.navigation.LaneHighlightTier
 import com.example.navigation.LaneInfo
 import com.example.navigation.LatLon
@@ -72,7 +73,7 @@ object LaneOverlayBuilder {
     const val MAX_FOCUS_START_METERS = 1600.0
     const val AFTER_MANEUVER_METERS = 30.0
     const val ARROW_BEFORE_MANEUVER_METERS = 40.0
-    const val FOCUS_ARROW_INTERVAL_METERS = 150.0
+    const val FOCUS_ARROW_INTERVAL_METERS = 130.0
     private const val METERS_PER_DEG_LAT = 111_320.0
 
     fun computeLaneOffsetsMeters(laneCount: Int, isOneWay: Boolean): List<Double> {
@@ -143,7 +144,16 @@ object LaneOverlayBuilder {
         if (targetFlags.none { it } || targetFlags.all { it }) return null
 
         val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
-        val beforePts = collectBackward(route.shape, pivotIdx, effectiveStart)
+        val approachDrawMeters = LaneGuidanceValidator.computeApproachDrawDistanceMeters(
+            shape = route.shape,
+            edgeLaneCountsByShapeIndex = route.edgeLaneCountsByShapeIndex,
+            pivotIdx = pivotIdx,
+            maneuverLaneCount = lanes.size,
+            isHighway = maneuver.isHighwayRoad || maneuver.isHighwayExitOrSplit,
+            maxStartDistanceMeters = effectiveStart
+        )
+        if (approachDrawMeters < 5.0) return null
+        val beforePts = collectBackward(route.shape, pivotIdx, approachDrawMeters)
         val afterPts = collectForward(route.shape, pivotIdx, AFTER_MANEUVER_METERS)
         val centerLine = ArrayList<LatLon>(beforePts.size + afterPts.size + 1).apply {
             addAll(beforePts)

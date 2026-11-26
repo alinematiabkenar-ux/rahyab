@@ -65,6 +65,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val userReportDao = app.database.userReportDao()
     internal val installedPackDao = app.database.installedPackDao()
     internal val parkedCarDao = app.database.parkedCarDao()
+    internal val wrongLaneReportDao = app.database.wrongLaneReportDao()
     internal val parkedCarManager = com.example.navigation.ParkedCarManager()
     internal val carBluetoothReceiver = com.example.navigation.CarBluetoothReceiver(
         selectedAddressProvider = { settings.value.carBluetoothDeviceAddress },
@@ -105,6 +106,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     val parkedCar: StateFlow<com.example.data.local.ParkedCarEntity?> = parkedCarDao.observeLatest()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val wrongLaneReports: StateFlow<List<com.example.data.local.WrongLaneReportEntity>> =
+        wrongLaneReportDao.observeAll()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     internal val _nowTick = MutableStateFlow(System.currentTimeMillis())
     val activeUserReports: StateFlow<List<UserReportEntity>> = combine(
@@ -248,6 +253,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var turnFocusPendingExitAnim: Boolean = false
     internal val speedLimitDropTracker = com.example.navigation.SpeedLimitDropVoiceTracker()
     internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()
+    internal var cachedHpmsThroughLanes: Int? = null
+    internal var lastHpmsLanesFetchKey: String = ""
     internal val voiceCommandManager = com.example.navigation.OfflineVoiceCommandManager(app)
     val voiceListenState: StateFlow<com.example.navigation.VoiceListenUiState> = voiceCommandManager.uiState
     internal val _voiceAutoStartSecondsLeft = MutableStateFlow(0)
@@ -335,6 +342,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun stopSimulationAndReturnToRealGps() = stopSimulationAndReturnToRealGpsImpl()
     fun cycleSimulationSpeed() = cycleSimulationSpeedImpl()
     fun resetSimulationSpeedTo1x() = resetSimulationSpeedTo1xImpl()
+    fun stepSimulationSpeedUp() = stepSimulationSpeedUpImpl()
+    fun stepSimulationSpeedDown() = stepSimulationSpeedDownImpl()
     fun triggerSimulatedWrongTurn() = triggerSimulatedWrongTurnImpl()
     fun dismissJunctionPreview() = dismissJunctionPreviewImpl()
     fun repeatLastVoiceInstruction() = voiceManager.repeatLastInstruction(settings.value.language)
@@ -458,6 +467,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun testEnglishVoice() { voiceManager.speakExplicitLanguageTest(AppLanguage.ENGLISH) }
     fun getPackFileSizes(stateCode: String) = packManager.getPackFileSizes(stateCode)
     fun readLastErrorLogLines(maxLines: Int = 20): List<String> = CrashLogManager.readLastErrorLines(app, maxLines)
+    fun reportWrongLane() = reportWrongLaneImpl()
+    fun clearWrongLaneReports() = clearWrongLaneReportsImpl()
     fun showSnackbar(message: String) { _snackbarMessage.value = message }
     fun consumeSnackbar() { _snackbarMessage.value = null }
 

@@ -41,9 +41,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.example.navigation.LaneConfidence
 import com.example.navigation.LaneDirection
 import com.example.navigation.LaneHighlightTier
 import com.example.navigation.LaneInfo
+import com.example.navigation.LaneTargetSide
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -75,9 +77,19 @@ fun LaneGuidanceBannerRow(
     useHighwayGreen: Boolean,
     pulseTriggerKey: Int,
     modifier: Modifier = Modifier,
-    laneChangeCuePulseKey: Long = 0L
+    laneChangeCuePulseKey: Long = 0L,
+    confidence: LaneConfidence = LaneConfidence.HIGH,
+    sideHint: LaneTargetSide? = null
 ) {
     if (lanes.isEmpty()) return
+    if (confidence == LaneConfidence.LOW) {
+        LaneSideHintBanner(
+            side = sideHint ?: LaneTargetSide.MIDDLE,
+            isNightMode = isNightMode,
+            modifier = modifier
+        )
+        return
+    }
 
     val pulseScale = remember { Animatable(1f) }
     val pulseGlow = remember { Animatable(0f) }
@@ -118,13 +130,21 @@ fun LaneGuidanceBannerRow(
         else -> Color.Black.copy(alpha = 0.24f)
     }
 
-    val activeBoxBg = when {
-        useHighwayGreen && isNightMode -> Color(0xFF00A8E8)
-        useHighwayGreen -> Color(0xFF0284C7)
-        isNightMode -> Color(0xFF0096D6)
-        else -> Color(0xFF0284C7)
+    val activeBoxBg = if (confidence == LaneConfidence.MEDIUM) {
+        if (isNightMode) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.20f)
+    } else {
+        when {
+            useHighwayGreen && isNightMode -> Color(0xFF00A8E8)
+            useHighwayGreen -> Color(0xFF0284C7)
+            isNightMode -> Color(0xFF0096D6)
+            else -> Color(0xFF0284C7)
+        }
     }
-    val activeBoxBorder = Color.White
+    val activeBoxBorder = if (confidence == LaneConfidence.MEDIUM) {
+        Color.White.copy(alpha = 0.62f)
+    } else {
+        Color.White
+    }
     val activeArrowColor = Color.White
 
     val validBoxBg = if (isNightMode) {

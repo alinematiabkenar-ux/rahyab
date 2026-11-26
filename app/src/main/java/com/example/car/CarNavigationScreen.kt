@@ -63,7 +63,7 @@ class CarNavigationScreen(
     private var lastReportedManeuverIdx: Int = -1
     private var lastReportedRerouting: Boolean = false
     private var lastReportedArrived: Boolean = false
-    private var cachedJunctionKey: Pair<JunctionScene, Boolean>? = null
+    private var cachedJunctionKey: Triple<JunctionScene, Boolean, com.example.navigation.LaneConfidence>? = null
     private var cachedJunctionIcon: CarIcon? = null
 
     private val navCallback = object : NavigationManagerCallback {
@@ -215,7 +215,7 @@ class CarNavigationScreen(
         val maneuver = nav.activeJunctionManeuver ?: nav.currentManeuver ?: return null
         val scene = JunctionSceneBuilder.build(maneuver) ?: return null
         val isNight = carContext.isDarkMode
-        val key = scene to isNight
+        val key = Triple(scene, isNight, nav.laneConfidence)
         if (cachedJunctionKey == key && cachedJunctionIcon != null) {
             return cachedJunctionIcon
         }
@@ -224,7 +224,8 @@ class CarNavigationScreen(
                 scene = scene,
                 widthPx = 500,
                 heightPx = 260,
-                isNightMode = isNight
+                isNightMode = isNight,
+                laneConfidence = nav.laneConfidence
             )
         }.getOrNull() ?: return null
         val icon = CarIcon.Builder(IconCompat.createWithBitmap(bmp)).build()
@@ -244,7 +245,11 @@ class CarNavigationScreen(
                 maneuver = nav.currentManeuver,
                 language = settings.language,
                 includeLanes = includeLanes,
-                lanesImageProvider = { lanes -> CarLaneBitmapRenderer.renderLanesIcon(lanes) }
+                lanesImageProvider = { lanes ->
+                    CarLaneBitmapRenderer.renderLanesIcon(lanes, nav.laneConfidence)
+                },
+                laneConfidence = nav.laneConfidence,
+                laneSideHint = nav.laneSideHint
             )
         }.getOrElse {
             CarManeuverMapper.buildStepOrFallback(

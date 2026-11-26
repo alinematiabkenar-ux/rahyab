@@ -214,9 +214,10 @@ interface ParkedCarDao {
         SavedPlaceEntity::class,
         UserReportEntity::class,
         InstalledPackEntity::class,
-        ParkedCarEntity::class
+        ParkedCarEntity::class,
+        WrongLaneReportEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class RahYabDatabase : RoomDatabase() {
@@ -224,6 +225,7 @@ abstract class RahYabDatabase : RoomDatabase() {
     abstract fun userReportDao(): UserReportDao
     abstract fun installedPackDao(): InstalledPackDao
     abstract fun parkedCarDao(): ParkedCarDao
+    abstract fun wrongLaneReportDao(): WrongLaneReportDao
 
     companion object {
         @Volatile
@@ -269,6 +271,33 @@ abstract class RahYabDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS wrong_lane_reports (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        timestampMs INTEGER NOT NULL,
+                        lat REAL NOT NULL,
+                        lon REAL NOT NULL,
+                        bearingDegrees REAL NOT NULL,
+                        mapVersion TEXT NOT NULL,
+                        maneuverType TEXT NOT NULL,
+                        instructionText TEXT NOT NULL,
+                        roadNames TEXT NOT NULL,
+                        laneSource TEXT NOT NULL,
+                        confidence TEXT NOT NULL,
+                        confidenceReasons TEXT NOT NULL,
+                        rawLaneJson TEXT NOT NULL,
+                        computedTargets TEXT NOT NULL,
+                        edgeLaneCount INTEGER NOT NULL,
+                        approachWayId INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): RahYabDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -276,7 +305,7 @@ abstract class RahYabDatabase : RoomDatabase() {
                     RahYabDatabase::class.java,
                     "rahyab_local.db"
                 )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                     .also {
                         instance = it

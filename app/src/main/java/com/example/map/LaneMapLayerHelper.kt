@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import com.example.navigation.LaneConfidence
 import com.example.navigation.LaneDirection
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
@@ -122,7 +123,7 @@ object LaneMapLayerHelper {
                     setFilter(Expression.eq(Expression.get("is_target"), Expression.literal(true)))
                     setProperties(
                         PropertyFactory.lineColor(Expression.get("color")),
-                        PropertyFactory.lineOpacity(0.85f),
+                        PropertyFactory.lineOpacity(Expression.get("opacity")),
                         PropertyFactory.lineWidth(laneWidthExpr),
                         PropertyFactory.lineCap(Property.LINE_CAP_BUTT),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
@@ -165,11 +166,12 @@ object LaneMapLayerHelper {
     fun updateLaneOverlay(
         style: Style,
         overlay: LaneOverlayData?,
-        highlightColorHex: String = LaneHighlightColor.BLUE.hex
+        highlightColorHex: String = LaneHighlightColor.BLUE.hex,
+        laneConfidence: LaneConfidence = LaneConfidence.HIGH
     ) {
         if (!style.isFullyLoaded) return
         val emptyFc = FeatureCollection.fromFeatures(emptyArray())
-        if (overlay == null) {
+        if (overlay == null || laneConfidence == LaneConfidence.LOW) {
             runCatching {
                 style.getSourceAs<GeoJsonSource>(SOURCE_LANE_STRIPS)?.setGeoJson(emptyFc)
                 style.getSourceAs<GeoJsonSource>(SOURCE_LANE_SEPARATORS)?.setGeoJson(emptyFc)
@@ -178,6 +180,9 @@ object LaneMapLayerHelper {
             return
         }
 
+        val effectiveColor = if (laneConfidence == LaneConfidence.MEDIUM) "#64B5F6" else highlightColorHex
+        val effectiveOpacity = if (laneConfidence == LaneConfidence.MEDIUM) 0.50f else 0.85f
+
         val stripFeatures = overlay.lanes.mapNotNull { lane ->
             if (lane.points.size < 2) return@mapNotNull null
             val pts = lane.points.map { Point.fromLngLat(it.lon, it.lat) }
@@ -185,7 +190,8 @@ object LaneMapLayerHelper {
                 addNumberProperty("lane_index", lane.laneIndex)
                 addBooleanProperty("is_target", lane.isTarget)
                 addStringProperty("arrow_direction", lane.arrowDirection.name)
-                addStringProperty("color", highlightColorHex)
+                addStringProperty("color", effectiveColor)
+                addNumberProperty("opacity", effectiveOpacity)
             }
         }
         val sepFeatures = overlay.separators.mapNotNull { sep ->

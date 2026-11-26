@@ -186,15 +186,17 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
     val exitAnim = turnFocusPendingExitAnim
     if (exitAnim) turnFocusPendingExitAnim = false
 
-    val isLaneOverlayActive = !state.hasArrived && LaneOverlayBuilder.build(
-        route = state.route,
-        currentManeuverIndex = state.currentManeuverIndex,
-        snappedShapeIndex = state.snappedShapeIndex,
-        distanceToNextManeuverMeters = state.distanceToNextManeuverMeters,
-        travelMode = mode,
-        isOffRoute = state.isOffRoute,
-        enabled = s.laneHighlightOnMapEnabled
-    ) != null
+    val isLaneOverlayActive = !state.hasArrived &&
+        state.laneConfidence != com.example.navigation.LaneConfidence.LOW &&
+        LaneOverlayBuilder.build(
+            route = state.route,
+            currentManeuverIndex = state.currentManeuverIndex,
+            snappedShapeIndex = state.snappedShapeIndex,
+            distanceToNextManeuverMeters = state.distanceToNextManeuverMeters,
+            travelMode = mode,
+            isOffRoute = state.isOffRoute,
+            enabled = s.laneHighlightOnMapEnabled
+        ) != null
 
     val update = cameraFollowController.computeFollowCameraUpdate(
         lat = targetLoc.lat,

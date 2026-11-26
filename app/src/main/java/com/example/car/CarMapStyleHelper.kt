@@ -129,7 +129,9 @@ internal object CarMapStyleHelper {
             } else {
                 com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
             }
-            val laneOverlay = if (nav.isNavigating && !nav.hasArrived) {
+            val laneOverlay = if (nav.isNavigating && !nav.hasArrived &&
+                nav.laneConfidence != com.example.navigation.LaneConfidence.LOW
+            ) {
                 com.example.map.LaneOverlayBuilder.build(
                     route = nav.route,
                     currentManeuverIndex = nav.currentManeuverIndex,
@@ -147,7 +149,12 @@ internal object CarMapStyleHelper {
                 arrow = arrow,
                 enlarged = nav.isNavigating && !nav.hasArrived && nav.turnFocusActive && laneOverlay == null
             )
-            com.example.map.LaneMapLayerHelper.updateLaneOverlay(style, laneOverlay, laneHighlightColorHex)
+            com.example.map.LaneMapLayerHelper.updateLaneOverlay(
+                style = style,
+                overlay = laneOverlay,
+                highlightColorHex = laneHighlightColorHex,
+                laneConfidence = nav.laneConfidence
+            )
         }
     }
 
@@ -155,6 +162,7 @@ internal object CarMapStyleHelper {
         nav: com.example.navigation.ActiveNavigationState,
         laneHighlightEnabled: Boolean
     ): Boolean {
+        if (nav.laneConfidence == com.example.navigation.LaneConfidence.LOW) return false
         val laneStartDist = if (nav.turnFocusActive && nav.turnFocusTriggerDistanceMeters > 0.0) {
             nav.turnFocusTriggerDistanceMeters
         } else {

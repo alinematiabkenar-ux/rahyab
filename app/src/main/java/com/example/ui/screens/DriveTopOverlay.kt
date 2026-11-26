@@ -103,6 +103,7 @@ internal fun DriveTopOverlay(
     onNavigateToMaps: () -> Unit,
     onEnableDevOregon: () -> Unit,
     onStartVoiceCommand: () -> Unit,
+    onReportWrongLane: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -132,7 +133,13 @@ internal fun DriveTopOverlay(
                 laneChangeCuePulseKey = if (isDriveMode && navState.laneChangeCueManeuverIndex == activeManeuver.index) {
                     navState.laneChangeCuePulseAtMs
                 } else 0L,
-                junctionManeuver = navState.activeJunctionManeuver ?: activeManeuver
+                junctionManeuver = navState.activeJunctionManeuver ?: activeManeuver,
+                laneConfidence = navState.laneConfidence,
+                laneSideHint = navState.laneSideHint,
+                showReportWrongLaneButton = isDriveMode &&
+                    activeManeuver.lanes.isNotEmpty() &&
+                    (navState.showLaneStrip || navState.showJunctionPreview || navState.turnFocusActive),
+                onReportWrongLane = onReportWrongLane
             )
 
             Row(

@@ -530,6 +530,22 @@ interface AppStrings {
     val turnFocusWideHighwayToggle: String
     val turnFocusShortPhraseToggle: String
     val turnFocusShortPhraseSpoken: String
+    // S1: Simulator speed buttons
+    val simSpeedDecreaseDesc: String
+    val simSpeedIncreaseDesc: String
+    // L1, L4, L5, L6: Lane accuracy, confidence hints & wrong-lane reports
+    val diagLaneSourceLabel: String
+    val laneHintUseRightLanes: String
+    val laneHintUseLeftLanes: String
+    val laneHintUseMiddleLanes: String
+    val reportWrongLaneDesc: String
+    val wrongLaneSavedMessage: String
+    val diagSectionLaneReports: String
+    val diagNoLaneReports: String
+    val diagClearLaneReports: String
+    val diagLaneReportsCleared: String
+    // D5: GNIS landmarks
+    val gnisLandmarkBadge: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }
