@@ -139,6 +139,57 @@ internal object NavigationGeometryHelper {
         return sum
     }
 
+    /**
+     * Returns cumulative route distance in meters from `shape[0]` to `shape[vertexIdx]`.
+     */
+    fun vertexProgressMeters(shape: List<LatLon>, vertexIdx: Int): Double {
+        if (shape.size < 2 || vertexIdx <= 0) return 0.0
+        return polylineDistanceMeters(shape, 0, vertexIdx.coerceAtMost(shape.lastIndex))
+    }
+
+    /**
+     * Exact matched-route progress in meters, including sub-segment position within
+     * `shape[snappedSegIdx] -> shape[snappedSegIdx + 1]` so long sparse segments never
+     * collapse to integer vertex indices.
+     */
+    fun progressAlongRouteMeters(
+        shape: List<LatLon>,
+        snappedLocation: LatLon,
+        snappedSegIdx: Int
+    ): Double {
+        if (shape.size < 2) return 0.0
+        val clampedSeg = snappedSegIdx.coerceIn(0, shape.lastIndex)
+        val baseDist = polylineDistanceMeters(shape, 0, clampedSeg)
+        if (clampedSeg >= shape.lastIndex) return baseDist
+        val segStart = shape[clampedSeg]
+        val segEnd = shape[clampedSeg + 1]
+        val segLen = OfflinePlaceSearchEngine.haversineMeters(segStart.lat, segStart.lon, segEnd.lat, segEnd.lon)
+        if (segLen <= 1e-6) return baseDist
+        val cosLat = cos(Math.toRadians(segStart.lat)).coerceAtLeast(0.1)
+        val dx = (segEnd.lon - segStart.lon) * cosLat
+        val dy = segEnd.lat - segStart.lat
+        val lenSq = dx * dx + dy * dy
+        val frac = if (lenSq > 1e-15) {
+            (((snappedLocation.lon - segStart.lon) * cosLat * dx + (snappedLocation.lat - segStart.lat) * dy) / lenSq)
+                .coerceIn(0.0, 1.0)
+        } else 0.0
+        return baseDist + segLen * frac
+    }
+
+    /**
+     * Signed distance along the matched route from the vehicle to [targetVertexIdx]:
+     * positive while approaching, zero at the vertex, negative once passed.
+     */
+    fun signedDistanceToVertexMeters(
+        shape: List<LatLon>,
+        snappedLocation: LatLon,
+        snappedSegIdx: Int,
+        targetVertexIdx: Int
+    ): Double {
+        return vertexProgressMeters(shape, targetVertexIdx) -
+            progressAlongRouteMeters(shape, snappedLocation, snappedSegIdx)
+    }
+
     fun isRoughlyAhead(fix: GpsFix, targetLat: Double, targetLon: Double): Boolean {
         if (fix.speedMps < 3.0f) return true
         val bearingToTarget = ValhallaResponseParser.bearingDegrees(

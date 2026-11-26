@@ -73,6 +73,7 @@ fun DriveScreen(
     val navState by viewModel.navigationState.collectAsStateWithLifecycle()
     val activeReports by viewModel.activeUserReports.collectAsStateWithLifecycle()
     val cameraCmd by viewModel.cameraCommand.collectAsStateWithLifecycle()
+    val cameraGeneration by viewModel.cameraGeneration.collectAsStateWithLifecycle()
     val isCameraFollowing by viewModel.isCameraFollowing.collectAsStateWithLifecycle()
     val userHeadingDegrees by viewModel.userHeadingDegrees.collectAsStateWithLifecycle()
     val isHeadingUpMode by viewModel.isHeadingUpMode.collectAsStateWithLifecycle()
@@ -180,6 +181,7 @@ fun DriveScreen(
             positionMarkerStyle = settings.positionMarkerStyle,
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),
             cameraCommand = cameraCmd,
+            cameraGeneration = cameraGeneration,
             onMapLongClick = { lat, lon -> viewModel.dropPinOnMap(lat, lon) },
             onRouteTapped = { idx -> viewModel.selectCandidateRoute(idx) },
             onUserMovedMap = { viewModel.pauseCameraFollow() },

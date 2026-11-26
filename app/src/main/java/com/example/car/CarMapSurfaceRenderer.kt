@@ -70,6 +70,8 @@ class CarMapSurfaceRenderer(
     private var lastLoadedStyleJson: String? = null
     private var wasFocusCameraActive: Boolean = false
     private var userPannedDuringFocus: Boolean = false
+    private var lastRouteId: String? = null
+    private var lastFocusManeuverIndex: Int = -1
 
     private val autoRecenterRunnable = Runnable {
         if (app.navigationHub.navigationState.value.turnFocusActive && userPannedDuringFocus) return@Runnable
@@ -238,6 +240,7 @@ class CarMapSurfaceRenderer(
 
     private fun pauseFollowWithTimer() {
         isFollowing = false
+        runCatching { mapLibreMap?.cancelTransitions() }
         if (app.navigationHub.navigationState.value.turnFocusActive) {
             userPannedDuringFocus = true
         }
@@ -271,12 +274,15 @@ class CarMapSurfaceRenderer(
                 app.locationTracker.currentFix,
                 hub.userHeadingDegrees
             ) { nav, fix, heading -> Triple(nav, fix, heading) }.collectLatest { (nav, fix, heading) ->
-                if (!nav.turnFocusActive && userPannedDuringFocus) {
-                    userPannedDuringFocus = false
+                if (!nav.turnFocusActive && userPannedDuringFocus) userPannedDuringFocus = false
+                if (nav.isRerouting || nav.route?.id != lastRouteId) {
+                    runCatching { mapLibreMap?.cancelTransitions() }
+                    lastRouteId = nav.route?.id
+                    wasFocusCameraActive = false
+                    lastFocusManeuverIndex = -1
                 }
-                updatePositionAndRoutes()
-                refreshSpeedOverlay()
-                if (isFollowing) {
+                updatePositionAndRoutes(); refreshSpeedOverlay()
+                if (isFollowing && !nav.isRerouting) {
                     val loc = nav.snappedLocation ?: fix?.let { LatLon(it.lat, it.lon) }
                     if (loc != null) {
                         val speed = if (nav.isNavigating) nav.currentSpeedMps else (fix?.speedMps ?: 0f)
@@ -346,10 +352,11 @@ class CarMapSurfaceRenderer(
     ) {
         val map = mapLibreMap ?: return
         val nav = app.navigationHub.navigationState.value
-        val focusCamera = isNavigating && nav.turnFocusCameraActive && !userPannedDuringFocus && !isWalking
-        val enteringFocus = focusCamera && !wasFocusCameraActive
+        val focusCamera = isNavigating && !nav.isRerouting && nav.turnFocusCameraActive && !userPannedDuringFocus && !isWalking
+        val enteringFocus = focusCamera && (!wasFocusCameraActive || nav.turnFocusManeuverIndex != lastFocusManeuverIndex)
         val exitingFocus = !focusCamera && wasFocusCameraActive
         wasFocusCameraActive = focusCamera
+        lastFocusManeuverIndex = if (focusCamera) nav.turnFocusManeuverIndex else -1
         val update = followController.computeFollowCameraUpdate(
             lat = loc.lat, lon = loc.lon, speedMps = speedMps, headingDegrees = bearing,
             isHeadingUpMode = true, is3DView = currentSettings.is3DView, isNavigating = isNavigating,
@@ -362,7 +369,8 @@ class CarMapSurfaceRenderer(
             isNavigating = isNavigating,
             is3DView = currentSettings.is3DView,
             focusCameraActive = focusCamera,
-            focusIsHighway = nav.turnFocusIsHighway
+            focusIsHighway = nav.turnFocusIsHighway,
+            focusClosePair = nav.turnFocusClosePair
         )
         val area = if (stableArea.width() > 0 && stableArea.height() > 0) stableArea else visibleArea
         val padding = CarCameraProfile.computeCameraPadding(
@@ -373,7 +381,10 @@ class CarMapSurfaceRenderer(
             anchorLowerQuarter = carTarget.anchorLowerQuarter
         )
         val animMs = when {
-            enteringFocus -> CarCameraProfile.FOCUS_ENTER_ANIM_MS
+            enteringFocus -> nav.turnFocusEnterAnimMs.coerceIn(
+                com.example.navigation.TurnFocusPlanner.MIN_ENTER_ANIM_MS,
+                CarCameraProfile.FOCUS_ENTER_ANIM_MS
+            )
             exitingFocus -> CarCameraProfile.FOCUS_EXIT_ANIM_MS
             else -> update.animationDurationMs
         }

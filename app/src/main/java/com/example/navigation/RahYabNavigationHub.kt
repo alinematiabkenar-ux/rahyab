@@ -51,6 +51,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     @Volatile
     private var phoneDelegate: PhoneNavigationDelegate? = null
     private val headlessController = NavigationSessionController()
+    private val headlessTurnFocusTracker = TurnFocusSessionTracker()
     private var headlessGpsJob: Job? = null
     private var headlessSimJob: Job? = null
     private var headlessArrivalJob: Job? = null
@@ -178,7 +179,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             val s = currentSettings()
             val shouldSim = forceSimulate ?: s.simulateDriveEnabled
             stopHeadlessLoops()
-            headlessController.reset()
+            headlessController.reset(); headlessTurnFocusTracker.reset()
             headlessHpmsFallbackCache.reset()
             app.voiceGuidanceManager.setUseEnglishVoiceInPersianMode(s.useEnglishVoiceInPersianMode)
             app.voiceGuidanceManager.setLanguage(s.language)
@@ -253,7 +254,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             return
         }
         app.locationTracker.setNavigationMode(false)
-        headlessController.reset()
+        headlessController.reset(); headlessTurnFocusTracker.reset()
         stateStore.clearSession()
         NavigationForegroundService.stop(app)
         hubScope.launch { app.packManager.applyPendingSwapsIfIdle() }
@@ -374,11 +375,15 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             val edgeLanes = state.route?.let { LaneGuidanceValidator.findApproachEdgeLaneCount(it, curManeuver) }
             LaneGuidanceDecision.evaluate(curManeuver, edgeLaneCountBeforeManeuver = edgeLanes)
         } else null
-        val enriched = state.copy(
-            laneConfidence = decision?.confidence ?: LaneConfidence.HIGH,
-            laneConfidenceReasons = decision?.reasons.orEmpty(),
-            laneSideHint = decision?.suggestedSide,
-            laneDecision = decision
+        val enriched = headlessTurnFocusTracker.applyToState(
+            state.copy(
+                laneConfidence = decision?.confidence ?: LaneConfidence.HIGH,
+                laneConfidenceReasons = decision?.reasons.orEmpty(),
+                laneSideHint = decision?.suggestedSide,
+                laneDecision = decision
+            ),
+            speedMps = state.currentSpeedMps,
+            settings = s
         )
         if (prev.route?.id != enriched.route?.id || prev.currentManeuverIndex != enriched.currentManeuverIndex) {
             app.voiceGuidanceManager.cancelStaleForManeuverOrReroute(enriched.route?.id, enriched.currentManeuverIndex)

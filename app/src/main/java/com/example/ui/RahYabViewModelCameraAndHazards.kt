@@ -18,17 +18,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-data class CameraTargetCommand(
-    val lat: Double,
-    val lon: Double,
-    val zoom: Double = 14.5,
-    val tilt: Double = 0.0,
-    val bearing: Double = 0.0,
-    val animationDurationMs: Int = 500,
-    val anchorLowerThird: Boolean = false,
-    val anchorLowerQuarter: Boolean = false,
-    val nonce: Long = System.currentTimeMillis()
-)
+internal fun RahYabViewModel.invalidatePendingCameraCommandsImpl() {
+    _cameraGeneration.value = _cameraGeneration.value + 1L
+    _cameraCommand.value = null
+}
 
 internal fun RahYabViewModel.initializeViewModel() {
     packManager.isNavigationActiveProvider = { _navigationState.value.isNavigating }
@@ -321,6 +314,7 @@ internal fun RahYabViewModel.pauseCameraFollowImpl() {
     if (_navigationState.value.turnFocusActive) {
         turnFocusUserPannedDuringActive = true
     }
+    invalidatePendingCameraCommandsImpl()
     val touchMs = SystemClock.elapsedRealtime()
     cameraFollowController.recordUserMapGesture(touchMs)
     scheduleAutoRecenterCheckImpl()
@@ -387,15 +381,24 @@ internal fun RahYabViewModel.emitImmediateFollowCameraImpl(is3DViewOverride: Boo
     if (nav.isNavigating && nav.turnFocusCameraActive && !turnFocusUserPannedDuringActive &&
         nav.effectiveTravelMode == com.example.navigation.TravelMode.DRIVE
     ) {
+        val focusZoom = when {
+            nav.turnFocusIsHighway -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_HIGHWAY
+            nav.turnFocusClosePair -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
+            else -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CITY
+        }
         _cameraCommand.value = CameraTargetCommand(
             lat = ref.lat,
             lon = ref.lon,
-            zoom = if (nav.turnFocusIsHighway) com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_HIGHWAY else com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CITY,
+            zoom = focusZoom,
             tilt = if (effective3D) com.example.navigation.TurnFocusPlanner.FOCUS_TILT_3D else 0.0,
             bearing = heading.toDouble(),
             animationDurationMs = 450,
             anchorLowerThird = false,
-            anchorLowerQuarter = true
+            anchorLowerQuarter = true,
+            routeId = nav.route?.id,
+            maneuverIndex = nav.turnFocusManeuverIndex,
+            generation = _cameraGeneration.value,
+            isFocusCommand = true
         )
         return
     }
@@ -417,6 +420,10 @@ internal fun RahYabViewModel.emitImmediateFollowCameraImpl(is3DViewOverride: Boo
         tilt = update.tilt,
         bearing = update.bearing,
         animationDurationMs = update.animationDurationMs,
-        anchorLowerThird = update.anchorLowerThird
+        anchorLowerThird = update.anchorLowerThird,
+        routeId = nav.route?.id,
+        maneuverIndex = nav.currentManeuver?.index ?: -1,
+        generation = _cameraGeneration.value,
+        isFocusCommand = false
     )
 }

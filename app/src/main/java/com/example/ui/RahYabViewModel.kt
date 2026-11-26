@@ -158,6 +158,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
 
     internal val _cameraCommand = MutableStateFlow<CameraTargetCommand?>(null)
     val cameraCommand: StateFlow<CameraTargetCommand?> = _cameraCommand.asStateFlow()
+    internal val _cameraGeneration = MutableStateFlow(0L)
+    val cameraGeneration: StateFlow<Long> = _cameraGeneration.asStateFlow()
     internal val _isCameraFollowing = MutableStateFlow(true)
     val isCameraFollowing: StateFlow<Boolean> = _isCameraFollowing.asStateFlow()
     internal val _isHeadingUpMode: MutableStateFlow<Boolean> = navStore._isHeadingUpMode
@@ -247,9 +249,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val trafficLightVoiceEvaluator = com.example.navigation.TrafficLightVoiceEvaluator()
     internal val laneChangeCueTracker = com.example.navigation.LaneChangeCueTracker()
     internal val turnFocusTracker = com.example.navigation.TurnFocusSessionTracker()
-    internal var turnFocusZoomDelayJob: Job? = null
     internal var turnFocusUserPannedDuringActive: Boolean = false
     internal var turnFocusPendingEnterAnim: Boolean = false
+    internal var turnFocusPendingEnterAnimMs: Int = com.example.navigation.TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS
     internal var turnFocusPendingExitAnim: Boolean = false
     internal val speedLimitDropTracker = com.example.navigation.SpeedLimitDropVoiceTracker()
     internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()

@@ -68,8 +68,11 @@ object JunctionSceneBuilder {
 
     /**
      * Resolves the highway maneuver whose junction view should be shown:
-     * visible from 800 m (0.5 mi) before the maneuver until 50 m after passing it,
-     * immediately hidden when off-route, dismissed for that maneuver, or outside DRIVE mode.
+     * - Visible on approach from 800 m (0.5 mi) before the maneuver (only while still ahead).
+     * - A short hold up to 50 m after passing is allowed ONLY when that specific maneuver was
+     *   already displayed on approach ([displayedOnApproachIndices]). If the first reliable GPS
+     *   fix arrives after passing an exit, that exit is skipped and never appears for the first time.
+     * - Immediately hidden when off-route, dismissed for that maneuver, or outside DRIVE mode.
      */
     fun resolveActiveJunctionManeuver(
         route: OfflineRoute,
@@ -80,11 +83,15 @@ object JunctionSceneBuilder {
         hasArrived: Boolean,
         isOffRoute: Boolean,
         junctionEnabled: Boolean,
-        dismissedManeuverIndex: Int
+        dismissedManeuverIndex: Int,
+        displayedOnApproachIndices: Set<Int> = emptySet(),
+        distancePastPrevMeters: Double? = null,
+        isUpcomingAlreadyPassed: Boolean = false
     ): RouteManeuver? {
         if (!isDrive || hasArrived || isOffRoute || !junctionEnabled) return null
         val upcoming = route.maneuvers.getOrNull(upcomingManeuverIdx)
         if (upcoming != null &&
+            !isUpcomingAlreadyPassed &&
             dismissedManeuverIndex != upcoming.index &&
             distToUpcomingMeters <= 800.0 &&
             isHighwayJunctionManeuver(upcoming)
@@ -93,13 +100,14 @@ object JunctionSceneBuilder {
         }
         val prev = route.maneuvers.getOrNull(upcomingManeuverIdx - 1)
         if (prev != null &&
+            prev.index in displayedOnApproachIndices &&
             dismissedManeuverIndex != prev.index &&
             isHighwayJunctionManeuver(prev)
         ) {
-            val distAfter = com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
+            val distAfter = distancePastPrevMeters ?: com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
                 snappedLoc.lat, snappedLoc.lon, prev.lat, prev.lon
             )
-            if (distAfter <= 50.0) {
+            if (distAfter in 0.0..50.0) {
                 return prev
             }
         }

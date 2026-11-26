@@ -225,6 +225,8 @@ data class ActiveNavigationState(
     val snappedLocation: LatLon? = null,
     val snappedBearing: Float = 0f,
     val snappedShapeIndex: Int = 0,
+    val snappedRouteProgressMeters: Double = 0.0,
+    val lastGpsFixAgeMs: Long = 0L,
     val currentSpeedLimitMph: Int? = null, // OSM maxspeed or HPMS fallback — never guessed!
     val speedLimitSource: String = "none", // "osm", "hpms", or "none"
     val upcomingSpeedLimitMph: Int? = null,
@@ -247,6 +249,8 @@ data class ActiveNavigationState(
     val turnFocusIsHighway: Boolean = false,
     val turnFocusManeuverIndex: Int = -1,
     val turnFocusTriggerDistanceMeters: Double = 0.0,
+    val turnFocusEnterAnimMs: Int = TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS,
+    val turnFocusClosePair: Boolean = false,
     val showJunctionPreview: Boolean = false,
     val activeJunctionManeuverIndex: Int = -1,
     val dismissedJunctionManeuverIndex: Int = -1,

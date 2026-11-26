@@ -110,6 +110,7 @@ fun MapLibreMapContainer(
     positionMarkerStyle: String = "arrow",
     isGpsPoor: Boolean = false,
     cameraCommand: CameraTargetCommand?,
+    cameraGeneration: Long = 0L,
     onMapLongClick: (Double, Double) -> Unit,
     onRouteTapped: (Int) -> Unit,
     onUserMovedMap: () -> Unit,
@@ -519,9 +520,28 @@ fun MapLibreMapContainer(
         }
     }
 
+    LaunchedEffect(mapLibreMap, isCameraFollowing, activeNavRoute?.id, cameraGeneration) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        if (!isCameraFollowing || cameraGeneration > 0L) {
+            runCatching { map.cancelTransitions() }
+        }
+    }
+
     LaunchedEffect(mapLibreMap, cameraCommand) {
         val map = mapLibreMap ?: return@LaunchedEffect
         val cmd = cameraCommand ?: return@LaunchedEffect
+        if (cmd.cancelPendingAnimation) {
+            runCatching { map.cancelTransitions() }
+            return@LaunchedEffect
+        }
+        if (!cmd.isValidFor(
+                activeRouteId = activeNavRoute?.id,
+                isCameraFollowing = isCameraFollowing,
+                minValidGeneration = cameraGeneration
+            )
+        ) {
+            return@LaunchedEffect
+        }
         lastAppliedHeadingBearing = cmd.bearing.toFloat()
         val topPadding = when {
             cmd.anchorLowerQuarter && mapView.height > 0 -> mapView.height * 0.42
@@ -626,14 +646,16 @@ fun MapLibreMapContainer(
                         false
                     }
 
-                    // Detect ANY user finger pan, pinch-zoom, rotate, or tilt in any mode -> pause camera follow
+                    // Detect ANY user finger pan, pinch-zoom, rotate, or tilt in any mode -> cancel transition & pause follow
                     map.addOnCameraMoveStartedListener { reason ->
                         if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                            runCatching { map.cancelTransitions() }
                             currentOnUserMovedMap()
                         }
                     }
                     map.addOnMoveListener(object : MapLibreMap.OnMoveListener {
                         override fun onMoveBegin(detector: MoveGestureDetector) {
+                            runCatching { map.cancelTransitions() }
                             currentOnUserMovedMap()
                         }
                         override fun onMove(detector: MoveGestureDetector) {}

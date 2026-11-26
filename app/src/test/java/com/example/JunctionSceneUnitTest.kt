@@ -295,7 +295,7 @@ class JunctionSceneUnitTest {
             )
         )
 
-        // Still visible 30 m after passing the exit
+        // Still visible 30 m after passing the exit ONLY when it was already displayed on approach
         assertEquals(
             1,
             JunctionSceneBuilder.resolveActiveJunctionManeuver(
@@ -307,11 +307,28 @@ class JunctionSceneUnitTest {
                 hasArrived = false,
                 isOffRoute = false,
                 junctionEnabled = true,
-                dismissedManeuverIndex = -1
+                dismissedManeuverIndex = -1,
+                displayedOnApproachIndices = setOf(1)
             )?.index
         )
 
-        // Hidden 70 m after passing the exit
+        // NEVER appears for the first time 30 m after passing if it was not displayed on approach
+        assertNull(
+            JunctionSceneBuilder.resolveActiveJunctionManeuver(
+                route = route,
+                upcomingManeuverIdx = 2,
+                distToUpcomingMeters = 1200.0,
+                snappedLoc = LatLon(exitLat + 0.00027, exitLon),
+                isDrive = true,
+                hasArrived = false,
+                isOffRoute = false,
+                junctionEnabled = true,
+                dismissedManeuverIndex = -1,
+                displayedOnApproachIndices = emptySet()
+            )
+        )
+
+        // Hidden 70 m after passing the exit even if previously displayed
         assertNull(
             JunctionSceneBuilder.resolveActiveJunctionManeuver(
                 route = route,
@@ -322,7 +339,8 @@ class JunctionSceneUnitTest {
                 hasArrived = false,
                 isOffRoute = false,
                 junctionEnabled = true,
-                dismissedManeuverIndex = -1
+                dismissedManeuverIndex = -1,
+                displayedOnApproachIndices = setOf(1)
             )
         )
 

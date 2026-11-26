@@ -44,11 +44,17 @@ object CarCameraProfile {
         isNavigating: Boolean,
         is3DView: Boolean,
         focusCameraActive: Boolean = false,
-        focusIsHighway: Boolean = false
+        focusIsHighway: Boolean = false,
+        focusClosePair: Boolean = false
     ): CarCameraTarget {
         if (focusCameraActive) {
+            val focusZoom = when {
+                focusIsHighway -> FOCUS_ZOOM_HIGHWAY
+                focusClosePair -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
+                else -> FOCUS_ZOOM_CITY
+            }
             return CarCameraTarget(
-                zoom = if (focusIsHighway) FOCUS_ZOOM_HIGHWAY else FOCUS_ZOOM_CITY,
+                zoom = focusZoom,
                 tilt = if (is3DView) FOCUS_TILT_3D else CAR_TILT_2D,
                 anchorLowerQuarter = true
             )

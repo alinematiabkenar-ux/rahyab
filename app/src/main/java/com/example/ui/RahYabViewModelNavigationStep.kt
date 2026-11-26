@@ -76,7 +76,9 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         turnFocusCameraActive = prevNav.turnFocusCameraActive,
         turnFocusIsHighway = prevNav.turnFocusIsHighway,
         turnFocusManeuverIndex = prevNav.turnFocusManeuverIndex,
-        turnFocusTriggerDistanceMeters = prevNav.turnFocusTriggerDistanceMeters
+        turnFocusTriggerDistanceMeters = prevNav.turnFocusTriggerDistanceMeters,
+        turnFocusEnterAnimMs = prevNav.turnFocusEnterAnimMs,
+        turnFocusClosePair = prevNav.turnFocusClosePair
     )
     val validatedState = evaluateLaneConfidenceImpl(baseState)
     val effectiveState = evaluateTurnFocusImpl(validatedState, speedMps)
@@ -259,7 +261,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         _isCameraFollowing.value = true
         forceRecenterNow = true
     }
-    if (_isCameraFollowing.value) {
+    if (_isCameraFollowing.value && !shouldReroute && !effectiveState.isRerouting) {
         val targetLoc = effectiveState.snappedLocation ?: fallbackLoc
         if (targetLoc != null) {
             val heading = if (speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || effectiveState.isSimulatingDrive) {
@@ -307,6 +309,7 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
         null
     }
     resetTurnFocusImpl()
+    invalidatePendingCameraCommandsImpl()
     _navigationState.value = _navigationState.value.copy(
         isRerouting = true,
         showLaneStrip = false,
@@ -329,6 +332,7 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
             trafficLightVoiceEvaluator.reset()
             laneChangeCueTracker.reset()
             resetTurnFocusImpl()
+            invalidatePendingCameraCommandsImpl()
             speedLimitDropTracker.reset()
             voiceManager.resetDeduplication()
             val spoken = voiceManager.speakStartInstruction(newRoute, s.language)

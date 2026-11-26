@@ -19,6 +19,7 @@ class NavigationSessionController {
     private val lastSpokenAlertIds = mutableSetOf<String>()
     private val spokenFreeDriveCameraIds = mutableSetOf<String>()
     private val spokenStagesByManeuver = mutableMapOf<Int, MutableSet<String>>()
+    private val displayedJunctionManeuverIndices = mutableSetOf<Int>()
     private var trackedRouteId: String? = null
     private var lastSpokenManeuverIndex: Int = -1
     private var lastSpokenManeuverTimeMs: Long = 0L
@@ -30,6 +31,7 @@ class NavigationSessionController {
         lastSpokenAlertIds.clear()
         spokenFreeDriveCameraIds.clear()
         spokenStagesByManeuver.clear()
+        displayedJunctionManeuverIndices.clear()
         trackedRouteId = null
         lastSpokenManeuverIndex = -1
         lastSpokenManeuverTimeMs = 0L
@@ -82,7 +84,8 @@ class NavigationSessionController {
         speedAudioEnabled: Boolean,
         settings: UserSettings = UserSettings(language = language, distanceUnit = unit, speedWarningAudioEnabled = speedAudioEnabled),
         fraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList(),
-        hpmsFallbackSpeedMph: Int? = null
+        hpmsFallbackSpeedMph: Int? = null,
+        nowMs: Long = System.currentTimeMillis()
     ): UpdateResult {
         val route = currentState.route ?: return UpdateResult(currentState, shouldReroute = false)
         if (route.shape.isEmpty() || route.maneuvers.isEmpty()) {
@@ -91,6 +94,7 @@ class NavigationSessionController {
 
         if (trackedRouteId != route.id) {
             spokenStagesByManeuver.clear()
+            displayedJunctionManeuverIndices.clear()
             trackedRouteId = route.id
             lastSpokenManeuverIndex = -1
             lastSpokenManeuverTimeMs = 0L
@@ -120,7 +124,10 @@ class NavigationSessionController {
         } else {
             offRouteCount = 0
         }
-        val now = System.currentTimeMillis()
+        val now = nowMs
+        val gpsFixAgeMs = if (fix.timestampMs > 0L && now >= fix.timestampMs && (now - fix.timestampMs) <= 30_000L) {
+            (now - fix.timestampMs).coerceAtMost(15_000L)
+        } else 0L
         val shouldReroute = isMovingFastEnoughToReroute &&
             offRouteCount >= 3 &&
             (now - lastRerouteRequestMs > 12_000L)
@@ -249,11 +256,23 @@ class NavigationSessionController {
             currentState.lanePulseTriggerCount
         }
 
-        // 8. Highway Junction View (DRIVE only, 800 m before to 50 m after, hidden off-route)
+        // 8. Highway Junction View (DRIVE only, 800 m before to 50 m after ONLY if shown on approach)
+        val vehicleProgressMeters = NavigationGeometryHelper.progressAlongRouteMeters(route.shape, snappedLoc, bestIdx)
+        val upcomingProgressMeters = NavigationGeometryHelper.vertexProgressMeters(route.shape, upcomingManeuver.beginShapeIndex)
+        val isUpcomingAlreadyPassed = vehicleProgressMeters > upcomingProgressMeters + 1.0
+        val distPastPrevMeters = approachManeuver?.let {
+            (vehicleProgressMeters - NavigationGeometryHelper.vertexProgressMeters(route.shape, it.beginShapeIndex)).coerceAtLeast(0.0)
+        }
         val activeJunctionManeuver = JunctionSceneBuilder.resolveActiveJunctionManeuver(
             route, upcomingManeuverIdx, distToNextManeuver, snappedLoc,
-            isDrive, hasArrived, isOffRouteNow, settings.junctionPreviewEnabled, currentState.dismissedJunctionManeuverIndex
+            isDrive, hasArrived, isOffRouteNow, settings.junctionPreviewEnabled, currentState.dismissedJunctionManeuverIndex,
+            displayedOnApproachIndices = displayedJunctionManeuverIndices,
+            distancePastPrevMeters = distPastPrevMeters,
+            isUpcomingAlreadyPassed = isUpcomingAlreadyPassed
         )
+        if (activeJunctionManeuver != null && activeJunctionManeuver.index == upcomingManeuver.index && !isUpcomingAlreadyPassed) {
+            displayedJunctionManeuverIndices.add(activeJunctionManeuver.index)
+        }
         val showJunctionPreview = activeJunctionManeuver != null
 
         // 9. Speed limit (DRIVE only — OSM primary, optional HPMS fallback, never guessed)
@@ -306,6 +325,8 @@ class NavigationSessionController {
             snappedLocation = snappedLoc,
             snappedBearing = snappedBearing,
             snappedShapeIndex = bestIdx,
+            snappedRouteProgressMeters = vehicleProgressMeters,
+            lastGpsFixAgeMs = gpsFixAgeMs,
             currentSpeedLimitMph = speedLimitMph,
             speedLimitSource = speedLimitSource,
             isOverspeed = isOverspeed,

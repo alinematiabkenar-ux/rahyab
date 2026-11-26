@@ -83,6 +83,7 @@ private fun RahYabViewModel.switchActiveNavigationRouteImpl(newRoute: OfflineRou
     navController.reset()
     hpmsFallbackCache.reset()
     resetTurnFocusImpl()
+    invalidatePendingCameraCommandsImpl()
     speedLimitDropTracker.reset()
     voiceManager.resetDeduplication()
     val initialManeuver = newRoute.maneuvers.firstOrNull()
@@ -148,6 +149,7 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
     trafficLightVoiceEvaluator.reset()
     laneChangeCueTracker.reset()
     resetTurnFocusImpl()
+    invalidatePendingCameraCommandsImpl()
     speedLimitDropTracker.reset()
     voiceManager.resetDeduplication()
     locationTracker.setNavigationMode(true)
@@ -252,7 +254,10 @@ internal fun RahYabViewModel.startNavigationImpl(forceSimulate: Boolean? = null)
         lon = startLoc.lon,
         zoom = initialZoom,
         tilt = initialTilt,
-        bearing = if (mode == TravelMode.BIKE || _isHeadingUpMode.value) initialBearing.toDouble() else 0.0
+        bearing = if (mode == TravelMode.BIKE || _isHeadingUpMode.value) initialBearing.toDouble() else 0.0,
+        routeId = route.id,
+        maneuverIndex = 0,
+        generation = _cameraGeneration.value
     )
 
     if (shouldSimulate) {
@@ -313,6 +318,7 @@ internal fun RahYabViewModel.stopNavigationImpl() {
     navController.reset()
     hpmsFallbackCache.reset()
     resetTurnFocusImpl()
+    invalidatePendingCameraCommandsImpl()
     speedLimitDropTracker.reset()
     clearDestinationParkingStateImpl()
     NavigationForegroundService.stop(app)
@@ -323,7 +329,8 @@ internal fun RahYabViewModel.stopNavigationImpl() {
         lon = ref.lon,
         zoom = 14.0,
         tilt = 0.0,
-        bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0
+        bearing = if (_isHeadingUpMode.value) _userHeadingDegrees.value.toDouble() else 0.0,
+        generation = _cameraGeneration.value
     )
     viewModelScope.launch {
         val applied = packManager.applyPendingSwapsIfIdle()
