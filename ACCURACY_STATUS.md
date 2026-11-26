@@ -12,9 +12,9 @@
 - [x] L6 Diagnostics "Lane reports" section: list with date, road names, reason, "Copy all" including raw lane JSON, OSM way id link-style text, and "Clear" button
 
 ## D. More Open US Data (Pipeline & App)
-- [ ] D1 Pipeline: TIGER/Line `ADDRFEAT` address ranges (`tiger_ranges` table + indexes, try 2026/2025/2024, state + neighboring bbox counties, DuckDB spatial `/vsizip/`, `address_utils.py` normalizer, schema_version 2)
-- [ ] D2 Pipeline: USGS GNIS Domestic Names (`gnis_names` + FTS5 `gnis_fts`, filtered feature classes)
-- [ ] D3 Pipeline: HPMS through-lanes (`hpms_lanes` table, keep `hpms_speed` unchanged)
+- [x] D1 Pipeline: TIGER/Line `ADDRFEAT` address ranges (`tiger_ranges` table + indexes, try 2026/2025/2024, state + neighboring bbox counties, DuckDB spatial `/vsizip/`, `address_utils.py` normalizer, schema_version 2)
+- [x] D2 Pipeline: USGS GNIS Domestic Names (`gnis_names` + FTS5 `gnis_fts`, filtered feature classes)
+- [x] D3 Pipeline: HPMS through-lanes (`hpms_lanes` table, keep `hpms_speed` unchanged)
 - [ ] D4 App: TIGER address range fallback with linear interpolation and "approximate" / "تقریبی" badge (exact `addresses` always win)
 - [ ] D5 App: GNIS place search results (natural features & landmarks) after places & addresses, prefix search, sorted by distance, icon by feature class
 

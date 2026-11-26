@@ -83,6 +83,7 @@ HPMS_VERIFIED_COL_MAP: dict[str, str | None] = {
     "route_name": "routename",
     "route_number": "route_number",
     "geometry": "line",
+    "through_lanes": "through_lanes",
 }
 
 HPMS_PAGE_SIZE = 5000
@@ -345,6 +346,18 @@ def init_extras_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_hpms_speed_bbox
             ON hpms_speed(min_lat, max_lat, min_lon, max_lon);
+
+        CREATE TABLE IF NOT EXISTS hpms_lanes (
+            id INTEGER PRIMARY KEY,
+            through_lanes INTEGER NOT NULL,
+            min_lat REAL NOT NULL,
+            min_lon REAL NOT NULL,
+            max_lat REAL NOT NULL,
+            max_lon REAL NOT NULL,
+            polyline TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_hpms_lanes_bbox
+            ON hpms_lanes(min_lat, max_lat, min_lon, max_lon);
         """
     )
 
@@ -478,7 +491,26 @@ def discover_hpms_columns(columns: list[dict[str, Any]]) -> dict[str, str | None
         ),
         "route_number": find_column_field(columns, ("route_number", "routenumber")),
         "geometry": geom_field,
+        "through_lanes": find_column_field(
+            columns, ("through_lanes", "thru_lanes", "throughlanes", "through_lane", "num_lanes", "lanes")
+        ),
     }
+
+
+def discover_hpms_through_lanes_field(timeout_sec: int = 30) -> str | None:
+    """Query HPMS Socrata columns.json to discover the actual through-lanes field name."""
+    try:
+        columns = http_get_json(HPMS_COLUMNS_URL, timeout_sec=timeout_sec)
+        if isinstance(columns, list):
+            return discover_hpms_columns(columns).get("through_lanes")
+    except Exception as exc:
+        print(
+            f"[warn] HPMS columns.json lookup for through_lanes failed ({type(exc).__name__}: {exc}); "
+            "defaulting to 'through_lanes'",
+            flush=True,
+        )
+        return "through_lanes"
+    return None
 
 
 def _perp_dist_deg(
@@ -675,6 +707,47 @@ def parse_hpms_row(
     return results
 
 
+def parse_hpms_lanes_row(
+    row: dict[str, Any],
+    col_map: dict[str, str | None],
+    bbox: tuple[float, float, float, float],
+) -> list[tuple[int, float, float, float, float, str]]:
+    """
+    D3: Extract zero or more `hpms_lanes` rows from an HPMS Socrata row:
+    (through_lanes, min_lat, min_lon, max_lat, max_lon, polyline6).
+    """
+    lanes_f = col_map.get("through_lanes")
+    geom_f = col_map.get("geometry")
+    if not lanes_f or not geom_f:
+        return []
+
+    through_lanes = _to_int(row.get(lanes_f), 0)
+    if through_lanes < 1 or through_lanes > 16:
+        return []
+
+    lines = extract_polylines_from_geometry(row.get(geom_f))
+    if not lines:
+        return []
+
+    b_min_lon, b_min_lat, b_max_lon, b_max_lat = bbox
+    results: list[tuple[int, float, float, float, float, str]] = []
+    for line in lines:
+        lats = [p[0] for p in line]
+        lons = [p[1] for p in line]
+        min_lat, max_lat = min(lats), max(lats)
+        min_lon, max_lon = min(lons), max(lons)
+        if max_lat < b_min_lat or min_lat > b_max_lat or max_lon < b_min_lon or min_lon > b_max_lon:
+            continue
+        simplified = simplify_polyline(line)
+        if len(simplified) < 2:
+            continue
+        encoded = encode_polyline6(simplified)
+        if not encoded:
+            continue
+        results.append((through_lanes, min_lat, min_lon, max_lat, max_lon, encoded))
+    return results
+
+
 def _is_retryable_hpms_error(exc: BaseException) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in HPMS_RETRYABLE_HTTP_CODES
@@ -721,8 +794,9 @@ def _stream_hpms_pages_into_db(
     page_size: int,
     timeout_sec: int,
     allow_schema_fallback: bool = False,
-) -> int:
-    total_inserted = 0
+) -> tuple[int, int]:
+    total_speed_inserted = 0
+    total_lanes_inserted = 0
     offset = 0
     page_num = 0
     while True:
@@ -758,26 +832,39 @@ def _stream_hpms_pages_into_db(
             break
 
         page_num += 1
-        page_batch: list[tuple[int, str, float, float, float, float, str]] = []
+        speed_batch: list[tuple[int, str, float, float, float, float, str]] = []
+        lanes_batch: list[tuple[int, float, float, float, float, str]] = []
         for row in rows:
             if isinstance(row, dict):
-                page_batch.extend(parse_hpms_row(row, col_map, bbox))
+                speed_batch.extend(parse_hpms_row(row, col_map, bbox))
+                if col_map.get("through_lanes"):
+                    lanes_batch.extend(parse_hpms_lanes_row(row, col_map, bbox))
 
-        if page_batch:
+        if speed_batch:
             conn.executemany(
                 """
                 INSERT INTO hpms_speed
                     (speed_mph, route_name, min_lat, min_lon, max_lat, max_lon, polyline)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                page_batch,
+                speed_batch,
             )
-            total_inserted += len(page_batch)
+            total_speed_inserted += len(speed_batch)
+        if lanes_batch:
+            conn.executemany(
+                """
+                INSERT INTO hpms_lanes
+                    (through_lanes, min_lat, min_lon, max_lat, max_lon, polyline)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                lanes_batch,
+            )
+            total_lanes_inserted += len(lanes_batch)
         conn.commit()
 
         if page_num % 5 == 0:
             print(
-                f"[extras] hpms page {page_num} rows={len(rows)} inserted={total_inserted}",
+                f"[extras] hpms page {page_num} rows={len(rows)} inserted={total_speed_inserted}",
                 flush=True,
             )
 
@@ -785,7 +872,7 @@ def _stream_hpms_pages_into_db(
             break
         offset += page_size
 
-    return total_inserted
+    return total_speed_inserted, total_lanes_inserted
 
 
 def populate_hpms_speed(
@@ -794,17 +881,24 @@ def populate_hpms_speed(
     bbox: tuple[float, float, float, float],
     page_size: int = HPMS_PAGE_SIZE,
     timeout_sec: int = HPMS_TIMEOUT_SEC,
+    include_lanes: bool = False,
 ) -> int:
     """
-    FX2: Fetch HPMS 2024 speed limits (`42um-tgh5`) using verified Socrata fields:
-    `$where=stateid = <FIPS_INT> AND speed_limit > 0`, `$select=speed_limit,routename,route_number,line`,
-    `$order=:id`, `$limit=5000` with `$offset` paging, 180s timeout, retries with backoff, and
-    per-page streaming inserts/commits. Keeps `columns.json` dynamic discovery as fallback.
+    FX2 + D3: Fetch HPMS 2024 speed limits (`42um-tgh5`) using verified Socrata fields,
+    optionally discovering and requesting the through-lanes column from `columns.json`
+    into the additive `hpms_lanes` table while keeping `hpms_speed` unchanged.
     """
     abbr_up = state_abbr.strip().upper()
     fips = US_STATE_FIPS.get(abbr_up, "")
     col_map: dict[str, str | None] = dict(HPMS_VERIFIED_COL_MAP)
-    select_str = ",".join(HPMS_SELECT_FIELDS)
+
+    select_fields_list = list(HPMS_SELECT_FIELDS)
+    if include_lanes:
+        lanes_field = discover_hpms_through_lanes_field(timeout_sec=min(45, timeout_sec))
+        col_map["through_lanes"] = lanes_field
+        if lanes_field and lanes_field not in select_fields_list:
+            select_fields_list.append(lanes_field)
+    select_str = ",".join(select_fields_list)
 
     if fips:
         where_clause = f"stateid = {int(fips)} AND speed_limit > 0"
@@ -812,7 +906,7 @@ def populate_hpms_speed(
         where_clause = "speed_limit > 0"
 
     try:
-        inserted = _stream_hpms_pages_into_db(
+        inserted, lanes_inserted = _stream_hpms_pages_into_db(
             conn=conn,
             where_clause=where_clause,
             select_fields=select_str,
@@ -850,7 +944,7 @@ def populate_hpms_speed(
                 fb_where = f"{state_f} = {int(fips)} AND {speed_f} > 0"
             else:
                 fb_where = f"{state_f} = '{fips}' AND {speed_f} > 0"
-        inserted = _stream_hpms_pages_into_db(
+        inserted, lanes_inserted = _stream_hpms_pages_into_db(
             conn=conn,
             where_clause=fb_where,
             select_fields=None,
@@ -865,4 +959,6 @@ def populate_hpms_speed(
     if inserted == 0:
         print("[warn] extras step hpms: 0 rows inserted", flush=True)
     print(f"[check] hpms_speed count={inserted} state={abbr_up}", flush=True)
+    if include_lanes or lanes_inserted > 0:
+        print(f"[check] hpms_lanes count={lanes_inserted}", flush=True)
     return inserted

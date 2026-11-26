@@ -130,3 +130,31 @@ internal fun RahYabViewModel.clearWrongLaneReportsImpl() {
     }
     _snackbarMessage.value = stringsFor(settings.value.language).diagLaneReportsCleared
 }
+
+internal fun RahYabViewModel.refreshHpmsThroughLanesImpl(
+    lat: Double,
+    lon: Double,
+    headingDegrees: Float?,
+    isHighway: Boolean
+) {
+    if (!isHighway) {
+        cachedHpmsThroughLanes = null
+        return
+    }
+    val now = System.currentTimeMillis()
+    val elapsed = now - lastHpmsLanesLookupMs
+    val moved = if (lastHpmsLanesLat != null && lastHpmsLanesLon != null) {
+        com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
+            lastHpmsLanesLat!!, lastHpmsLanesLon!!, lat, lon
+        )
+    } else Double.MAX_VALUE
+    if (elapsed < 6_000L && moved < 100.0) return
+    lastHpmsLanesLookupMs = now
+    lastHpmsLanesLat = lat
+    lastHpmsLanesLon = lon
+    viewModelScope.launch(Dispatchers.IO) {
+        cachedHpmsThroughLanes = runCatching {
+            app.extrasDbReader.lookupHpmsThroughLanes(lat, lon, headingDegrees)
+        }.getOrNull()
+    }
+}

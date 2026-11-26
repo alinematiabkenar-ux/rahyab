@@ -255,6 +255,8 @@ def build_extras_db(
         populate_fra_crossings,
         populate_hpms_speed,
     )
+    from extras_gnis import init_gnis_schema, populate_gnis_names
+    from extras_tiger import init_tiger_schema, populate_tiger_ranges
 
     tmp_path = out_db_path.with_suffix(".db.tmp")
     tmp_path.unlink(missing_ok=True)
@@ -263,36 +265,58 @@ def build_extras_db(
     sources_used: list[str] = []
     fra_count = 0
     hpms_count = 0
+    tiger_count = 0
+    gnis_count = 0
 
     try:
         conn = sqlite3.connect(str(tmp_path))
         try:
             init_extras_schema(conn)
+            init_tiger_schema(conn)
+            init_gnis_schema(conn)
 
             try:
                 fra_count = populate_fra_crossings(conn, state_abbr, bbox)
                 if fra_count > 0:
                     sources_used.append("USDOT FRA m2f8-22s6")
             except Exception as exc:
-                print(f"[warn] extras step fra_crossings skipped: {exc}", flush=True)
+                print(f"[warn] extras step fra_crossings skipped: {type(exc).__name__}: {exc}", flush=True)
 
             try:
-                hpms_count = populate_hpms_speed(conn, state_abbr, bbox)
+                hpms_count = populate_hpms_speed(conn, state_abbr, bbox, include_lanes=True)
                 if hpms_count > 0:
                     sources_used.append("FHWA HPMS 42um-tgh5")
             except Exception as exc:
                 print(f"[warn] extras step hpms_speed skipped: {type(exc).__name__}: {exc}", flush=True)
+            hpms_lanes_count = conn.execute("SELECT COUNT(*) FROM hpms_lanes").fetchone()[0]
+
+            try:
+                tiger_count = populate_tiger_ranges(conn, pack_code, state_abbr, bbox)
+                if tiger_count > 0:
+                    sources_used.append("US Census TIGER/Line ADDRFEAT")
+            except Exception as exc:
+                print(f"[warn] extras step tiger_ranges skipped: {type(exc).__name__}: {exc}", flush=True)
+
+            try:
+                gnis_count = populate_gnis_names(conn, state_abbr, bbox)
+                if gnis_count > 0:
+                    sources_used.append("USGS GNIS Domestic Names")
+            except Exception as exc:
+                print(f"[warn] extras step gnis_names skipped: {type(exc).__name__}: {exc}", flush=True)
 
             built_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
             meta_rows = [
-                ("schema_version", "1"),
+                ("schema_version", "2"),
                 ("pack_code", pack_code.lower()),
                 ("state_abbr", state_abbr.upper()),
                 ("built_at", built_at),
                 ("sources", ", ".join(sources_used) if sources_used else "none"),
-                ("licenses", "Public Domain (USDOT FRA & FHWA HPMS)"),
+                ("licenses", "Public Domain (USDOT FRA, FHWA HPMS, US Census TIGER/Line, USGS GNIS)"),
                 ("fra_count", str(fra_count)),
                 ("hpms_count", str(hpms_count)),
+                ("hpms_lanes_count", str(hpms_lanes_count)),
+                ("tiger_count", str(tiger_count)),
+                ("gnis_count", str(gnis_count)),
             ]
             conn.executemany(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
@@ -304,11 +328,13 @@ def build_extras_db(
 
         tmp_path.replace(out_db_path)
         print(
-            f"[extras] Wrote {out_db_path.name} (fra={fra_count}, hpms={hpms_count}, bytes={out_db_path.stat().st_size})",
+            f"[extras] Wrote {out_db_path.name} "
+            f"(fra={fra_count}, hpms={hpms_count}, hpms_lanes={hpms_lanes_count}, "
+            f"tiger={tiger_count}, gnis={gnis_count}, bytes={out_db_path.stat().st_size})",
             flush=True,
         )
         return out_db_path
     except Exception as exc:
-        print(f"[warn] extras step build_extras_db skipped: {exc}", flush=True)
+        print(f"[warn] extras step build_extras_db skipped: {type(exc).__name__}: {exc}", flush=True)
         tmp_path.unlink(missing_ok=True)
         return None

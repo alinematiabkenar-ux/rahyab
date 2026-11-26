@@ -21,15 +21,18 @@ class OfflineAddressSearchEngine(
 ) {
     private val tableExistsCache = ConcurrentHashMap<String, Boolean>()
 
+    private val extrasDbReader = com.example.data.packs.ExtrasDbReader(sqliteDriver = sqliteDriver)
+
     fun searchAcrossDatabases(
         parsed: AddressNormalizer.ParsedAddressQuery,
         userLat: Double,
         userLon: Double,
         stateDbFiles: List<Pair<String, File>>,
-        limit: Int = 12
+        limit: Int = 12,
+        extrasDbFiles: List<Pair<String, File>> = emptyList()
     ): List<PlaceSearchResult> {
         if (!shouldRunAddressSearch(parsed)) return emptyList()
-        if (stateDbFiles.isEmpty()) return emptyList()
+        if (stateDbFiles.isEmpty() && extrasDbFiles.isEmpty()) return emptyList()
 
         val exactResults = mutableListOf<PlaceSearchResult>()
         val streetCandidates = mutableListOf<Pair<String, OfflineAddressRow>>()
@@ -54,17 +57,42 @@ class OfflineAddressSearchEngine(
             .sortedByDescending { it.relevanceScore }
         combined.addAll(dedupedExact.take(limit))
 
-        // If user entered a house number and no exact match was found, interpolate or show nearest on that street
-        if (dedupedExact.isEmpty() && parsed.numericHouseNumber != null && streetCandidates.isNotEmpty()) {
-            val approx = AddressInterpolation.buildApproximateResults(
-                parsed = parsed,
-                targetNumber = parsed.numericHouseNumber,
-                streetCandidates = streetCandidates,
-                userLat = userLat,
-                userLon = userLon,
-                maxResults = minOf(5, limit)
-            )
-            combined.addAll(approx)
+        // D4: Exact addresses always win. When no exact match exists for a house number,
+        // first try TIGER/Line address ranges (parity + polyline interpolation), then fall back
+        // to point-to-point interpolation from `addresses` street candidates.
+        if (dedupedExact.isEmpty() && parsed.numericHouseNumber != null) {
+            val tigerApprox = if (extrasDbFiles.isNotEmpty() && parsed.normalizedStreet.isNotBlank()) {
+                val tigerRows = extrasDbReader.queryTigerRangesInFiles(
+                    files = extrasDbFiles,
+                    streetNorm = parsed.normalizedStreet,
+                    userLat = userLat,
+                    userLon = userLon,
+                    zipHint = parsed.zipCode,
+                    cityHint = parsed.cityHint
+                )
+                TigerAddressInterpolator.buildTigerFallbackResults(
+                    parsed = parsed,
+                    candidates = tigerRows,
+                    userLat = userLat,
+                    userLon = userLon,
+                    maxResults = minOf(5, limit)
+                )
+            } else {
+                emptyList()
+            }
+            if (tigerApprox.isNotEmpty()) {
+                combined.addAll(tigerApprox)
+            } else if (streetCandidates.isNotEmpty()) {
+                val approx = AddressInterpolation.buildApproximateResults(
+                    parsed = parsed,
+                    targetNumber = parsed.numericHouseNumber,
+                    streetCandidates = streetCandidates,
+                    userLat = userLat,
+                    userLon = userLon,
+                    maxResults = minOf(5, limit)
+                )
+                combined.addAll(approx)
+            }
         }
 
         return combined.take(limit)

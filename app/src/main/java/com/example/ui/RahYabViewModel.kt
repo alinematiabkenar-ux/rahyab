@@ -254,6 +254,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val speedLimitDropTracker = com.example.navigation.SpeedLimitDropVoiceTracker()
     internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()
     internal var cachedHpmsThroughLanes: Int? = null
+    internal var lastHpmsLanesLookupMs: Long = 0L
+    internal var lastHpmsLanesLat: Double? = null
+    internal var lastHpmsLanesLon: Double? = null
     internal var lastHpmsLanesFetchKey: String = ""
     internal val voiceCommandManager = com.example.navigation.OfflineVoiceCommandManager(app)
     val voiceListenState: StateFlow<com.example.navigation.VoiceListenUiState> = voiceCommandManager.uiState
