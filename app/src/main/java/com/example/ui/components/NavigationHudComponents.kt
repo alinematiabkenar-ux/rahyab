@@ -140,6 +140,8 @@ fun TurnByTurnTopHud(
     junctionManeuver: RouteManeuver = maneuver,
     laneConfidence: com.example.navigation.LaneConfidence = com.example.navigation.LaneConfidence.HIGH,
     laneSideHint: com.example.navigation.LaneTargetSide? = null,
+    laneDecision: com.example.navigation.LaneGuidanceDecision? = null,
+    laneHighlightColor: com.example.map.LaneHighlightColor = com.example.map.LaneHighlightColor.BLUE,
     showReportWrongLaneButton: Boolean = false,
     onReportWrongLane: () -> Unit = {}
 ) {
@@ -232,17 +234,30 @@ fun TurnByTurnTopHud(
                     }
                 }
 
-                // Integrated lane guidance (replaced by Highway Junction View while junction card is visible)
-                if (showLaneStrip && !showingJunctionCard && maneuver.lanes.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    LaneGuidanceBannerRow(
-                        lanes = maneuver.lanes,
+                // Full lane diagram overlay driven by shared Valhalla LaneGuidanceDecision
+                // Stays visible even when Junction View is active (adapting height via compact mode)
+                if (showLaneStrip && maneuver.lanes.isNotEmpty()) {
+                    val effectiveDecision = androidx.compose.runtime.remember(maneuver, laneDecision, laneConfidence, laneSideHint) {
+                        val base = laneDecision ?: com.example.navigation.LaneGuidanceDecision.evaluate(maneuver)
+                        if (laneConfidence == com.example.navigation.LaneConfidence.LOW && base.confidence != com.example.navigation.LaneConfidence.LOW) {
+                            base.copy(
+                                confidence = com.example.navigation.LaneConfidence.LOW,
+                                suggestedSide = laneSideHint ?: base.suggestedSide,
+                                hasActionableLaneGuidance = false,
+                                shouldShowFullDiagram = false
+                            )
+                        } else {
+                            base
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FullLaneDiagramOverlay(
+                        decision = effectiveDecision,
                         isNightMode = isNightMode,
-                        useHighwayGreen = useHighwayGreen,
+                        highlightColor = laneHighlightColor,
+                        compact = showingJunctionCard,
                         pulseTriggerKey = lanePulseTriggerKey,
-                        laneChangeCuePulseKey = laneChangeCuePulseKey,
-                        confidence = laneConfidence,
-                        sideHint = laneSideHint
+                        laneChangeCuePulseKey = laneChangeCuePulseKey
                     )
                 }
             }

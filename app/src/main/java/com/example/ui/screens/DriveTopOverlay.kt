@@ -136,6 +136,8 @@ internal fun DriveTopOverlay(
                 junctionManeuver = navState.activeJunctionManeuver ?: activeManeuver,
                 laneConfidence = navState.laneConfidence,
                 laneSideHint = navState.laneSideHint,
+                laneDecision = navState.laneDecision,
+                laneHighlightColor = settings.laneHighlightColor,
                 showReportWrongLaneButton = isDriveMode &&
                     activeManeuver.lanes.isNotEmpty() &&
                     (navState.showLaneStrip || navState.showJunctionPreview || navState.turnFocusActive),

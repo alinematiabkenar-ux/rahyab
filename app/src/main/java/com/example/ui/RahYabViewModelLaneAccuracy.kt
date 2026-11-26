@@ -23,7 +23,8 @@ internal fun RahYabViewModel.evaluateLaneConfidenceImpl(
         return state.copy(
             laneConfidence = LaneConfidence.HIGH,
             laneConfidenceReasons = emptyList(),
-            laneSideHint = null
+            laneSideHint = null,
+            laneDecision = null
         )
     }
     val route = state.route ?: return state
@@ -32,7 +33,8 @@ internal fun RahYabViewModel.evaluateLaneConfidenceImpl(
         return state.copy(
             laneConfidence = LaneConfidence.HIGH,
             laneConfidenceReasons = emptyList(),
-            laneSideHint = null
+            laneSideHint = null,
+            laneDecision = null
         )
     }
 
@@ -54,22 +56,18 @@ internal fun RahYabViewModel.evaluateLaneConfidenceImpl(
         reports = reports
     )
 
-    val result = LaneGuidanceValidator.validate(
-        maneuverType = maneuver.type,
-        lanes = maneuver.lanes,
-        laneSource = maneuver.laneSource,
-        carriedDistanceMeters = maneuver.carriedLaneDistanceMeters,
-        carriedHadInterveningIntersection = maneuver.carriedLaneHadInterveningIntersection,
+    val decision = com.example.navigation.LaneGuidanceDecision.evaluate(
+        maneuver = maneuver,
         edgeLaneCountBeforeManeuver = edgeLaneCount,
-        isHighway = maneuver.isHighwayRoad || maneuver.isHighwayExitOrSplit,
         hpmsThroughLanes = cachedHpmsThroughLanes,
         isReportedWrongByUser = isReportedWrong
     )
 
     return state.copy(
-        laneConfidence = result.confidence,
-        laneConfidenceReasons = result.reasons,
-        laneSideHint = result.suggestedSide
+        laneConfidence = decision.confidence,
+        laneConfidenceReasons = decision.reasons,
+        laneSideHint = decision.suggestedSide,
+        laneDecision = decision
     )
 }
 
@@ -111,15 +109,17 @@ internal fun RahYabViewModel.reportWrongLaneImpl() {
     viewModelScope.launch(Dispatchers.IO) {
         wrongLaneReportDao.insert(report)
     }
-    val suggestedSide = cur.laneSideHint ?: LaneGuidanceValidator.resolveSuggestedSide(
-        maneuverType = maneuver.type,
-        targetIndices = LaneGuidanceValidator.resolveTargetIndices(maneuver.lanes),
-        laneCount = maneuver.lanes.size
+    val suppressedDecision = com.example.navigation.LaneGuidanceDecision.evaluate(
+        maneuver = maneuver,
+        edgeLaneCountBeforeManeuver = edgeLaneCount.takeIf { it > 0 },
+        hpmsThroughLanes = cachedHpmsThroughLanes,
+        isReportedWrongByUser = true
     )
     _navigationState.value = cur.copy(
         laneConfidence = LaneConfidence.LOW,
-        laneConfidenceReasons = (cur.laneConfidenceReasons + "reported_wrong_by_user").distinct(),
-        laneSideHint = suggestedSide
+        laneConfidenceReasons = suppressedDecision.reasons,
+        laneSideHint = suppressedDecision.suggestedSide,
+        laneDecision = suppressedDecision
     )
     _snackbarMessage.value = stringsFor(settings.value.language).wrongLaneSavedMessage
 }
