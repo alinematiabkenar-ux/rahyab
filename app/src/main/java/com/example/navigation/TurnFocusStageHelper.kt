@@ -225,4 +225,66 @@ object TurnFocusStageHelper {
         }
         return ValhallaResponseParser.bearingDegrees(from, to)
     }
+
+    /**
+     * Computes the framed camera target for Turn Focus mode so the first update inside the
+     * approach threshold (e.g. 1,000 m or 500 m) visibly shifts the viewport to frame the vehicle,
+     * the upcoming junction, and the outgoing road/ramp below the top HUD and lane panel.
+     */
+    fun computeApproachCameraTarget(
+        route: OfflineRoute?,
+        maneuver: RouteManeuver?,
+        vehicleLoc: LatLon,
+        remainingMeters: Double,
+        stage: TurnFocusStage
+    ): LatLon {
+        if (route == null || maneuver == null || route.shape.size < 2 || stage == TurnFocusStage.NONE) {
+            return vehicleLoc
+        }
+        val shape = route.shape
+        val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, shape.lastIndex)
+        val pivotPt = shape[pivotIdx]
+        val outgoingPt = sampleForwardPoint(shape, pivotIdx, distanceMeters = 45.0) ?: pivotPt
+        // Anchor slightly into the outgoing road so the exit/turn direction is clearly framed
+        val junctionAnchor = LatLon(
+            lat = pivotPt.lat * 0.82 + outgoingPt.lat * 0.18,
+            lon = pivotPt.lon * 0.82 + outgoingPt.lon * 0.18
+        )
+        val distToAnchor = OfflinePlaceSearchEngine.haversineMeters(
+            vehicleLoc.lat, vehicleLoc.lon, junctionAnchor.lat, junctionAnchor.lon
+        )
+        if (distToAnchor < 6.0) return vehicleLoc
+
+        val safeRemaining = remainingMeters.coerceAtLeast(0.0)
+        val desiredShiftMeters = when (stage) {
+            TurnFocusStage.APPROACH -> minOf(320.0, maxOf(35.0, safeRemaining * 0.36))
+            TurnFocusStage.LANE_LEVEL -> minOf(24.0, safeRemaining * 0.22)
+            TurnFocusStage.NONE -> 0.0
+        }
+        val frac = (desiredShiftMeters / distToAnchor).coerceIn(0.0, 0.55)
+        return LatLon(
+            lat = vehicleLoc.lat + (junctionAnchor.lat - vehicleLoc.lat) * frac,
+            lon = vehicleLoc.lon + (junctionAnchor.lon - vehicleLoc.lon) * frac
+        )
+    }
+
+    private fun sampleForwardPoint(shape: List<LatLon>, startIdx: Int, distanceMeters: Double): LatLon? {
+        if (shape.size < 2 || startIdx >= shape.lastIndex) return null
+        var acc = 0.0
+        var i = startIdx
+        while (i < shape.lastIndex) {
+            val a = shape[i]
+            val b = shape[i + 1]
+            val seg = OfflinePlaceSearchEngine.haversineMeters(a.lat, a.lon, b.lat, b.lon)
+            if (seg > 0.1) {
+                if (acc + seg >= distanceMeters) {
+                    val f = ((distanceMeters - acc) / seg).coerceIn(0.0, 1.0)
+                    return LatLon(a.lat + (b.lat - a.lat) * f, a.lon + (b.lon - a.lon) * f)
+                }
+                acc += seg
+            }
+            i++
+        }
+        return shape.last()
+    }
 }

@@ -2,6 +2,7 @@ package com.example.car
 
 import android.graphics.Rect
 import com.example.data.search.OfflinePlaceSearchEngine
+import com.example.navigation.ActiveNavigationState
 import com.example.navigation.LatLon
 import com.example.navigation.TurnFocusPlanner
 import com.example.navigation.TurnFocusStage
@@ -39,6 +40,14 @@ data class CarCameraSnapshot(
     val bearing: Double,
     val routeId: String?,
     val maneuverIndex: Int
+)
+
+data class CarFocusCameraUpdate(
+    val target: LatLon,
+    val zoom: Double,
+    val tilt: Double,
+    val bearing: Double,
+    val animMs: Int
 )
 
 object CarCameraProfile {
@@ -148,5 +157,56 @@ object CarCameraProfile {
         }
         val topPad = (area.top.toDouble() + extraTop).coerceAtLeast(0.0)
         return doubleArrayOf(leftPad, topPad, rightPad, bottomPad)
+    }
+
+    /**
+     * Computes Android Auto Turn Focus camera framing directly (bypassing normal follow deadzones
+     * so the first update inside 1,000 m / 500 m immediately frames vehicle + junction + outgoing road).
+     */
+    fun computeFocusCameraUpdate(
+        nav: ActiveNavigationState,
+        loc: LatLon,
+        bearing: Float,
+        is3DView: Boolean,
+        enteringFocus: Boolean,
+        tightening: Boolean
+    ): CarFocusCameraUpdate {
+        val effectiveStage = if (nav.turnFocusStage != TurnFocusStage.NONE) {
+            nav.turnFocusStage
+        } else {
+            TurnFocusStage.LANE_LEVEL
+        }
+        val target = TurnFocusStageHelper.computeApproachCameraTarget(
+            route = nav.route,
+            maneuver = nav.displayedManeuver,
+            vehicleLoc = loc,
+            remainingMeters = nav.displayedManeuverDistanceMeters,
+            stage = effectiveStage
+        )
+        val carTarget = computeCarCameraTarget(
+            basePhoneZoom = TurnFocusPlanner.FOCUS_ZOOM_CITY,
+            carMapView = CarMapView.NORMAL,
+            isNavigating = true,
+            is3DView = is3DView,
+            focusCameraActive = true,
+            focusIsHighway = nav.turnFocusIsHighway,
+            focusClosePair = nav.turnFocusClosePair,
+            focusTargetZoom = nav.turnFocusTargetZoom,
+            focusStage = effectiveStage
+        )
+        val animMs = resolveCarCameraAnimMs(
+            enteringFocus = enteringFocus,
+            tighteningToLaneLevel = tightening,
+            exitingFocus = false,
+            focusEnterAnimMs = nav.turnFocusEnterAnimMs,
+            defaultFollowAnimMs = 350
+        )
+        return CarFocusCameraUpdate(
+            target = target,
+            zoom = carTarget.zoom,
+            tilt = carTarget.tilt,
+            bearing = bearing.toDouble(),
+            animMs = animMs
+        )
     }
 }

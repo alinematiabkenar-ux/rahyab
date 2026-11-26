@@ -62,7 +62,7 @@ object ManeuverArrowGeometry {
 
         val beforePts = collectDistancePointsBackward(route.shape, pivotIdx, BEFORE_MANEUVER_METERS)
         val afterMeters = if (isFocusLocked) {
-            if (maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad) 95.0 else 45.0
+            if (maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad) 180.0 else 45.0
         } else {
             AFTER_MANEUVER_METERS
         }

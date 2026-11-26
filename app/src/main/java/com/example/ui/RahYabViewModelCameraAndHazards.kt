@@ -30,6 +30,7 @@ internal fun RahYabViewModel.initializeViewModel() {
     }
     viewModelScope.launch {
         prefs.runOneTimeLaneColorMigrationIfNeeded()
+        prefs.runOneTimeTurnFocusDistanceMigrationIfNeeded()
         packManager.applyPendingSwapsIfIdle()
         packManager.auditInstalledPacks()
     }

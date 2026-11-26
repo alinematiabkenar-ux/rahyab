@@ -3,6 +3,7 @@ package com.example.navigation
 import com.example.i18n.AppLanguage
 import com.example.i18n.BilingualFormatter
 import org.json.JSONObject
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -183,12 +184,19 @@ internal object ValhallaTraceAttributesParser {
             val edgeLaneCount = traceData.laneCountsByShapeIndex[maneuver.beginShapeIndex] ?: 0
             val finalLaneCount = maxOf(maneuver.laneCount, edgeLaneCount, maneuver.lanes.size)
             val finalSpeedMph = maneuver.speedLimitMph ?: edgeSpeedMph
+            val verifiedGeometry = hasVerifiedApproachLaneGeometry(
+                shape = route.shape,
+                maneuver = maneuver,
+                oneWayByShapeIndex = mergedOneWay,
+                edgeLaneCountsByShapeIndex = mergedEdgeLaneCounts
+            )
             maneuver.copy(
                 speedLimitMph = finalSpeedMph,
                 laneCount = finalLaneCount,
                 isMultiLaneRoad = maneuver.isMultiLaneRoad ||
                     finalLaneCount >= 2 ||
-                    (finalSpeedMph != null && finalSpeedMph >= 35)
+                    (finalSpeedMph != null && finalSpeedMph >= 35),
+                hasRoadLaneGeometry = maneuver.hasRoadLaneGeometry || verifiedGeometry
             )
         }
 
@@ -222,13 +230,54 @@ internal object ValhallaTraceAttributesParser {
             }
         }
 
+        val routeHasVerifiedGeometry = route.hasRoadLaneGeometry || updatedManeuvers.any { it.hasRoadLaneGeometry }
+
         return route.copy(
             maneuvers = updatedManeuvers,
             speedLimitsByShapeIndex = mergedSpeedLimits,
             oneWayByShapeIndex = mergedOneWay,
             edgeLaneCountsByShapeIndex = mergedEdgeLaneCounts,
             edgeWayIdsByShapeIndex = mergedEdgeWayIds,
-            roadAlerts = if (extraAlerts.isEmpty()) route.roadAlerts else route.roadAlerts + extraAlerts
+            roadAlerts = if (extraAlerts.isEmpty()) route.roadAlerts else route.roadAlerts + extraAlerts,
+            hasRoadLaneGeometry = routeHasVerifiedGeometry
         )
+    }
+
+    /**
+     * Verifies whether trace_attributes supplies enough road-carriageway geometry on the
+     * maneuver approach (known one-way/two-way traversability + consistent edge lane count
+     * + at least 10 m of approach shape) to safely draw on-road lane strips.
+     */
+    private fun hasVerifiedApproachLaneGeometry(
+        shape: List<LatLon>,
+        maneuver: RouteManeuver,
+        oneWayByShapeIndex: Map<Int, Boolean>,
+        edgeLaneCountsByShapeIndex: Map<Int, Int>
+    ): Boolean {
+        if (shape.size < 2 || maneuver.lanes.size < 2) return false
+        val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, shape.lastIndex)
+        if (pivotIdx <= 0) return false
+        val lookbackStart = (pivotIdx - 1).coerceAtLeast(0)
+        val lookbackMin = (lookbackStart - 12).coerceAtLeast(0)
+        var approachOneWay: Boolean? = null
+        var approachEdgeLanes: Int? = null
+        for (i in lookbackStart downTo lookbackMin) {
+            if (approachOneWay == null) approachOneWay = oneWayByShapeIndex[i]
+            if (approachEdgeLanes == null) approachEdgeLanes = edgeLaneCountsByShapeIndex[i]?.takeIf { it > 0 }
+            if (approachOneWay != null && approachEdgeLanes != null) break
+        }
+        if (approachOneWay == null) approachOneWay = oneWayByShapeIndex[pivotIdx]
+        if (approachEdgeLanes == null) approachEdgeLanes = edgeLaneCountsByShapeIndex[pivotIdx]?.takeIf { it > 0 }
+        if (approachOneWay == null || approachEdgeLanes == null) return false
+        if (abs(approachEdgeLanes - maneuver.lanes.size) > 1) return false
+        var approachMeters = 0.0
+        var i = pivotIdx
+        while (i > 0 && approachMeters < 10.0) {
+            approachMeters += RouteGeometryMath.haversineMeters(
+                shape[i].lat, shape[i].lon, shape[i - 1].lat, shape[i - 1].lon
+            )
+            i--
+        }
+        return approachMeters >= 10.0
     }
 }

@@ -520,9 +520,17 @@ fun MapLibreMapContainer(
         }
     }
 
-    LaunchedEffect(mapLibreMap, isCameraFollowing, activeNavRoute?.id, cameraGeneration) {
+    var lastCanceledGeneration by remember { mutableStateOf(cameraGeneration) }
+    LaunchedEffect(mapLibreMap, isCameraFollowing) {
         val map = mapLibreMap ?: return@LaunchedEffect
-        if (!isCameraFollowing || cameraGeneration > 0L) {
+        if (!isCameraFollowing) {
+            runCatching { map.cancelTransitions() }
+        }
+    }
+    LaunchedEffect(mapLibreMap, cameraGeneration) {
+        val map = mapLibreMap ?: return@LaunchedEffect
+        if (cameraGeneration > lastCanceledGeneration) {
+            lastCanceledGeneration = cameraGeneration
             runCatching { map.cancelTransitions() }
         }
     }

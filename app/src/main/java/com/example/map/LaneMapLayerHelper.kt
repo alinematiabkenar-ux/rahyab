@@ -34,10 +34,12 @@ object LaneMapLayerHelper {
     const val SOURCE_LANE_STRIPS = "rahyab_lane_strips_src"
     const val SOURCE_LANE_SEPARATORS = "rahyab_lane_separators_src"
     const val SOURCE_LANE_ARROWS = "rahyab_lane_arrows_src"
+    const val SOURCE_OUTGOING_RAMP = "rahyab_outgoing_ramp_src"
 
     const val LAYER_LANE_NON_TARGET = "rahyab_lane_non_target_layer"
     const val LAYER_LANE_TARGET = "rahyab_lane_target_layer"
     const val LAYER_LANE_SEPARATORS = "rahyab_lane_separators_layer"
+    const val LAYER_OUTGOING_RAMP = "rahyab_outgoing_ramp_layer"
     const val LAYER_LANE_ARROWS = "rahyab_lane_arrows_layer"
 
     private const val IMG_ARROW_STRAIGHT = "rahyab_lane_arrow_straight"
@@ -64,6 +66,9 @@ object LaneMapLayerHelper {
             }
             if (style.getSource(SOURCE_LANE_ARROWS) == null) {
                 style.addSource(GeoJsonSource(SOURCE_LANE_ARROWS))
+            }
+            if (style.getSource(SOURCE_OUTGOING_RAMP) == null) {
+                style.addSource(GeoJsonSource(SOURCE_OUTGOING_RAMP))
             }
 
             // Place above route chevrons and below maneuver arrow / labels / reports
@@ -145,6 +150,20 @@ object LaneMapLayerHelper {
                 addBelowAnchor(style, sepLayer, anchorId)
             }
 
+            if (style.getLayer(LAYER_OUTGOING_RAMP) == null) {
+                val rampLayer = LineLayer(LAYER_OUTGOING_RAMP, SOURCE_OUTGOING_RAMP).apply {
+                    minZoom = 14.5f
+                    setProperties(
+                        PropertyFactory.lineColor(Expression.get("color")),
+                        PropertyFactory.lineOpacity(0.90f),
+                        PropertyFactory.lineWidth(laneWidthExpr),
+                        PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                        PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+                    )
+                }
+                addBelowAnchor(style, rampLayer, anchorId)
+            }
+
             if (style.getLayer(LAYER_LANE_ARROWS) == null) {
                 val arrowLayer = SymbolLayer(LAYER_LANE_ARROWS, SOURCE_LANE_ARROWS).apply {
                     minZoom = 15.5f
@@ -176,6 +195,7 @@ object LaneMapLayerHelper {
                 style.getSourceAs<GeoJsonSource>(SOURCE_LANE_STRIPS)?.setGeoJson(emptyFc)
                 style.getSourceAs<GeoJsonSource>(SOURCE_LANE_SEPARATORS)?.setGeoJson(emptyFc)
                 style.getSourceAs<GeoJsonSource>(SOURCE_LANE_ARROWS)?.setGeoJson(emptyFc)
+                style.getSourceAs<GeoJsonSource>(SOURCE_OUTGOING_RAMP)?.setGeoJson(emptyFc)
             }
             return
         }
@@ -207,11 +227,22 @@ object LaneMapLayerHelper {
                 addBooleanProperty("is_large", m.isLargeArrow)
             }
         }
+        val rampFeatures = if (overlay.outgoingRampPath.size >= 2) {
+            val pts = overlay.outgoingRampPath.map { Point.fromLngLat(it.lon, it.lat) }
+            listOf(
+                Feature.fromGeometry(LineString.fromLngLats(pts)).apply {
+                    addStringProperty("color", highlightColorHex)
+                }
+            )
+        } else {
+            emptyList()
+        }
 
         runCatching {
             style.getSourceAs<GeoJsonSource>(SOURCE_LANE_STRIPS)?.setGeoJson(FeatureCollection.fromFeatures(stripFeatures))
             style.getSourceAs<GeoJsonSource>(SOURCE_LANE_SEPARATORS)?.setGeoJson(FeatureCollection.fromFeatures(sepFeatures))
             style.getSourceAs<GeoJsonSource>(SOURCE_LANE_ARROWS)?.setGeoJson(FeatureCollection.fromFeatures(arrowFeatures))
+            style.getSourceAs<GeoJsonSource>(SOURCE_OUTGOING_RAMP)?.setGeoJson(FeatureCollection.fromFeatures(rampFeatures))
         }
     }
 

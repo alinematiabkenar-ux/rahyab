@@ -150,11 +150,14 @@ object LaneGuidanceValidator {
         }
 
         // 3. Arrow compatibility rule
+        // Accept unmarked slots (OSM `none`/empty) when Valhalla explicitly marks them active/valid,
+        // while still rejecting explicit contradictory arrows (e.g. LEFT arrow on a RIGHT turn).
         val compatibleDirections = compatibleDirectionsFor(maneuverType)
         val allTargetsHaveCompatibleArrow = targetIndices.all { idx ->
             val lane = lanes[idx]
             val dirs = (lane.activeDirections + lane.directions)
-            dirs.any { it in compatibleDirections }
+            (lane.isUnmarkedSlot && (lane.isActive || lane.isValid) && lane.activeDirections.none { it !in compatibleDirections && it != LaneDirection.THROUGH }) ||
+                dirs.any { it in compatibleDirections }
         }
         if (!allTargetsHaveCompatibleArrow) {
             reasons.add("incompatible_target_arrow")
@@ -322,55 +325,56 @@ object LaneGuidanceValidator {
     private fun allowsNonRightmostTurn(lanes: List<LaneInfo>, targetIndices: List<Int>): Boolean {
         // Leftmost lane on a right turn is never an acceptable non-edge exception
         if (targetIndices.first() == 0) return false
-        val rightArrows = setOf(LaneDirection.RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.SLIGHT_RIGHT)
-        val allTargetsHaveExplicitRight = targetIndices.all { idx ->
-            lanes[idx].directions.any { it in rightArrows }
-        }
-        if (!allTargetsHaveExplicitRight) return false
         val lanesToRight = ((targetIndices.last() + 1)..lanes.lastIndex).map { lanes[it] }
-        val targetsAreSlightRight = targetIndices.all { idx ->
-            LaneDirection.SLIGHT_RIGHT in lanes[idx].directions && LaneDirection.RIGHT !in lanes[idx].directions
-        }
+        if (lanesToRight.isEmpty()) return true
+        // If outer lanes to the right are also valid/active turn lanes, preferred inner turn lane is valid
+        // (e.g. dual right turn where 3rd lane of 4 is ACTIVE/preferred and 4th lane is VALID or slip-right).
+        val rightArrows = setOf(LaneDirection.RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.MERGE_RIGHT)
         return lanesToRight.all { lane ->
-            lane.directions.isNotEmpty() &&
-                LaneDirection.THROUGH !in lane.directions &&
-                (LaneDirection.RIGHT !in lane.directions || (targetsAreSlightRight && LaneDirection.SHARP_RIGHT in lane.directions || targetsAreSlightRight && lane.directions == listOf(LaneDirection.RIGHT)))
+            lane.isValid ||
+                lane.isRecommended ||
+                lane.isUnmarkedSlot ||
+                lane.directions.any { it in rightArrows } ||
+                (lane.directions.isNotEmpty() && LaneDirection.THROUGH !in lane.directions)
         }
     }
 
     private fun allowsNonLeftmostTurn(lanes: List<LaneInfo>, targetIndices: List<Int>): Boolean {
         if (targetIndices.last() == lanes.lastIndex) return false
-        val leftArrows = setOf(LaneDirection.LEFT, LaneDirection.SHARP_LEFT, LaneDirection.SLIGHT_LEFT)
-        val allTargetsHaveExplicitLeft = targetIndices.all { idx ->
-            lanes[idx].directions.any { it in leftArrows }
-        }
-        if (!allTargetsHaveExplicitLeft) return false
         val lanesToLeft = (0 until targetIndices.first()).map { lanes[it] }
+        if (lanesToLeft.isEmpty()) return true
+        val leftArrows = setOf(LaneDirection.LEFT, LaneDirection.SHARP_LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.U_TURN_LEFT, LaneDirection.MERGE_LEFT)
         return lanesToLeft.all { lane ->
-            lane.directions.isNotEmpty() &&
-                LaneDirection.THROUGH !in lane.directions &&
-                LaneDirection.LEFT !in lane.directions
+            lane.isValid ||
+                lane.isRecommended ||
+                lane.isUnmarkedSlot ||
+                lane.directions.any { it in leftArrows } ||
+                (lane.directions.isNotEmpty() && LaneDirection.THROUGH !in lane.directions)
         }
     }
 
     private fun compatibleDirectionsFor(type: ManeuverType): Set<LaneDirection> = when (type) {
-        ManeuverType.LEFT, ManeuverType.SLIGHT_LEFT ->
+        ManeuverType.LEFT ->
             setOf(LaneDirection.LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.SHARP_LEFT)
+        ManeuverType.SLIGHT_LEFT ->
+            setOf(LaneDirection.LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.SHARP_LEFT, LaneDirection.THROUGH)
         ManeuverType.SHARP_LEFT ->
             setOf(LaneDirection.SHARP_LEFT, LaneDirection.LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.U_TURN_LEFT)
         ManeuverType.U_TURN_LEFT ->
             setOf(LaneDirection.U_TURN_LEFT, LaneDirection.SHARP_LEFT, LaneDirection.LEFT)
         ManeuverType.EXIT_LEFT, ManeuverType.RAMP_LEFT ->
-            setOf(LaneDirection.LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.SHARP_LEFT, LaneDirection.MERGE_LEFT)
+            setOf(LaneDirection.LEFT, LaneDirection.SLIGHT_LEFT, LaneDirection.SHARP_LEFT, LaneDirection.MERGE_LEFT, LaneDirection.THROUGH)
 
-        ManeuverType.RIGHT, ManeuverType.SLIGHT_RIGHT ->
+        ManeuverType.RIGHT ->
             setOf(LaneDirection.RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.SHARP_RIGHT)
+        ManeuverType.SLIGHT_RIGHT ->
+            setOf(LaneDirection.RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.THROUGH)
         ManeuverType.SHARP_RIGHT ->
             setOf(LaneDirection.SHARP_RIGHT, LaneDirection.RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.U_TURN_RIGHT)
         ManeuverType.U_TURN_RIGHT ->
             setOf(LaneDirection.U_TURN_RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.RIGHT)
         ManeuverType.EXIT_RIGHT, ManeuverType.RAMP_RIGHT ->
-            setOf(LaneDirection.RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.MERGE_RIGHT)
+            setOf(LaneDirection.RIGHT, LaneDirection.SLIGHT_RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.MERGE_RIGHT, LaneDirection.THROUGH)
 
         ManeuverType.STAY_LEFT ->
             setOf(LaneDirection.THROUGH, LaneDirection.SLIGHT_LEFT, LaneDirection.LEFT, LaneDirection.MERGE_LEFT)

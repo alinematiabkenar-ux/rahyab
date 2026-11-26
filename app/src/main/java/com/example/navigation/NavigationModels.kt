@@ -275,8 +275,30 @@ data class ActiveNavigationState(
         get() = if (turnFocusActive && turnFocusManeuverIndex >= 0) {
             route?.maneuvers?.firstOrNull { it.index == turnFocusManeuverIndex }
         } else null
+    val displayedManeuver: RouteManeuver?
+        get() = activeTurnFocusManeuver ?: currentManeuver
+    val displayedManeuverDistanceMeters: Double
+        get() {
+            val focus = activeTurnFocusManeuver
+            val cur = currentManeuver
+            if (focus != null && cur != null && focus.index != cur.index) {
+                val shape = route?.shape
+                if (shape != null && shape.size >= 2) {
+                    val pivotIdx = focus.beginShapeIndex.coerceIn(0, shape.lastIndex)
+                    val pivotProg = NavigationGeometryHelper.vertexProgressMeters(shape, pivotIdx)
+                    val vehicleProg = if (snappedRouteProgressMeters > 0.0) {
+                        snappedRouteProgressMeters
+                    } else {
+                        NavigationGeometryHelper.vertexProgressMeters(shape, snappedShapeIndex.coerceIn(0, shape.lastIndex))
+                    }
+                    return (pivotProg - vehicleProg).coerceAtLeast(0.0)
+                }
+                return 0.0
+            }
+            return distanceToNextManeuverMeters
+        }
     val activeJunctionManeuver: RouteManeuver?
-        get() = route?.maneuvers?.firstOrNull { it.index == activeJunctionManeuverIndex } ?: currentManeuver
+        get() = route?.maneuvers?.firstOrNull { it.index == activeJunctionManeuverIndex } ?: displayedManeuver
 
     /**
      * Secondary "Then ..." maneuver preview shown below the top banner when the subsequent turn
@@ -287,6 +309,16 @@ data class ActiveNavigationState(
             val cur = currentManeuver ?: return null
             val next = route?.maneuvers?.getOrNull(currentManeuverIndex + 1) ?: return null
             return if (cur.lengthMeters <= 500.0 || cur.timeSeconds <= 45.0) next else null
+        }
+
+    val displayedThenManeuver: RouteManeuver?
+        get() {
+            val active = displayedManeuver ?: return null
+            val maneuvers = route?.maneuvers ?: return null
+            val listIdx = maneuvers.indexOfFirst { it.index == active.index }
+            if (listIdx < 0) return null
+            val next = maneuvers.getOrNull(listIdx + 1) ?: return null
+            return if (active.lengthMeters <= 500.0 || active.timeSeconds <= 45.0) next else null
         }
 }
 

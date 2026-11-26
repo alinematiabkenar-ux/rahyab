@@ -327,7 +327,8 @@ internal fun enrichHighwayExitLanesForSimulation(
                 lanes = lanes,
                 laneCount = lanes.size,
                 isMultiLaneRoad = true,
-                isHighwayExitOrSplit = true
+                isHighwayExitOrSplit = true,
+                hasRoadLaneGeometry = true
             )
         }
 
@@ -346,11 +347,16 @@ internal fun enrichHighwayExitLanesForSimulation(
             return@map m.copy(
                 lanes = lanes,
                 laneCount = lanes.size,
-                isMultiLaneRoad = true
+                isMultiLaneRoad = true,
+                hasRoadLaneGeometry = true
             )
         }
 
         m
     }
-    return route.copy(maneuvers = updated, oneWayByShapeIndex = updatedOneWay)
+    return route.copy(
+        maneuvers = updated,
+        oneWayByShapeIndex = updatedOneWay,
+        hasRoadLaneGeometry = route.hasRoadLaneGeometry || updated.any { it.hasRoadLaneGeometry }
+    )
 }

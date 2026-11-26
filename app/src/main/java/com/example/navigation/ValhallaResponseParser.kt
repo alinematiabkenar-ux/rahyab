@@ -186,7 +186,7 @@ object ValhallaResponseParser {
                     pendingApproachHadInterveningIntersection = false
                     pendingApproachRawJson = extractRawLaneJson(mObj).ifBlank { serializeLanesFallback(carryFromThisSegment) }
                 } else if (type == ManeuverType.STRAIGHT || type == ManeuverType.DEPART || type == ManeuverType.MERGE) {
-                    if (pendingApproachLanes.isNotEmpty()) {
+                    if (pendingApproachLanes.isNotEmpty() && type == ManeuverType.MERGE) {
                         pendingApproachHadInterveningIntersection = true
                     }
                     pendingApproachDistanceMeters += segmentLengthMeters
@@ -313,7 +313,10 @@ object ValhallaResponseParser {
                         laneSource = laneSource,
                         carriedLaneDistanceMeters = carriedDistanceMeters,
                         carriedLaneHadInterveningIntersection = carriedHadIntervening,
-                        rawLaneJson = rawLaneJson
+                        rawLaneJson = rawLaneJson,
+                        // Raw Valhalla /route JSON provides centerline geometry + turn_lanes tags only;
+                        // verified on-road lane geometry is populated only after trace_attributes enrichment.
+                        hasRoadLaneGeometry = false
                     )
                 )
             }
@@ -343,7 +346,8 @@ object ValhallaResponseParser {
             roadAlerts = alerts,
             crossesStateLines = statesCrossed.size > 1,
             statesCrossed = statesCrossed,
-            hasTolls = hasTolls
+            hasTolls = hasTolls,
+            hasRoadLaneGeometry = false
         )
     }
 

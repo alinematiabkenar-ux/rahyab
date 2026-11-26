@@ -10,8 +10,6 @@ import com.example.navigation.OfflineRoute
 import com.example.navigation.RouteManeuver
 import com.example.navigation.TravelMode
 import com.example.navigation.ValhallaResponseParser
-import kotlin.math.cos
-import kotlin.math.hypot
 
 enum class LaneHighlightColor(val code: String, val hex: String) {
     RED("red", "#E53935"),
@@ -50,7 +48,8 @@ data class LaneOverlayData(
     val isOneWay: Boolean,
     val lanes: List<LaneStripFeature>,
     val separators: List<LaneSeparatorFeature>,
-    val arrowMarkers: List<LaneArrowMarker>
+    val arrowMarkers: List<LaneArrowMarker>,
+    val outgoingRampPath: List<LatLon> = emptyList()
 )
 
 /**
@@ -72,9 +71,9 @@ object LaneOverlayBuilder {
     const val BEFORE_MANEUVER_METERS = 500.0
     const val MAX_FOCUS_START_METERS = 1600.0
     const val AFTER_MANEUVER_METERS = 30.0
+    const val HIGHWAY_SPLIT_AFTER_METERS = 12.0
     const val ARROW_BEFORE_MANEUVER_METERS = 40.0
     const val FOCUS_ARROW_INTERVAL_METERS = 130.0
-    private const val METERS_PER_DEG_LAT = 111_320.0
 
     fun computeLaneOffsetsMeters(laneCount: Int, isOneWay: Boolean): List<Double> {
         if (laneCount < 2) return emptyList()
@@ -112,7 +111,7 @@ object LaneOverlayBuilder {
         }
         val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
         if (pivotIdx <= 0) return false
-        val approachLen = distanceAlongShape(route.shape, 0, pivotIdx)
+        val approachLen = LaneOverlayGeometryHelper.distanceAlongShape(route.shape, 0, pivotIdx)
         return approachLen >= 10.0
     }
 
@@ -150,33 +149,34 @@ object LaneOverlayBuilder {
         val allValid = lanes.all { it.isValid || it.isRecommended || it.isActive || it.highlightTier != LaneHighlightTier.INACTIVE }
         if (allValid) return null
 
-        val hasRecommended = lanes.any { it.isRecommended || it.isActive || it.highlightTier == LaneHighlightTier.ACTIVE }
+        // Match LaneGuidanceDecision.primaryTargetIndices: highlight ONLY preferred (ACTIVE) lanes
+        // when present; never paint merely VALID lanes primary blue alongside an ACTIVE lane.
+        val hasPreferredActive = lanes.any { it.isActive || it.highlightTier == LaneHighlightTier.ACTIVE }
         val targetFlags = lanes.map { lane ->
-            if (hasRecommended) {
-                lane.isRecommended || lane.isActive || lane.highlightTier == LaneHighlightTier.ACTIVE
+            if (hasPreferredActive) {
+                lane.isActive || lane.highlightTier == LaneHighlightTier.ACTIVE
             } else {
-                lane.isValid || lane.highlightTier == LaneHighlightTier.VALID
+                lane.isValid || lane.isRecommended || lane.highlightTier == LaneHighlightTier.VALID
             }
         }
         if (targetFlags.none { it } || targetFlags.all { it }) return null
 
         val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
+        val isHighwaySplit = maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad
         val approachDrawMeters = LaneGuidanceValidator.computeApproachDrawDistanceMeters(
             shape = route.shape,
             edgeLaneCountsByShapeIndex = route.edgeLaneCountsByShapeIndex,
             pivotIdx = pivotIdx,
             maneuverLaneCount = lanes.size,
-            isHighway = maneuver.isHighwayRoad || maneuver.isHighwayExitOrSplit,
+            isHighway = isHighwaySplit,
             maxStartDistanceMeters = effectiveStart
         )
         if (approachDrawMeters < 5.0) return null
-        val beforePts = collectBackward(route.shape, pivotIdx, approachDrawMeters)
-        val afterMeters = if (isFocusMode && (maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad)) {
-            45.0
-        } else {
-            AFTER_MANEUVER_METERS
-        }
-        val afterPts = collectForward(route.shape, pivotIdx, afterMeters)
+        val beforePts = LaneOverlayGeometryHelper.collectBackward(route.shape, pivotIdx, approachDrawMeters)
+        // End incoming multi-lane strips cleanly at/near highway splits so unverified incoming
+        // lane stripes do not bleed onto the outgoing ramp; verified ramp guidance continues via outgoingRampPath.
+        val afterMeters = if (isHighwaySplit) HIGHWAY_SPLIT_AFTER_METERS else AFTER_MANEUVER_METERS
+        val afterPts = LaneOverlayGeometryHelper.collectForward(route.shape, pivotIdx, afterMeters)
         val centerLine = ArrayList<LatLon>(beforePts.size + afterPts.size + 1).apply {
             addAll(beforePts)
             add(route.shape[pivotIdx])
@@ -192,7 +192,7 @@ object LaneOverlayBuilder {
 
         val laneFeatures = lanes.mapIndexed { i, info ->
             val offsetM = laneOffsets[i]
-            val pts = offsetPolylineMeters(centerLine, origin, offsetM)
+            val pts = LaneOverlayGeometryHelper.offsetPolylineMeters(centerLine, origin, offsetM)
             LaneStripFeature(
                 laneIndex = i,
                 isTarget = targetFlags[i],
@@ -204,7 +204,7 @@ object LaneOverlayBuilder {
 
         val separators = sepOffsets.map { sepOffset ->
             LaneSeparatorFeature(
-                points = offsetPolylineMeters(centerLine, origin, sepOffset),
+                points = LaneOverlayGeometryHelper.offsetPolylineMeters(centerLine, origin, sepOffset),
                 offsetMeters = sepOffset
             )
         }
@@ -213,12 +213,23 @@ object LaneOverlayBuilder {
             buildArrowMarkersForStrip(strip, pivotLocalIndex, isFocusMode)
         }
 
+        val outgoingRampPath = if (isFocusMode && isHighwaySplit) {
+            LaneOverlayGeometryHelper.buildOutgoingRampPath(
+                shape = route.shape,
+                pivotIdx = pivotIdx,
+                snappedShapeIndex = snappedShapeIndex
+            )
+        } else {
+            emptyList()
+        }
+
         return LaneOverlayData(
             maneuverIndex = maneuver.index,
             isOneWay = isOneWay,
             lanes = laneFeatures,
             separators = separators,
-            arrowMarkers = arrowMarkers
+            arrowMarkers = arrowMarkers,
+            outgoingRampPath = outgoingRampPath
         )
     }
 
@@ -243,7 +254,7 @@ object LaneOverlayBuilder {
         if (currentManeuverIndex > 0) {
             val prev = route.maneuvers.getOrNull(currentManeuverIndex - 1)
             if (prev != null && prev.lanes.size >= 2 && snappedShapeIndex >= prev.beginShapeIndex) {
-                val distPast = distanceAlongShape(route.shape, prev.beginShapeIndex, snappedShapeIndex)
+                val distPast = LaneOverlayGeometryHelper.distanceAlongShape(route.shape, prev.beginShapeIndex, snappedShapeIndex)
                 if (distPast <= AFTER_MANEUVER_METERS) {
                     return prev
                 }
@@ -253,7 +264,7 @@ object LaneOverlayBuilder {
         val cur = route.maneuvers.getOrNull(currentManeuverIndex) ?: return null
         if (cur.lanes.size < 2) return null
         if (snappedShapeIndex > cur.beginShapeIndex) {
-            val distPast = distanceAlongShape(route.shape, cur.beginShapeIndex, snappedShapeIndex)
+            val distPast = LaneOverlayGeometryHelper.distanceAlongShape(route.shape, cur.beginShapeIndex, snappedShapeIndex)
             if (distPast > AFTER_MANEUVER_METERS) return null
         } else if (distanceToNextManeuverMeters > startDistanceMeters) {
             return null
@@ -315,7 +326,7 @@ object LaneOverlayBuilder {
             if (seg > 0.05) {
                 if (acc + seg >= distanceBeforePivotMeters) {
                     val frac = ((distanceBeforePivotMeters - acc) / seg).coerceIn(0.0, 1.0)
-                    val pos = interpolate(cur, prev, frac)
+                    val pos = LaneOverlayGeometryHelper.interpolate(cur, prev, frac)
                     val bearing = ValhallaResponseParser.bearingDegrees(prev, cur).toFloat()
                     return LaneArrowMarker(strip.laneIndex, pos, bearing, strip.arrowDirection, isLargeArrow)
                 }
@@ -324,7 +335,7 @@ object LaneOverlayBuilder {
             i--
         }
         if (!fallbackToMidpoint) return null
-        val pos = interpolate(pts[0], pts[safePivot], 0.5)
+        val pos = LaneOverlayGeometryHelper.interpolate(pts[0], pts[safePivot], 0.5)
         val bearing = ValhallaResponseParser.bearingDegrees(pts[0], pts[safePivot]).toFloat()
         return LaneArrowMarker(strip.laneIndex, pos, bearing, strip.arrowDirection, isLargeArrow)
     }
@@ -333,101 +344,5 @@ object LaneOverlayBuilder {
         points: List<LatLon>,
         origin: LatLon,
         rightOffsetMeters: Double
-    ): List<LatLon> {
-        if (points.size < 2) return points
-        val cosLat = cos(Math.toRadians(origin.lat)).coerceAtLeast(0.1)
-        val metersPerDegLon = METERS_PER_DEG_LAT * cosLat
-
-        // Convert to local East (x) / North (y) meters
-        val xs = DoubleArray(points.size) { i -> (points[i].lon - origin.lon) * metersPerDegLon }
-        val ys = DoubleArray(points.size) { i -> (points[i].lat - origin.lat) * METERS_PER_DEG_LAT }
-
-        val out = ArrayList<LatLon>(points.size)
-        for (i in points.indices) {
-            var tx = 0.0
-            var ty = 0.0
-            if (i > 0) {
-                val dx = xs[i] - xs[i - 1]
-                val dy = ys[i] - ys[i - 1]
-                val len = hypot(dx, dy)
-                if (len > 1e-4) {
-                    tx += dx / len
-                    ty += dy / len
-                }
-            }
-            if (i < points.lastIndex) {
-                val dx = xs[i + 1] - xs[i]
-                val dy = ys[i + 1] - ys[i]
-                val len = hypot(dx, dy)
-                if (len > 1e-4) {
-                    tx += dx / len
-                    ty += dy / len
-                }
-            }
-            val tLen = hypot(tx, ty)
-            val nx: Double
-            val ny: Double
-            if (tLen > 1e-4) {
-                val ux = tx / tLen
-                val uy = ty / tLen
-                // Right-hand perpendicular normal in (East, North)
-                nx = uy
-                ny = -ux
-            } else {
-                nx = 0.0
-                ny = 0.0
-            }
-            val ox = xs[i] + nx * rightOffsetMeters
-            val oy = ys[i] + ny * rightOffsetMeters
-            out.add(
-                LatLon(
-                    lat = origin.lat + oy / METERS_PER_DEG_LAT,
-                    lon = origin.lon + ox / metersPerDegLon
-                )
-            )
-        }
-        return out
-    }
-
-    private fun distanceAlongShape(shape: List<LatLon>, fromIdx: Int, toIdx: Int): Double {
-        val a = fromIdx.coerceIn(0, shape.lastIndex)
-        val b = toIdx.coerceIn(0, shape.lastIndex)
-        if (b <= a) return 0.0
-        var sum = 0.0
-        for (i in a until b) {
-            sum += OfflinePlaceSearchEngine.haversineMeters(
-                shape[i].lat, shape[i].lon, shape[i + 1].lat, shape[i + 1].lon
-            )
-        }
-        return sum
-    }
-
-    private fun collectBackward(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double): List<LatLon> =
-        collectAlong(shape, pivotIdx, targetMeters, step = -1).asReversed()
-
-    private fun collectForward(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double): List<LatLon> =
-        collectAlong(shape, pivotIdx, targetMeters, step = 1)
-
-    private fun collectAlong(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double, step: Int): List<LatLon> {
-        val out = ArrayList<LatLon>()
-        var acc = 0.0
-        var i = pivotIdx
-        while (acc < targetMeters && (if (step < 0) i > 0 else i < shape.lastIndex)) {
-            val cur = shape[i]
-            val adj = shape[i + step]
-            val seg = OfflinePlaceSearchEngine.haversineMeters(cur.lat, cur.lon, adj.lat, adj.lon)
-            if (seg <= 0.05) { i += step; continue }
-            if (acc + seg >= targetMeters) {
-                out.add(interpolate(cur, adj, ((targetMeters - acc) / seg).coerceIn(0.0, 1.0)))
-                break
-            }
-            out.add(adj)
-            acc += seg
-            i += step
-        }
-        return out
-    }
-
-    private fun interpolate(a: LatLon, b: LatLon, frac: Double): LatLon =
-        LatLon(a.lat + (b.lat - a.lat) * frac, a.lon + (b.lon - a.lon) * frac)
+    ): List<LatLon> = LaneOverlayGeometryHelper.offsetPolylineMeters(points, origin, rightOffsetMeters)
 }

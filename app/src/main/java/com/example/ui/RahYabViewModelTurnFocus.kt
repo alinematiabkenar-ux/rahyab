@@ -233,17 +233,29 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
         val tightenAnim = turnFocusPendingTightenAnim
         turnFocusPendingTightenAnim = false
 
+        val effectiveStage = if (state.turnFocusStage != TurnFocusStage.NONE) {
+            state.turnFocusStage
+        } else {
+            TurnFocusStage.LANE_LEVEL
+        }
         val focusZoom = if (state.turnFocusTargetZoom > 0.0) {
             state.turnFocusTargetZoom
         } else {
             TurnFocusStageHelper.computeTargetZoom(
-                stage = if (state.turnFocusStage != TurnFocusStage.NONE) state.turnFocusStage else TurnFocusStage.LANE_LEVEL,
-                remainingMeters = state.distanceToNextManeuverMeters,
+                stage = effectiveStage,
+                remainingMeters = state.displayedManeuverDistanceMeters,
                 isHighway = state.turnFocusIsHighway,
                 isClosePair = state.turnFocusClosePair
             )
         }
         val focusTilt = if (s.is3DView) TurnFocusPlanner.FOCUS_TILT_3D else 0.0
+        val framedTarget = TurnFocusStageHelper.computeApproachCameraTarget(
+            route = state.route,
+            maneuver = state.displayedManeuver,
+            vehicleLoc = targetLoc,
+            remainingMeters = state.displayedManeuverDistanceMeters,
+            stage = effectiveStage
+        )
 
         // Stationary red-light guard: keep camera rock-steady without re-triggering animations
         val prevFocus = lastFocusCameraTarget
@@ -253,7 +265,7 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
             kotlin.math.abs(prevFocus.zoom - focusZoom) < 0.05 &&
             kotlin.math.abs(prevFocus.tilt - focusTilt) < 0.5 &&
             ValhallaResponseParser.angleDiffDegrees(prevFocus.bearing, heading.toDouble()) < 4.0 &&
-            OfflinePlaceSearchEngine.haversineMeters(prevFocus.lat, prevFocus.lon, targetLoc.lat, targetLoc.lon) < 2.5
+            OfflinePlaceSearchEngine.haversineMeters(prevFocus.lat, prevFocus.lon, framedTarget.lat, framedTarget.lon) < 2.5
         ) {
             return null
         }
@@ -268,8 +280,8 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
             else -> minOf(380, cameraAnimMs.coerceAtLeast(TurnFocusPlanner.MIN_ENTER_ANIM_MS))
         }
         val cmd = CameraTargetCommand(
-            lat = targetLoc.lat,
-            lon = targetLoc.lon,
+            lat = framedTarget.lat,
+            lon = framedTarget.lon,
             zoom = focusZoom,
             tilt = focusTilt,
             bearing = heading.toDouble(),

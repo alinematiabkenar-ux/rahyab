@@ -113,13 +113,13 @@ internal fun DriveTopOverlay(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (navState.isNavigating && navState.currentManeuver != null) {
-            val activeManeuver = navState.activeTurnFocusManeuver ?: navState.currentManeuver!!
+        if (navState.isNavigating && navState.displayedManeuver != null) {
+            val activeManeuver = navState.displayedManeuver!!
             val isDriveMode = navState.effectiveTravelMode == TravelMode.DRIVE
             TurnByTurnTopHud(
                 maneuver = activeManeuver,
-                thenManeuver = navState.thenManeuver,
-                distanceMeters = navState.distanceToNextManeuverMeters,
+                thenManeuver = navState.displayedThenManeuver,
+                distanceMeters = navState.displayedManeuverDistanceMeters,
                 unit = settings.distanceUnit,
                 isRerouting = navState.isRerouting,
                 showLaneStrip = isDriveMode && navState.showLaneStrip,
@@ -133,7 +133,7 @@ internal fun DriveTopOverlay(
                 laneChangeCuePulseKey = if (isDriveMode && navState.laneChangeCueManeuverIndex == activeManeuver.index) {
                     navState.laneChangeCuePulseAtMs
                 } else 0L,
-                junctionManeuver = navState.activeJunctionManeuver ?: activeManeuver,
+                junctionManeuver = if (navState.turnFocusActive) activeManeuver else (navState.activeJunctionManeuver ?: activeManeuver),
                 laneConfidence = navState.laneConfidence,
                 laneSideHint = navState.laneSideHint,
                 laneDecision = navState.laneDecision,

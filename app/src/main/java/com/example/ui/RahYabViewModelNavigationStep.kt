@@ -84,8 +84,16 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         turnFocusFinalSignalDistanceBeforeManeuverMeters = prevNav.turnFocusFinalSignalDistanceBeforeManeuverMeters,
         turnFocusPassedFinalSignal = prevNav.turnFocusPassedFinalSignal
     )
-    val validatedState = evaluateLaneConfidenceImpl(baseState)
-    val effectiveState = evaluateTurnFocusImpl(validatedState, speedMps)
+    val focusedState = evaluateTurnFocusImpl(baseState, speedMps)
+    val validatedState = evaluateLaneConfidenceImpl(focusedState)
+    val showLaneNow = validatedState.showLaneStrip ||
+        (validatedState.turnFocusActive && validatedState.laneDecision?.shouldShowFullDiagram == true)
+    val effectiveState = if (showLaneNow != validatedState.showLaneStrip) {
+        validatedState.copy(showLaneStrip = showLaneNow)
+    } else {
+        validatedState
+    }
+    _navigationState.value = effectiveState
     if (prevNav.route?.id != effectiveState.route?.id ||
         prevNav.currentManeuverIndex != effectiveState.currentManeuverIndex ||
         (effectiveState.isOffRoute && !prevNav.isOffRoute)
@@ -235,14 +243,14 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     }
 
     // Update persistent foreground notification directly via NotificationManagerCompat.notify()
-    val currentManeuver = state.currentManeuver
-    if (currentManeuver != null && state.isNavigating) {
+    val currentManeuver = effectiveState.displayedManeuver
+    if (currentManeuver != null && effectiveState.isNavigating) {
         val distStr = BilingualFormatter.formatDistance(
-            state.distanceToNextManeuverMeters,
+            effectiveState.displayedManeuverDistanceMeters,
             s.distanceUnit,
             s.language
         )
-        val etaStr = BilingualFormatter.formatDuration(state.remainingTimeSeconds, s.language)
+        val etaStr = BilingualFormatter.formatDuration(effectiveState.remainingTimeSeconds, s.language)
         NavigationForegroundService.updateNotification(
             context = app,
             title = formatModeNotificationTitle(mode, distStr, etaStr, s.language),

@@ -10,6 +10,7 @@ import com.example.i18n.DistanceUnit
 import com.example.navigation.LaneConfidence
 import com.example.navigation.LaneDirection
 import com.example.navigation.LaneGuidanceDecision
+import com.example.navigation.LaneHighlightTier
 import com.example.navigation.LaneInfo
 import com.example.navigation.LaneTargetSide
 import com.example.navigation.ManeuverType
@@ -128,14 +129,28 @@ object CarManeuverMapper {
         LaneDirection.MERGE_RIGHT -> CarLaneDirection.SHAPE_SLIGHT_RIGHT
     }
 
-    fun toCarLanes(lanes: List<LaneInfo>): List<Lane> {
-        return lanes.map { laneInfo ->
+    fun toCarLanes(
+        lanes: List<LaneInfo>,
+        decision: LaneGuidanceDecision? = null
+    ): List<Lane> {
+        val preferredTargetSet: Set<Int> = decision?.primaryTargetIndices?.toSet() ?: run {
+            val activeSet = lanes.mapIndexedNotNull { idx, lane ->
+                if (lane.isActive || lane.highlightTier == LaneHighlightTier.ACTIVE) idx else null
+            }.toSet()
+            activeSet.ifEmpty {
+                lanes.mapIndexedNotNull { idx, lane ->
+                    if (lane.isValid || lane.isRecommended || lane.highlightTier == LaneHighlightTier.VALID) idx else null
+                }.toSet()
+            }
+        }
+        return lanes.mapIndexed { idx, laneInfo ->
             val builder = Lane.Builder()
             if (laneInfo.isUnmarkedSlot || laneInfo.directions.isEmpty()) {
                 builder.addDirection(CarLaneDirection.create(CarLaneDirection.SHAPE_UNKNOWN, false))
             } else {
+                val isPrimaryTarget = idx in preferredTargetSet
                 for (dir in laneInfo.directions) {
-                    val recommended = laneInfo.isRecommended &&
+                    val recommended = isPrimaryTarget &&
                         (laneInfo.activeDirections.isEmpty() || dir in laneInfo.activeDirections)
                     builder.addDirection(CarLaneDirection.create(toCarLaneDirectionShape(dir), recommended))
                 }
@@ -305,7 +320,7 @@ object CarManeuverMapper {
             (effectiveDecision == null || (effectiveDecision.hasActionableLaneGuidance && effectiveDecision.shouldShowFullDiagram))
 
         if (canAttachCarLanes && maneuver != null) {
-            toCarLanes(maneuver.lanes).forEach { lane ->
+            toCarLanes(maneuver.lanes, effectiveDecision).forEach { lane ->
                 stepBuilder.addLane(lane)
             }
             lanesImageProvider?.invoke(maneuver.lanes)?.let { icon ->

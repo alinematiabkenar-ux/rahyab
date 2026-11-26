@@ -61,6 +61,7 @@ class CarNavigationScreen(
     private var hasShownArrival: Boolean = false
     private var lastRefreshElapsedMs: Long = 0L
     private var lastReportedManeuverIdx: Int = -1
+    private var lastReportedFocusManeuverIdx: Int = -1
     private var lastReportedRerouting: Boolean = false
     private var lastReportedArrived: Boolean = false
     private var lastReportedShowLaneStrip: Boolean = false
@@ -144,6 +145,7 @@ class CarNavigationScreen(
 
                         val nowMs = SystemClock.elapsedRealtime()
                         val criticalChange = nav.currentManeuverIndex != lastReportedManeuverIdx ||
+                            nav.turnFocusManeuverIndex != lastReportedFocusManeuverIdx ||
                             nav.isRerouting != lastReportedRerouting ||
                             nav.hasArrived != lastReportedArrived ||
                             nav.showLaneStrip != lastReportedShowLaneStrip ||
@@ -151,6 +153,7 @@ class CarNavigationScreen(
                         if (criticalChange || lastRefreshElapsedMs == 0L || nowMs - lastRefreshElapsedMs >= 1000L) {
                             lastRefreshElapsedMs = nowMs
                             lastReportedManeuverIdx = nav.currentManeuverIndex
+                            lastReportedFocusManeuverIdx = nav.turnFocusManeuverIndex
                             lastReportedRerouting = nav.isRerouting
                             lastReportedArrived = nav.hasArrived
                             lastReportedShowLaneStrip = nav.showLaneStrip
@@ -193,7 +196,7 @@ class CarNavigationScreen(
                 unit = settings.distanceUnit
             )
             val stepEstimate = CarManeuverMapper.toCarTravelEstimate(
-                remainingDistanceMeters = nav.distanceToNextManeuverMeters,
+                remainingDistanceMeters = nav.displayedManeuverDistanceMeters,
                 remainingTimeSeconds = nav.timeToNextManeuverSeconds,
                 unit = settings.distanceUnit
             )
@@ -244,7 +247,7 @@ class CarNavigationScreen(
         nav: ActiveNavigationState,
         suppressLanes: Boolean
     ): Step {
-        val displayManeuver = nav.activeTurnFocusManeuver ?: nav.currentManeuver
+        val displayManeuver = nav.displayedManeuver
         val includeLanes = !suppressLanes &&
             !nav.isWalkingMode &&
             !nav.isRerouting &&
@@ -366,12 +369,12 @@ class CarNavigationScreen(
             val routingBuilder = RoutingInfo.Builder()
                 .setCurrentStep(
                     step,
-                    CarMapActionsHelper.toCarDistance(nav.distanceToNextManeuverMeters, settings.distanceUnit)
+                    CarMapActionsHelper.toCarDistance(nav.displayedManeuverDistanceMeters, settings.distanceUnit)
                 )
             if (junctionIcon != null) {
                 runCatching { routingBuilder.setJunctionImage(junctionIcon) }
             }
-            val thenManeuver = nav.thenManeuver
+            val thenManeuver = nav.displayedThenManeuver
             if (thenManeuver != null) {
                 val nextStep = CarManeuverMapper.buildStepOrFallback(
                     maneuver = thenManeuver,

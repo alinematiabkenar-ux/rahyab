@@ -156,11 +156,14 @@ data class LaneGuidanceDecision(
             val otherValid = slots.filter { it.tier == LaneHighlightTier.VALID }.map { it.index }
             val allRecommendedCount = slots.count { it.tier != LaneHighlightTier.INACTIVE }
 
-            // If all lanes are equally suitable (either all ACTIVE, or all VALID with no preferred distinction),
-            // skip lane-change guidance altogether.
+            // If all lanes are equally suitable:
+            // - When every lane has an explicit turn/exit arrow matching a directional turn/exit
+            //   (e.g., 2-lane one-way street where both lanes turn right), show "Any lane." / "هر خطی."
+            // - Otherwise (straight/through all-valid), skip lane-change guidance cleanly.
             val allEquallySuitable = (preferred.size == slots.size) ||
                 (preferred.isEmpty() && allRecommendedCount == slots.size)
             if (allEquallySuitable) {
+                val allTurnForManeuver = isAllLanesTurnUseful(maneuver.type, slots)
                 return LaneGuidanceDecision(
                     maneuverIndex = maneuver.index,
                     maneuverType = maneuver.type,
@@ -169,12 +172,14 @@ data class LaneGuidanceDecision(
                     otherValidIndices = otherValid,
                     confidence = LaneConfidence.HIGH,
                     reasons = listOf("all_lanes_equally_suitable"),
-                    suggestedSide = null,
-                    hasActionableLaneGuidance = false,
-                    shouldShowFullDiagram = false,
-                    shouldSkipLaneChangeInstruction = true,
-                    positionTextEn = null,
-                    positionTextFa = null,
+                    suggestedSide = if (allTurnForManeuver) {
+                        LaneGuidanceValidator.resolveSuggestedSide(maneuver.type, slots.indices.toList(), slots.size)
+                    } else null,
+                    hasActionableLaneGuidance = allTurnForManeuver,
+                    shouldShowFullDiagram = allTurnForManeuver,
+                    shouldSkipLaneChangeInstruction = !allTurnForManeuver,
+                    positionTextEn = if (allTurnForManeuver) "Any lane." else null,
+                    positionTextFa = if (allTurnForManeuver) "هر خطی." else null,
                     fallbackManeuverCueEn = fallbackEn,
                     fallbackManeuverCueFa = fallbackFa
                 )
@@ -401,6 +406,19 @@ data class LaneGuidanceDecision(
             3 -> "سه"
             4 -> "چهار"
             else -> persianNum(n)
+        }
+
+        private fun isAllLanesTurnUseful(type: ManeuverType, slots: List<LaneSlotDecision>): Boolean {
+            val turnDirs = when (type) {
+                ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT, ManeuverType.SLIGHT_RIGHT,
+                ManeuverType.EXIT_RIGHT, ManeuverType.RAMP_RIGHT ->
+                    setOf(LaneDirection.RIGHT, LaneDirection.SHARP_RIGHT, LaneDirection.SLIGHT_RIGHT)
+                ManeuverType.LEFT, ManeuverType.SHARP_LEFT, ManeuverType.SLIGHT_LEFT,
+                ManeuverType.EXIT_LEFT, ManeuverType.RAMP_LEFT ->
+                    setOf(LaneDirection.LEFT, LaneDirection.SHARP_LEFT, LaneDirection.SLIGHT_LEFT)
+                else -> return false
+            }
+            return slots.all { slot -> !slot.isUnmarked && slot.directions.any { it in turnDirs } }
         }
 
         private fun persianNum(n: Int): String {

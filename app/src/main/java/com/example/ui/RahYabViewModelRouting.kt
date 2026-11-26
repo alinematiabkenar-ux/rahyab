@@ -280,14 +280,16 @@ internal fun RahYabViewModel.startGpsLossWatchdogImpl() {
                 _navigationState.value = deadReckoned
                 if (_isCameraFollowing.value) {
                     deadReckoned.snappedLocation?.let { loc ->
-                        val s = settings.value
-                        _cameraCommand.value = CameraTargetCommand(
-                            lat = loc.lat,
-                            lon = loc.lon,
-                            zoom = 16.5,
-                            tilt = if (s.is3DView) 55.0 else 0.0,
-                            bearing = if (_isHeadingUpMode.value) deadReckoned.snappedBearing.toDouble() else 0.0
-                        )
+                        val heading = if (_isHeadingUpMode.value) deadReckoned.snappedBearing else 0f
+                        computeFocusOrFollowCameraCommandImpl(
+                            state = deadReckoned,
+                            targetLoc = loc,
+                            speedMps = deadReckoned.currentSpeedMps,
+                            heading = heading,
+                            simMultiplier = 1,
+                            cameraAnimMs = 450,
+                            forceRecenterNow = false
+                        )?.let { cmd -> _cameraCommand.value = cmd }
                     }
                 }
             }

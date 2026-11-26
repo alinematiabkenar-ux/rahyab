@@ -362,28 +362,35 @@ class CarMapSurfaceRenderer(
         wasFocusCameraActive = focusCamera
         lastFocusManeuverIndex = if (focusCamera) nav.turnFocusManeuverIndex else -1
         lastFocusStage = if (focusCamera) nav.turnFocusStage else com.example.navigation.TurnFocusStage.NONE
-        val update = followController.computeFollowCameraUpdate(
-            lat = loc.lat, lon = loc.lon, speedMps = speedMps, headingDegrees = bearing,
-            isHeadingUpMode = true, is3DView = currentSettings.is3DView, isNavigating = isNavigating,
-            forceImmediate = force || enteringFocus || tightening || exitingFocus, isWalkingMode = isWalking
-        ) ?: return
-        val carTarget = CarCameraProfile.computeCarCameraTarget(
-            basePhoneZoom = update.zoom, carMapView = currentSettings.carMapView, isNavigating = isNavigating,
-            is3DView = currentSettings.is3DView, focusCameraActive = focusCamera, focusIsHighway = nav.turnFocusIsHighway,
-            focusClosePair = nav.turnFocusClosePair, focusTargetZoom = nav.turnFocusTargetZoom, focusStage = nav.turnFocusStage
-        )
-        if (focusCamera && !force && !enteringFocus && !tightening &&
-            CarCameraProfile.shouldSkipStationaryFocusUpdate(
-                lastFocusSnapshot, loc, carTarget.zoom, carTarget.tilt, update.bearing, speedMps, nav.route?.id, nav.turnFocusManeuverIndex
-            )
-        ) return
         val area = if (stableArea.width() > 0 && stableArea.height() > 0) stableArea else visibleArea
-        val padding = CarCameraProfile.computeCameraPadding(surfaceWidth, surfaceHeight, area, update.anchorLowerThird, carTarget.anchorLowerQuarter)
-        val animMs = CarCameraProfile.resolveCarCameraAnimMs(enteringFocus, tightening, exitingFocus, nav.turnFocusEnterAnimMs, update.animationDurationMs)
-        val pos = CameraPosition.Builder().target(LatLng(update.lat, update.lon)).zoom(carTarget.zoom)
-            .tilt(carTarget.tilt).bearing(update.bearing).padding(padding).build()
-        lastFocusSnapshot = if (focusCamera) CarCameraSnapshot(loc.lat, loc.lon, carTarget.zoom, carTarget.tilt, update.bearing, nav.route?.id, nav.turnFocusManeuverIndex) else null
-        CarScreenDiagnosticsStore.onCameraUpdated(carTarget.zoom, carTarget.tilt)
+        val targetLat: Double; val targetLon: Double; val zoom: Double; val tilt: Double; val camBearing: Double
+        val anchorLowerThird: Boolean; val anchorLowerQuarter: Boolean; val animMs: Int
+        if (focusCamera) {
+            val f = CarCameraProfile.computeFocusCameraUpdate(nav, loc, bearing, currentSettings.is3DView, enteringFocus, tightening)
+            if (!force && !enteringFocus && !tightening && CarCameraProfile.shouldSkipStationaryFocusUpdate(
+                    lastFocusSnapshot, f.target, f.zoom, f.tilt, f.bearing, speedMps, nav.route?.id, nav.turnFocusManeuverIndex
+                )
+            ) return
+            targetLat = f.target.lat; targetLon = f.target.lon; zoom = f.zoom; tilt = f.tilt; camBearing = f.bearing
+            anchorLowerThird = false; anchorLowerQuarter = true; animMs = f.animMs
+        } else {
+            val update = followController.computeFollowCameraUpdate(
+                lat = loc.lat, lon = loc.lon, speedMps = speedMps, headingDegrees = bearing,
+                isHeadingUpMode = true, is3DView = currentSettings.is3DView, isNavigating = isNavigating,
+                forceImmediate = force || exitingFocus, isWalkingMode = isWalking
+            ) ?: return
+            val carTarget = CarCameraProfile.computeCarCameraTarget(
+                basePhoneZoom = update.zoom, carMapView = currentSettings.carMapView, isNavigating = isNavigating,
+                is3DView = currentSettings.is3DView, focusCameraActive = false
+            )
+            targetLat = update.lat; targetLon = update.lon; zoom = carTarget.zoom; tilt = carTarget.tilt; camBearing = update.bearing
+            anchorLowerThird = update.anchorLowerThird; anchorLowerQuarter = false
+            animMs = CarCameraProfile.resolveCarCameraAnimMs(false, false, exitingFocus, nav.turnFocusEnterAnimMs, update.animationDurationMs)
+        }
+        val padding = CarCameraProfile.computeCameraPadding(surfaceWidth, surfaceHeight, area, anchorLowerThird, anchorLowerQuarter)
+        val pos = CameraPosition.Builder().target(LatLng(targetLat, targetLon)).zoom(zoom).tilt(tilt).bearing(camBearing).padding(padding).build()
+        lastFocusSnapshot = if (focusCamera) CarCameraSnapshot(targetLat, targetLon, zoom, tilt, camBearing, nav.route?.id, nav.turnFocusManeuverIndex) else null
+        CarScreenDiagnosticsStore.onCameraUpdated(zoom, tilt)
         runCatching {
             if (animMs <= 0) map.moveCamera(CameraUpdateFactory.newCameraPosition(pos))
             else map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), animMs)

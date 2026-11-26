@@ -370,19 +370,20 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     ) {
         val prev = navigationState.value
         val wasArrived = prev.hasArrived
-        val curManeuver = prev.activeTurnFocusManeuver ?: state.currentManeuver
-        val decision = if (state.isNavigating && state.effectiveTravelMode == TravelMode.DRIVE && curManeuver != null && curManeuver.lanes.isNotEmpty()) {
-            val edgeLanes = state.route?.let { LaneGuidanceValidator.findApproachEdgeLaneCount(it, curManeuver) }
-            LaneGuidanceDecision.evaluate(curManeuver, edgeLaneCountBeforeManeuver = edgeLanes)
+        val focused = headlessTurnFocusTracker.applyToState(
+            state, speedMps = state.currentSpeedMps, settings = s, trafficSignals = headlessCachedHazards
+        )
+        val displayM = focused.displayedManeuver
+        val decision = if (focused.isNavigating && focused.effectiveTravelMode == TravelMode.DRIVE && displayM != null && displayM.lanes.isNotEmpty()) {
+            val edgeLanes = focused.route?.let { LaneGuidanceValidator.findApproachEdgeLaneCount(it, displayM) }
+            LaneGuidanceDecision.evaluate(displayM, edgeLaneCountBeforeManeuver = edgeLanes)
         } else null
-        val enriched = headlessTurnFocusTracker.applyToState(
-            state.copy(
-                laneConfidence = decision?.confidence ?: LaneConfidence.HIGH,
-                laneConfidenceReasons = decision?.reasons.orEmpty(),
-                laneSideHint = decision?.suggestedSide,
-                laneDecision = decision
-            ),
-            speedMps = state.currentSpeedMps, settings = s, trafficSignals = headlessCachedHazards
+        val enriched = focused.copy(
+            showLaneStrip = focused.showLaneStrip || (focused.turnFocusActive && decision?.shouldShowFullDiagram == true),
+            laneConfidence = decision?.confidence ?: LaneConfidence.HIGH,
+            laneConfidenceReasons = decision?.reasons.orEmpty(),
+            laneSideHint = decision?.suggestedSide,
+            laneDecision = decision
         )
         if (prev.route?.id != enriched.route?.id || prev.currentManeuverIndex != enriched.currentManeuverIndex) {
             app.voiceGuidanceManager.cancelStaleForManeuverOrReroute(enriched.route?.id, enriched.currentManeuverIndex)
