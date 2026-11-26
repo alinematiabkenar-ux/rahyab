@@ -114,7 +114,7 @@ internal fun DriveTopOverlay(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (navState.isNavigating && navState.currentManeuver != null) {
-            val activeManeuver = navState.currentManeuver!!
+            val activeManeuver = navState.activeTurnFocusManeuver ?: navState.currentManeuver!!
             val isDriveMode = navState.effectiveTravelMode == TravelMode.DRIVE
             TurnByTurnTopHud(
                 maneuver = activeManeuver,

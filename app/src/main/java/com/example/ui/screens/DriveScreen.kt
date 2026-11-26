@@ -157,8 +157,9 @@ fun DriveScreen(
             stopSigns = if (settings.showStopSignsOnMap) visibleStopSigns else emptyList(),
             parkedCarLocation = parkedCar?.let { com.example.navigation.LatLon(it.lat, it.lon) },
             maneuverArrow = if (navState.isNavigating && !navState.hasArrived) {
-                remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 10.0).toInt(), navState.effectiveTravelMode) {
-                    com.example.map.ManeuverArrowGeometry.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode)
+                val focusIdx = if (navState.turnFocusActive) navState.turnFocusManeuverIndex else -1
+                remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 10.0).toInt(), navState.effectiveTravelMode, focusIdx) {
+                    com.example.map.ManeuverArrowGeometry.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, focusManeuverIndex = focusIdx)
                 }
             } else null,
             laneOverlay = run {
@@ -167,14 +168,18 @@ fun DriveScreen(
                 } else {
                     com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
                 }
+                val focusIdx = if (navState.turnFocusActive) navState.turnFocusManeuverIndex else -1
                 if (navState.isNavigating && !navState.hasArrived && navState.laneConfidence != com.example.navigation.LaneConfidence.LOW) {
-                    remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 15.0).toInt(), navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, navState.turnFocusActive, laneStartDist.toInt()) {
-                        com.example.map.LaneOverlayBuilder.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, startDistanceMeters = laneStartDist, isFocusMode = navState.turnFocusActive)
+                    remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 15.0).toInt(), navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, navState.turnFocusActive, laneStartDist.toInt(), focusIdx) {
+                        com.example.map.LaneOverlayBuilder.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, startDistanceMeters = laneStartDist, isFocusMode = navState.turnFocusActive, focusManeuverIndex = focusIdx)
                     }
                 } else null
             },
             enlargedManeuverArrow = navState.isNavigating && !navState.hasArrived && navState.turnFocusActive &&
-                (navState.laneConfidence == com.example.navigation.LaneConfidence.LOW || (navState.route?.maneuvers?.getOrNull(navState.currentManeuverIndex)?.lanes?.size ?: 0) < 2),
+                (navState.laneConfidence == com.example.navigation.LaneConfidence.LOW ||
+                    (navState.activeTurnFocusManeuver ?: navState.currentManeuver)?.let { m ->
+                        m.lanes.size < 2 || navState.route?.let { r -> !com.example.map.LaneOverlayBuilder.hasSupportedRoadLaneGeometry(r, m) } == true
+                    } != false),
             laneHighlightColorHex = settings.laneHighlightColor.hex,
             laneConfidence = navState.laneConfidence,
             destinationParkingSpots = destParkingSpots, show3DBuildings = settings.show3DBuildings,

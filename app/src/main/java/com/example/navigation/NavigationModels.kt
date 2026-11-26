@@ -122,7 +122,8 @@ data class RouteManeuver(
     val laneSource: LaneSource = if (lanes.isNotEmpty()) LaneSource.DIRECT else LaneSource.NONE,
     val carriedLaneDistanceMeters: Double = 0.0,
     val carriedLaneHadInterveningIntersection: Boolean = false,
-    val rawLaneJson: String = ""
+    val rawLaneJson: String = "",
+    val hasRoadLaneGeometry: Boolean = true
 )
 
 enum class RoadAlertKind {
@@ -183,7 +184,8 @@ data class OfflineRoute(
     val hasTolls: Boolean = false,
     val isFastestRoute: Boolean = false,
     val isShortestRoute: Boolean = false,
-    val travelMode: TravelMode = TravelMode.DRIVE
+    val travelMode: TravelMode = TravelMode.DRIVE,
+    val hasRoadLaneGeometry: Boolean = true
 )
 
 data class RouteOptions(
@@ -251,6 +253,10 @@ data class ActiveNavigationState(
     val turnFocusTriggerDistanceMeters: Double = 0.0,
     val turnFocusEnterAnimMs: Int = TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS,
     val turnFocusClosePair: Boolean = false,
+    val turnFocusStage: TurnFocusStage = TurnFocusStage.NONE,
+    val turnFocusTargetZoom: Double = 0.0,
+    val turnFocusFinalSignalDistanceBeforeManeuverMeters: Double? = null,
+    val turnFocusPassedFinalSignal: Boolean = false,
     val showJunctionPreview: Boolean = false,
     val activeJunctionManeuverIndex: Int = -1,
     val dismissedJunctionManeuverIndex: Int = -1,
@@ -265,6 +271,10 @@ data class ActiveNavigationState(
         get() = if (isWalkingMode) TravelMode.WALK else travelMode
     val currentManeuver: RouteManeuver?
         get() = route?.maneuvers?.getOrNull(currentManeuverIndex)
+    val activeTurnFocusManeuver: RouteManeuver?
+        get() = if (turnFocusActive && turnFocusManeuverIndex >= 0) {
+            route?.maneuvers?.firstOrNull { it.index == turnFocusManeuverIndex }
+        } else null
     val activeJunctionManeuver: RouteManeuver?
         get() = route?.maneuvers?.firstOrNull { it.index == activeJunctionManeuverIndex } ?: currentManeuver
 

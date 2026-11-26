@@ -108,7 +108,7 @@ object LaneMapLayerHelper {
                     setFilter(Expression.eq(Expression.get("is_target"), Expression.literal(false)))
                     setProperties(
                         PropertyFactory.lineColor("#64748B"),
-                        PropertyFactory.lineOpacity(0.45f),
+                        PropertyFactory.lineOpacity(0.58f),
                         PropertyFactory.lineWidth(laneWidthExpr),
                         PropertyFactory.lineCap(Property.LINE_CAP_BUTT),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)

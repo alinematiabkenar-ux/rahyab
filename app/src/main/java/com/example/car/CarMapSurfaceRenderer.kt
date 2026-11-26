@@ -72,6 +72,8 @@ class CarMapSurfaceRenderer(
     private var userPannedDuringFocus: Boolean = false
     private var lastRouteId: String? = null
     private var lastFocusManeuverIndex: Int = -1
+    private var lastFocusStage = com.example.navigation.TurnFocusStage.NONE
+    private var lastFocusSnapshot: CarCameraSnapshot? = null
 
     private val autoRecenterRunnable = Runnable {
         if (app.navigationHub.navigationState.value.turnFocusActive && userPannedDuringFocus) return@Runnable
@@ -277,9 +279,8 @@ class CarMapSurfaceRenderer(
                 if (!nav.turnFocusActive && userPannedDuringFocus) userPannedDuringFocus = false
                 if (nav.isRerouting || nav.route?.id != lastRouteId) {
                     runCatching { mapLibreMap?.cancelTransitions() }
-                    lastRouteId = nav.route?.id
-                    wasFocusCameraActive = false
-                    lastFocusManeuverIndex = -1
+                    lastRouteId = nav.route?.id; wasFocusCameraActive = false; lastFocusManeuverIndex = -1
+                    lastFocusStage = com.example.navigation.TurnFocusStage.NONE; lastFocusSnapshot = null
                 }
                 updatePositionAndRoutes(); refreshSpeedOverlay()
                 if (isFollowing && !nav.isRerouting) {
@@ -354,54 +355,38 @@ class CarMapSurfaceRenderer(
         val nav = app.navigationHub.navigationState.value
         val focusCamera = isNavigating && !nav.isRerouting && nav.turnFocusCameraActive && !userPannedDuringFocus && !isWalking
         val enteringFocus = focusCamera && (!wasFocusCameraActive || nav.turnFocusManeuverIndex != lastFocusManeuverIndex)
+        val tightening = focusCamera && !enteringFocus &&
+            lastFocusStage != com.example.navigation.TurnFocusStage.LANE_LEVEL &&
+            nav.turnFocusStage == com.example.navigation.TurnFocusStage.LANE_LEVEL
         val exitingFocus = !focusCamera && wasFocusCameraActive
         wasFocusCameraActive = focusCamera
         lastFocusManeuverIndex = if (focusCamera) nav.turnFocusManeuverIndex else -1
+        lastFocusStage = if (focusCamera) nav.turnFocusStage else com.example.navigation.TurnFocusStage.NONE
         val update = followController.computeFollowCameraUpdate(
             lat = loc.lat, lon = loc.lon, speedMps = speedMps, headingDegrees = bearing,
             isHeadingUpMode = true, is3DView = currentSettings.is3DView, isNavigating = isNavigating,
-            forceImmediate = force || enteringFocus || exitingFocus, isWalkingMode = isWalking
+            forceImmediate = force || enteringFocus || tightening || exitingFocus, isWalkingMode = isWalking
         ) ?: return
-
         val carTarget = CarCameraProfile.computeCarCameraTarget(
-            basePhoneZoom = update.zoom,
-            carMapView = currentSettings.carMapView,
-            isNavigating = isNavigating,
-            is3DView = currentSettings.is3DView,
-            focusCameraActive = focusCamera,
-            focusIsHighway = nav.turnFocusIsHighway,
-            focusClosePair = nav.turnFocusClosePair
+            basePhoneZoom = update.zoom, carMapView = currentSettings.carMapView, isNavigating = isNavigating,
+            is3DView = currentSettings.is3DView, focusCameraActive = focusCamera, focusIsHighway = nav.turnFocusIsHighway,
+            focusClosePair = nav.turnFocusClosePair, focusTargetZoom = nav.turnFocusTargetZoom, focusStage = nav.turnFocusStage
         )
-        val area = if (stableArea.width() > 0 && stableArea.height() > 0) stableArea else visibleArea
-        val padding = CarCameraProfile.computeCameraPadding(
-            surfaceWidth = surfaceWidth,
-            surfaceHeight = surfaceHeight,
-            area = area,
-            anchorLowerThird = update.anchorLowerThird,
-            anchorLowerQuarter = carTarget.anchorLowerQuarter
-        )
-        val animMs = when {
-            enteringFocus -> nav.turnFocusEnterAnimMs.coerceIn(
-                com.example.navigation.TurnFocusPlanner.MIN_ENTER_ANIM_MS,
-                CarCameraProfile.FOCUS_ENTER_ANIM_MS
+        if (focusCamera && !force && !enteringFocus && !tightening &&
+            CarCameraProfile.shouldSkipStationaryFocusUpdate(
+                lastFocusSnapshot, loc, carTarget.zoom, carTarget.tilt, update.bearing, speedMps, nav.route?.id, nav.turnFocusManeuverIndex
             )
-            exitingFocus -> CarCameraProfile.FOCUS_EXIT_ANIM_MS
-            else -> update.animationDurationMs
-        }
-        val pos = CameraPosition.Builder()
-            .target(LatLng(update.lat, update.lon))
-            .zoom(carTarget.zoom)
-            .tilt(carTarget.tilt)
-            .bearing(update.bearing)
-            .padding(padding)
-            .build()
+        ) return
+        val area = if (stableArea.width() > 0 && stableArea.height() > 0) stableArea else visibleArea
+        val padding = CarCameraProfile.computeCameraPadding(surfaceWidth, surfaceHeight, area, update.anchorLowerThird, carTarget.anchorLowerQuarter)
+        val animMs = CarCameraProfile.resolveCarCameraAnimMs(enteringFocus, tightening, exitingFocus, nav.turnFocusEnterAnimMs, update.animationDurationMs)
+        val pos = CameraPosition.Builder().target(LatLng(update.lat, update.lon)).zoom(carTarget.zoom)
+            .tilt(carTarget.tilt).bearing(update.bearing).padding(padding).build()
+        lastFocusSnapshot = if (focusCamera) CarCameraSnapshot(loc.lat, loc.lon, carTarget.zoom, carTarget.tilt, update.bearing, nav.route?.id, nav.turnFocusManeuverIndex) else null
         CarScreenDiagnosticsStore.onCameraUpdated(carTarget.zoom, carTarget.tilt)
         runCatching {
-            if (animMs <= 0) {
-                map.moveCamera(CameraUpdateFactory.newCameraPosition(pos))
-            } else {
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), animMs)
-            }
+            if (animMs <= 0) map.moveCamera(CameraUpdateFactory.newCameraPosition(pos))
+            else map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), animMs)
         }
     }
 
@@ -432,8 +417,8 @@ class CarMapSurfaceRenderer(
         loadedStyle = null
         mapLibreMap = null
         lastLoadedStyleJson = null
-        wasFocusCameraActive = false
-        userPannedDuringFocus = false
+        wasFocusCameraActive = false; userPannedDuringFocus = false
+        lastFocusStage = com.example.navigation.TurnFocusStage.NONE; lastFocusSnapshot = null
         speedOverlay = null
         runCatching {
             mapView?.onPause()

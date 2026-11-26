@@ -137,7 +137,7 @@ class UserPreferencesRepository(private val context: Context) {
                 ),
                 turnFocusModeEnabled = prefs[KEY_TURN_FOCUS_MODE] ?: true,
                 turnFocusBeepsEnabled = prefs[KEY_TURN_FOCUS_BEEPS] ?: true,
-                turnFocusCityDistanceMeters = (prefs[KEY_TURN_FOCUS_CITY_DIST] ?: 500).coerceIn(300, 800),
+                turnFocusCityDistanceMeters = (prefs[KEY_TURN_FOCUS_CITY_DIST] ?: 1000).coerceIn(300, 1500),
                 turnFocusHighwayDistanceMeters = (prefs[KEY_TURN_FOCUS_HIGHWAY_DIST] ?: 1000).coerceIn(800, 1500),
                 turnFocusWideHighwayEarlierEnabled = prefs[KEY_TURN_FOCUS_WIDE_HIGHWAY] ?: true,
                 turnFocusShortPhraseEnabled = prefs[KEY_TURN_FOCUS_SHORT_PHRASE] ?: false,

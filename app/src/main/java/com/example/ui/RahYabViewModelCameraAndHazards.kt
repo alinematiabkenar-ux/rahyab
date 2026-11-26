@@ -198,7 +198,8 @@ internal fun mergeUniqueCamerasImpl(
 }
 
 internal fun RahYabViewModel.refreshNearbyTrafficLightsImpl(lat: Double, lon: Double, force: Boolean = false) {
-    if (!settings.value.showTrafficLights && !settings.value.alertTrafficLightEnabled) {
+    val neededForTurnFocus = _navigationState.value.isNavigating && settings.value.turnFocusModeEnabled
+    if (!settings.value.showTrafficLights && !settings.value.alertTrafficLightEnabled && !neededForTurnFocus) {
         if (_visibleTrafficLights.value.isNotEmpty()) _visibleTrafficLights.value = emptyList()
         _aheadTrafficLightMeters.value = null
         return
@@ -381,7 +382,9 @@ internal fun RahYabViewModel.emitImmediateFollowCameraImpl(is3DViewOverride: Boo
     if (nav.isNavigating && nav.turnFocusCameraActive && !turnFocusUserPannedDuringActive &&
         nav.effectiveTravelMode == com.example.navigation.TravelMode.DRIVE
     ) {
-        val focusZoom = when {
+        val focusZoom = if (nav.turnFocusTargetZoom > 0.0) {
+            nav.turnFocusTargetZoom
+        } else when {
             nav.turnFocusIsHighway -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_HIGHWAY
             nav.turnFocusClosePair -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
             else -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CITY

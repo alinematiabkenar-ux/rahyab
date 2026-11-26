@@ -217,10 +217,10 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
                 val maxLat = route.shape.maxOf { it.lat } + 0.05
                 val minLon = route.shape.minOf { it.lon } - 0.05
                 val maxLon = route.shape.maxOf { it.lon } + 0.05
-                headlessCachedHazards = app.offlineSearchEngine.queryRoadHazardsInBounds(minLat, maxLat, minLon, maxLon)
-                headlessCachedFraCrossings = withContext(Dispatchers.IO) {
-                    app.extrasDbReader.queryFraCrossingsInBounds(minLat, maxLat, minLon, maxLon)
-                }
+                val baseHazards = app.offlineSearchEngine.queryRoadHazardsInBounds(minLat, maxLat, minLon, maxLon)
+                val routeSignals = app.offlineSearchEngine.queryTrafficSignalsInBounds(minLat, maxLat, minLon, maxLon)
+                headlessCachedHazards = baseHazards + routeSignals
+                headlessCachedFraCrossings = withContext(Dispatchers.IO) { app.extrasDbReader.queryFraCrossingsInBounds(minLat, maxLat, minLon, maxLon) }
                 val fraOnly = com.example.data.packs.ExtrasMatchingHelper.buildFraOnlyRouteAlerts(route.shape, headlessCachedHazards, headlessCachedFraCrossings)
                 if (fraOnly.isNotEmpty()) {
                     val curNav = stateStore._navigationState.value
@@ -370,7 +370,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     ) {
         val prev = navigationState.value
         val wasArrived = prev.hasArrived
-        val curManeuver = state.currentManeuver
+        val curManeuver = prev.activeTurnFocusManeuver ?: state.currentManeuver
         val decision = if (state.isNavigating && state.effectiveTravelMode == TravelMode.DRIVE && curManeuver != null && curManeuver.lanes.isNotEmpty()) {
             val edgeLanes = state.route?.let { LaneGuidanceValidator.findApproachEdgeLaneCount(it, curManeuver) }
             LaneGuidanceDecision.evaluate(curManeuver, edgeLaneCountBeforeManeuver = edgeLanes)
@@ -382,8 +382,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
                 laneSideHint = decision?.suggestedSide,
                 laneDecision = decision
             ),
-            speedMps = state.currentSpeedMps,
-            settings = s
+            speedMps = state.currentSpeedMps, settings = s, trafficSignals = headlessCachedHazards
         )
         if (prev.route?.id != enriched.route?.id || prev.currentManeuverIndex != enriched.currentManeuverIndex) {
             app.voiceGuidanceManager.cancelStaleForManeuverOrReroute(enriched.route?.id, enriched.currentManeuverIndex)

@@ -244,14 +244,15 @@ class CarNavigationScreen(
         nav: ActiveNavigationState,
         suppressLanes: Boolean
     ): Step {
+        val displayManeuver = nav.activeTurnFocusManeuver ?: nav.currentManeuver
         val includeLanes = !suppressLanes &&
             !nav.isWalkingMode &&
             !nav.isRerouting &&
             (nav.showLaneStrip || nav.turnFocusActive) &&
-            nav.currentManeuver?.lanes?.isNotEmpty() == true
+            displayManeuver?.lanes?.isNotEmpty() == true
         return runCatching {
             CarManeuverMapper.buildStepOrFallback(
-                maneuver = nav.currentManeuver,
+                maneuver = displayManeuver,
                 language = settings.language,
                 includeLanes = includeLanes,
                 lanesImageProvider = { lanes ->
@@ -263,7 +264,7 @@ class CarNavigationScreen(
             )
         }.getOrElse {
             CarManeuverMapper.buildStepOrFallback(
-                maneuver = nav.currentManeuver,
+                maneuver = displayManeuver,
                 language = settings.language,
                 includeLanes = false
             )

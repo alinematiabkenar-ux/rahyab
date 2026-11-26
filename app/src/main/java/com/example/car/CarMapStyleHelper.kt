@@ -113,13 +113,15 @@ internal object CarMapStyleHelper {
                 })
             } else emptyFc
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(puckFc)
+            val focusIdx = if (nav.turnFocusActive) nav.turnFocusManeuverIndex else -1
             val arrow = if (nav.isNavigating && !nav.hasArrived) {
                 com.example.map.ManeuverArrowGeometry.build(
                     route = nav.route,
                     currentManeuverIndex = nav.currentManeuverIndex,
                     snappedShapeIndex = nav.snappedShapeIndex,
                     distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
-                    travelMode = nav.effectiveTravelMode
+                    travelMode = nav.effectiveTravelMode,
+                    focusManeuverIndex = focusIdx
                 )
             } else {
                 null
@@ -141,7 +143,8 @@ internal object CarMapStyleHelper {
                     isOffRoute = nav.isOffRoute,
                     enabled = laneHighlightEnabled,
                     startDistanceMeters = laneStartDist,
-                    isFocusMode = nav.turnFocusActive
+                    isFocusMode = nav.turnFocusActive,
+                    focusManeuverIndex = focusIdx
                 )
             } else null
             MapExtraLayersHelper.updateManeuverArrow(
@@ -168,6 +171,7 @@ internal object CarMapStyleHelper {
         } else {
             com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
         }
+        val focusIdx = if (nav.turnFocusActive) nav.turnFocusManeuverIndex else -1
         return nav.isNavigating && !nav.hasArrived && com.example.map.LaneOverlayBuilder.build(
             route = nav.route,
             currentManeuverIndex = nav.currentManeuverIndex,
@@ -177,7 +181,8 @@ internal object CarMapStyleHelper {
             isOffRoute = nav.isOffRoute,
             enabled = laneHighlightEnabled,
             startDistanceMeters = laneStartDist,
-            isFocusMode = nav.turnFocusActive
+            isFocusMode = nav.turnFocusActive,
+            focusManeuverIndex = focusIdx
         ) != null
     }
 

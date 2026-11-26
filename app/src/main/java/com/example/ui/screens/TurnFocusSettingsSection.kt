@@ -121,7 +121,7 @@ fun TurnFocusSettingsSection(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    listOf(300, 500, 800).forEach { meters ->
+                    listOf(500, 800, 1000).forEach { meters ->
                         FilterChip(
                             selected = settings.turnFocusCityDistanceMeters == meters,
                             onClick = { viewModel.setTurnFocusCityDistanceMeters(meters) },

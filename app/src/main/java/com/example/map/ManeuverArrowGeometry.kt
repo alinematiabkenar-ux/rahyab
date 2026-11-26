@@ -34,27 +34,39 @@ object ManeuverArrowGeometry {
         currentManeuverIndex: Int,
         snappedShapeIndex: Int,
         distanceToNextManeuverMeters: Double,
-        travelMode: TravelMode
+        travelMode: TravelMode,
+        focusManeuverIndex: Int = -1
     ): ManeuverArrowData? {
         if (travelMode == TravelMode.WALK) return null
         if (route == null || route.shape.size < 2) return null
-        val maneuver = route.maneuvers.getOrNull(currentManeuverIndex) ?: return null
+        val isFocusLocked = focusManeuverIndex >= 0
+        val maneuver = if (isFocusLocked) {
+            route.maneuvers.firstOrNull { it.index == focusManeuverIndex }
+        } else {
+            route.maneuvers.getOrNull(currentManeuverIndex)
+        } ?: return null
         if (!isArrowEligibleManeuver(maneuver.type)) return null
 
-        val maxDistance = if (maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad) {
+        val maxDistance = if (isFocusLocked || maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad) {
             MAX_DISTANCE_HIGHWAY_METERS
         } else {
             MAX_DISTANCE_CITY_METERS
         }
-        if (distanceToNextManeuverMeters > maxDistance || distanceToNextManeuverMeters < 0.0) return null
-
-        val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
-        if (snappedShapeIndex >= pivotIdx || pivotIdx <= 0 || pivotIdx >= route.shape.lastIndex) {
+        if (!isFocusLocked && (distanceToNextManeuverMeters > maxDistance || distanceToNextManeuverMeters < 0.0)) {
             return null
         }
 
+        val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
+        if (pivotIdx <= 0 || pivotIdx >= route.shape.lastIndex) return null
+        if (!isFocusLocked && snappedShapeIndex >= pivotIdx) return null
+
         val beforePts = collectDistancePointsBackward(route.shape, pivotIdx, BEFORE_MANEUVER_METERS)
-        val afterPts = collectDistancePointsForward(route.shape, pivotIdx, AFTER_MANEUVER_METERS)
+        val afterMeters = if (isFocusLocked) {
+            if (maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad) 95.0 else 45.0
+        } else {
+            AFTER_MANEUVER_METERS
+        }
+        val afterPts = collectDistancePointsForward(route.shape, pivotIdx, afterMeters)
 
         val combined = ArrayList<LatLon>(beforePts.size + afterPts.size + 1)
         combined.addAll(beforePts)

@@ -78,7 +78,11 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         turnFocusManeuverIndex = prevNav.turnFocusManeuverIndex,
         turnFocusTriggerDistanceMeters = prevNav.turnFocusTriggerDistanceMeters,
         turnFocusEnterAnimMs = prevNav.turnFocusEnterAnimMs,
-        turnFocusClosePair = prevNav.turnFocusClosePair
+        turnFocusClosePair = prevNav.turnFocusClosePair,
+        turnFocusStage = prevNav.turnFocusStage,
+        turnFocusTargetZoom = prevNav.turnFocusTargetZoom,
+        turnFocusFinalSignalDistanceBeforeManeuverMeters = prevNav.turnFocusFinalSignalDistanceBeforeManeuverMeters,
+        turnFocusPassedFinalSignal = prevNav.turnFocusPassedFinalSignal
     )
     val validatedState = evaluateLaneConfidenceImpl(baseState)
     val effectiveState = evaluateTurnFocusImpl(validatedState, speedMps)
@@ -108,7 +112,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     if (navPos != null && state.isNavigating && !state.hasArrived && s.showStopSignsOnMap) {
         refreshNearbyStopSignsImpl(navPos.lat, navPos.lon)
     }
-    if (isDriveMode && navPos != null && (s.showTrafficLights || s.alertTrafficLightEnabled) && state.isNavigating && !state.hasArrived) {
+    if (isDriveMode && navPos != null && (s.showTrafficLights || s.alertTrafficLightEnabled || s.turnFocusModeEnabled) && state.isNavigating && !state.hasArrived) {
         refreshNearbyTrafficLightsImpl(navPos.lat, navPos.lon)
         if (s.showTrafficLights) {
             val evalFix = GpsFix(

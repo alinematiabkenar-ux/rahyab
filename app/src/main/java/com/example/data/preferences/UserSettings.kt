@@ -26,7 +26,7 @@ data class UserSettings(
     // F1-F7: Turn Focus Mode (3 beeps, zoom, blue lanes)
     val turnFocusModeEnabled: Boolean = true,
     val turnFocusBeepsEnabled: Boolean = true,
-    val turnFocusCityDistanceMeters: Int = 500,
+    val turnFocusCityDistanceMeters: Int = 1000,
     val turnFocusHighwayDistanceMeters: Int = 1000,
     val turnFocusWideHighwayEarlierEnabled: Boolean = true,
     val turnFocusShortPhraseEnabled: Boolean = false,

@@ -28,7 +28,7 @@ internal fun RahYabViewModel.evaluateLaneConfidenceImpl(
         )
     }
     val route = state.route ?: return state
-    val maneuver = state.currentManeuver ?: return state
+    val maneuver = state.activeTurnFocusManeuver ?: state.currentManeuver ?: return state
     if (maneuver.lanes.isEmpty()) {
         return state.copy(
             laneConfidence = LaneConfidence.HIGH,

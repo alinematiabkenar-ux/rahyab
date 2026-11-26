@@ -251,8 +251,10 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val turnFocusTracker = com.example.navigation.TurnFocusSessionTracker()
     internal var turnFocusUserPannedDuringActive: Boolean = false
     internal var turnFocusPendingEnterAnim: Boolean = false
+    internal var turnFocusPendingTightenAnim: Boolean = false
     internal var turnFocusPendingEnterAnimMs: Int = com.example.navigation.TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS
     internal var turnFocusPendingExitAnim: Boolean = false
+    internal var lastFocusCameraTarget: CameraTargetCommand? = null
     internal val speedLimitDropTracker = com.example.navigation.SpeedLimitDropVoiceTracker()
     internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()
     internal var cachedHpmsThroughLanes: Int? = null

@@ -103,6 +103,19 @@ object LaneOverlayBuilder {
         return maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad
     }
 
+    fun hasSupportedRoadLaneGeometry(route: OfflineRoute, maneuver: RouteManeuver): Boolean {
+        if (!route.hasRoadLaneGeometry || !maneuver.hasRoadLaneGeometry) return false
+        if (maneuver.laneSource == com.example.navigation.LaneSource.CARRIED_ALIGNED &&
+            maneuver.carriedLaneHadInterveningIntersection
+        ) {
+            return false
+        }
+        val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
+        if (pivotIdx <= 0) return false
+        val approachLen = distanceAlongShape(route.shape, 0, pivotIdx)
+        return approachLen >= 10.0
+    }
+
     fun build(
         route: OfflineRoute?,
         currentManeuverIndex: Int,
@@ -112,7 +125,8 @@ object LaneOverlayBuilder {
         isOffRoute: Boolean = false,
         enabled: Boolean = true,
         startDistanceMeters: Double = BEFORE_MANEUVER_METERS,
-        isFocusMode: Boolean = false
+        isFocusMode: Boolean = false,
+        focusManeuverIndex: Int = -1
     ): LaneOverlayData? {
         if (!enabled || isOffRoute || travelMode != TravelMode.DRIVE) return null
         if (route == null || route.shape.size < 2) return null
@@ -123,11 +137,14 @@ object LaneOverlayBuilder {
             currentManeuverIndex = currentManeuverIndex,
             snappedShapeIndex = snappedShapeIndex,
             distanceToNextManeuverMeters = distanceToNextManeuverMeters,
-            startDistanceMeters = effectiveStart
+            startDistanceMeters = effectiveStart,
+            isFocusMode = isFocusMode,
+            focusManeuverIndex = focusManeuverIndex
         ) ?: return null
 
         val lanes = maneuver.lanes
         if (lanes.size < 2) return null
+        if (!hasSupportedRoadLaneGeometry(route, maneuver)) return null
 
         // LN4: If every lane is valid, show no overlay
         val allValid = lanes.all { it.isValid || it.isRecommended || it.isActive || it.highlightTier != LaneHighlightTier.INACTIVE }
@@ -154,7 +171,12 @@ object LaneOverlayBuilder {
         )
         if (approachDrawMeters < 5.0) return null
         val beforePts = collectBackward(route.shape, pivotIdx, approachDrawMeters)
-        val afterPts = collectForward(route.shape, pivotIdx, AFTER_MANEUVER_METERS)
+        val afterMeters = if (isFocusMode && (maneuver.isHighwayExitOrSplit || maneuver.isHighwayRoad)) {
+            45.0
+        } else {
+            AFTER_MANEUVER_METERS
+        }
+        val afterPts = collectForward(route.shape, pivotIdx, afterMeters)
         val centerLine = ArrayList<LatLon>(beforePts.size + afterPts.size + 1).apply {
             addAll(beforePts)
             add(route.shape[pivotIdx])
@@ -205,8 +227,18 @@ object LaneOverlayBuilder {
         currentManeuverIndex: Int,
         snappedShapeIndex: Int,
         distanceToNextManeuverMeters: Double,
-        startDistanceMeters: Double
+        startDistanceMeters: Double,
+        isFocusMode: Boolean,
+        focusManeuverIndex: Int
     ): RouteManeuver? {
+        // 0. While Turn Focus is actively tracking a specific maneuver, stay synchronized to it
+        //    through red-light stops and until Turn Focus releases on completion
+        if (isFocusMode && focusManeuverIndex >= 0) {
+            val focusM = route.maneuvers.firstOrNull { it.index == focusManeuverIndex }
+            if (focusM != null) {
+                return if (focusM.lanes.size >= 2) focusM else null
+            }
+        }
         // 1. Check if we are still within 30 m past the previous maneuver (keep overlay until 30 m after)
         if (currentManeuverIndex > 0) {
             val prev = route.maneuvers.getOrNull(currentManeuverIndex - 1)
@@ -370,52 +402,28 @@ object LaneOverlayBuilder {
         return sum
     }
 
-    private fun collectBackward(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double): List<LatLon> {
-        val rev = ArrayList<LatLon>()
-        var acc = 0.0
-        var i = pivotIdx
-        while (i > 0 && acc < targetMeters) {
-            val cur = shape[i]
-            val prev = shape[i - 1]
-            val seg = OfflinePlaceSearchEngine.haversineMeters(cur.lat, cur.lon, prev.lat, prev.lon)
-            if (seg <= 0.05) {
-                i--
-                continue
-            }
-            if (acc + seg >= targetMeters) {
-                val frac = ((targetMeters - acc) / seg).coerceIn(0.0, 1.0)
-                rev.add(interpolate(cur, prev, frac))
-                break
-            } else {
-                rev.add(prev)
-                acc += seg
-                i--
-            }
-        }
-        return rev.asReversed()
-    }
+    private fun collectBackward(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double): List<LatLon> =
+        collectAlong(shape, pivotIdx, targetMeters, step = -1).asReversed()
 
-    private fun collectForward(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double): List<LatLon> {
+    private fun collectForward(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double): List<LatLon> =
+        collectAlong(shape, pivotIdx, targetMeters, step = 1)
+
+    private fun collectAlong(shape: List<LatLon>, pivotIdx: Int, targetMeters: Double, step: Int): List<LatLon> {
         val out = ArrayList<LatLon>()
         var acc = 0.0
         var i = pivotIdx
-        while (i < shape.lastIndex && acc < targetMeters) {
+        while (acc < targetMeters && (if (step < 0) i > 0 else i < shape.lastIndex)) {
             val cur = shape[i]
-            val next = shape[i + 1]
-            val seg = OfflinePlaceSearchEngine.haversineMeters(cur.lat, cur.lon, next.lat, next.lon)
-            if (seg <= 0.05) {
-                i++
-                continue
-            }
+            val adj = shape[i + step]
+            val seg = OfflinePlaceSearchEngine.haversineMeters(cur.lat, cur.lon, adj.lat, adj.lon)
+            if (seg <= 0.05) { i += step; continue }
             if (acc + seg >= targetMeters) {
-                val frac = ((targetMeters - acc) / seg).coerceIn(0.0, 1.0)
-                out.add(interpolate(cur, next, frac))
+                out.add(interpolate(cur, adj, ((targetMeters - acc) / seg).coerceIn(0.0, 1.0)))
                 break
-            } else {
-                out.add(next)
-                acc += seg
-                i++
             }
+            out.add(adj)
+            acc += seg
+            i += step
         }
         return out
     }

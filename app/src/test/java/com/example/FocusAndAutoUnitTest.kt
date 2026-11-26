@@ -106,9 +106,9 @@ class FocusAndAutoUnitTest {
             )
         )
         val tracker = TurnFocusSessionTracker()
-        val cfg = TurnFocusConfig()
+        val cfg = TurnFocusConfig(cityDistanceMeters = 500.0)
 
-        // 550 m away: not yet triggered
+        // 550 m away: not yet triggered with custom 500 m setting
         val far = tracker.evaluate(route, 1, 45, 550.0, 13f, TravelMode.DRIVE, true, false, false, false, cfg)
         assertFalse(far.isActive)
         assertFalse(far.justEntered)
@@ -243,7 +243,7 @@ class FocusAndAutoUnitTest {
         assertTrue(defaults.turnFocusModeEnabled)
         assertTrue(defaults.turnFocusBeepsEnabled)
         assertFalse(defaults.turnFocusShortPhraseEnabled)
-        assertEquals(500, defaults.turnFocusCityDistanceMeters)
+        assertEquals(1000, defaults.turnFocusCityDistanceMeters)
         assertEquals(1000, defaults.turnFocusHighwayDistanceMeters)
         assertTrue(defaults.turnFocusWideHighwayEarlierEnabled)
         assertEquals("500m (0.3mi)", formatFocusDistanceChip(500, DistanceUnit.IMPERIAL, AppLanguage.ENGLISH))

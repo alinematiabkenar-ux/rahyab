@@ -1,27 +1,34 @@
 package com.example.ui
 
 import com.example.car.CarCameraProfile
+import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.map.LaneOverlayBuilder
 import com.example.navigation.ActiveNavigationState
+import com.example.navigation.ApproachSignalKind
 import com.example.navigation.LatLon
 import com.example.navigation.TravelMode
 import com.example.navigation.TurnFocusConfig
 import com.example.navigation.TurnFocusPlanner
+import com.example.navigation.TurnFocusStage
+import com.example.navigation.TurnFocusStageHelper
+import com.example.navigation.ValhallaResponseParser
 
 /**
- * F2 & F4: Orchestrates Turn Focus mode evaluation, independent optional audio cue playback,
- * immediate focus zoom/tilt/lower-quarter camera animation (adaptive duration, never gated on
- * speech or beeps), suppression of speed zoom-out during focus, and honoring user pan/pinch.
+ * F2 & F4: Orchestrates two-stage Turn Focus mode evaluation (1 km approach framing -> traffic-signal
+ * or distance/time lane-level tightening -> completion-based release), independent optional audio cues,
+ * suppression of speed zoom-out during focus, rock-steady red-light stop behavior, and user pan respect.
  */
 internal fun RahYabViewModel.resetTurnFocusImpl() {
     voiceManager.cancelTurnFocusBeeps()
     turnFocusTracker.reset()
     turnFocusUserPannedDuringActive = false
     turnFocusPendingEnterAnim = false
+    turnFocusPendingTightenAnim = false
     turnFocusPendingEnterAnimMs = TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS
     turnFocusPendingExitAnim = false
+    lastFocusCameraTarget = null
     val cur = _navigationState.value
-    if (cur.turnFocusActive || cur.turnFocusCameraActive) {
+    if (cur.turnFocusActive || cur.turnFocusCameraActive || cur.turnFocusStage != TurnFocusStage.NONE) {
         _navigationState.value = cur.copy(
             turnFocusActive = false,
             turnFocusCameraActive = false,
@@ -29,7 +36,11 @@ internal fun RahYabViewModel.resetTurnFocusImpl() {
             turnFocusManeuverIndex = -1,
             turnFocusTriggerDistanceMeters = 0.0,
             turnFocusEnterAnimMs = TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS,
-            turnFocusClosePair = false
+            turnFocusClosePair = false,
+            turnFocusStage = TurnFocusStage.NONE,
+            turnFocusTargetZoom = 0.0,
+            turnFocusFinalSignalDistanceBeforeManeuverMeters = null,
+            turnFocusPassedFinalSignal = false
         )
     }
 }
@@ -46,6 +57,11 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
         highwayDistanceMeters = s.turnFocusHighwayDistanceMeters.toDouble(),
         wideHighwayEarlierEnabled = s.turnFocusWideHighwayEarlierEnabled
     )
+    val availableSignals = if (_visibleTrafficLights.value.isNotEmpty()) {
+        _visibleTrafficLights.value + cachedDbHazards
+    } else {
+        cachedDbHazards
+    }
     val decision = turnFocusTracker.evaluate(
         route = state.route,
         currentManeuverIndex = state.currentManeuverIndex,
@@ -59,15 +75,19 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
         hasArrived = state.hasArrived,
         config = config,
         snappedLocation = state.snappedLocation,
-        gpsAgeMs = state.lastGpsFixAgeMs
+        gpsAgeMs = state.lastGpsFixAgeMs,
+        snappedBearing = state.snappedBearing,
+        trafficSignals = availableSignals
     )
 
     if (decision.justEnded && !decision.isActive) {
         voiceManager.cancelTurnFocusBeeps()
         turnFocusUserPannedDuringActive = false
         turnFocusPendingEnterAnim = false
+        turnFocusPendingTightenAnim = false
         turnFocusPendingEnterAnimMs = TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS
         turnFocusPendingExitAnim = true
+        lastFocusCameraTarget = null
         val endedState = state.copy(
             turnFocusActive = false,
             turnFocusCameraActive = false,
@@ -75,17 +95,27 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
             turnFocusManeuverIndex = -1,
             turnFocusTriggerDistanceMeters = 0.0,
             turnFocusEnterAnimMs = TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS,
-            turnFocusClosePair = false
+            turnFocusClosePair = false,
+            turnFocusStage = TurnFocusStage.NONE,
+            turnFocusTargetZoom = 0.0,
+            turnFocusFinalSignalDistanceBeforeManeuverMeters = null,
+            turnFocusPassedFinalSignal = false
         )
         _navigationState.value = endedState
         return endedState
     }
 
+    val signalDist = if (decision.isActive && decision.matchedSignal.kind != ApproachSignalKind.NONE) {
+        decision.matchedSignal.distanceBeforeManeuverMeters
+    } else null
+
     if (decision.justEntered) {
         turnFocusUserPannedDuringActive = false
         turnFocusPendingExitAnim = false
         turnFocusPendingEnterAnim = true
+        turnFocusPendingTightenAnim = false
         turnFocusPendingEnterAnimMs = decision.recommendedEnterAnimMs
+        lastFocusCameraTarget = null
         val showPanelNow = state.showLaneStrip || (state.laneDecision?.shouldShowFullDiagram == true)
         val isClosePair = decision.closeFollowingTurnDistanceMeters != null
         // Visual guidance starts on THIS navigation update — never delayed by speech or optional beeps
@@ -97,7 +127,11 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
             turnFocusManeuverIndex = decision.maneuverIndex,
             turnFocusTriggerDistanceMeters = decision.triggerDistanceMeters,
             turnFocusEnterAnimMs = decision.recommendedEnterAnimMs,
-            turnFocusClosePair = isClosePair
+            turnFocusClosePair = isClosePair,
+            turnFocusStage = decision.stage,
+            turnFocusTargetZoom = decision.targetZoom,
+            turnFocusFinalSignalDistanceBeforeManeuverMeters = signalDist,
+            turnFocusPassedFinalSignal = decision.matchedSignal.hasPassedSignal
         )
         _navigationState.value = enteredState
 
@@ -112,12 +146,12 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
                     !cur.isOffRoute &&
                     !cur.hasArrived &&
                     cur.route?.id == expectedRouteId &&
-                    cur.currentManeuver?.index == expectedManeuverIndex
+                    (cur.activeTurnFocusManeuver?.index ?: cur.currentManeuver?.index) == expectedManeuverIndex
             }
             val phraseProvider: () -> String? = {
                 val cur = _navigationState.value
                 val curSettings = settings.value
-                val maneuver = cur.currentManeuver
+                val maneuver = cur.activeTurnFocusManeuver ?: cur.currentManeuver
                 if (!isStillValid() || maneuver == null) {
                     null
                 } else {
@@ -153,14 +187,25 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
         return enteredState
     }
 
+    if (decision.justTightenedToLaneLevel) {
+        turnFocusPendingTightenAnim = true
+    }
+
+    val keepPanelVisible = state.showLaneStrip ||
+        (decision.isActive && state.laneDecision?.shouldShowFullDiagram == true)
     val updated = state.copy(
+        showLaneStrip = keepPanelVisible,
         turnFocusActive = decision.isActive,
         turnFocusCameraActive = decision.isActive && state.turnFocusCameraActive,
         turnFocusIsHighway = if (decision.isActive) decision.isHighway else false,
         turnFocusManeuverIndex = if (decision.isActive) decision.maneuverIndex else -1,
         turnFocusTriggerDistanceMeters = if (decision.isActive) decision.triggerDistanceMeters else 0.0,
         turnFocusEnterAnimMs = if (decision.isActive) state.turnFocusEnterAnimMs else TurnFocusPlanner.DEFAULT_ENTER_ANIM_MS,
-        turnFocusClosePair = decision.isActive && decision.closeFollowingTurnDistanceMeters != null
+        turnFocusClosePair = decision.isActive && decision.closeFollowingTurnDistanceMeters != null,
+        turnFocusStage = if (decision.isActive) decision.stage else TurnFocusStage.NONE,
+        turnFocusTargetZoom = if (decision.isActive) decision.targetZoom else 0.0,
+        turnFocusFinalSignalDistanceBeforeManeuverMeters = signalDist,
+        turnFocusPassedFinalSignal = decision.isActive && decision.matchedSignal.hasPassedSignal
     )
     _navigationState.value = updated
     return updated
@@ -180,28 +225,53 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
     val activeRouteId = state.route?.id
     val currentGeneration = _cameraGeneration.value
 
-    // F4: Active Turn Focus camera override — suppresses speed zoom-out & keeps car in lower quarter
+    // F4: Active Turn Focus camera override — suppresses speed zoom-out, keeps car in lower quarter,
+    // avoids restarting enter animation on steady GPS updates, and holds steady during red-light stops
     if (state.turnFocusCameraActive && !turnFocusUserPannedDuringActive && mode == TravelMode.DRIVE) {
         val enterAnim = turnFocusPendingEnterAnim
         turnFocusPendingEnterAnim = false
+        val tightenAnim = turnFocusPendingTightenAnim
+        turnFocusPendingTightenAnim = false
+
+        val focusZoom = if (state.turnFocusTargetZoom > 0.0) {
+            state.turnFocusTargetZoom
+        } else {
+            TurnFocusStageHelper.computeTargetZoom(
+                stage = if (state.turnFocusStage != TurnFocusStage.NONE) state.turnFocusStage else TurnFocusStage.LANE_LEVEL,
+                remainingMeters = state.distanceToNextManeuverMeters,
+                isHighway = state.turnFocusIsHighway,
+                isClosePair = state.turnFocusClosePair
+            )
+        }
+        val focusTilt = if (s.is3DView) TurnFocusPlanner.FOCUS_TILT_3D else 0.0
+
+        // Stationary red-light guard: keep camera rock-steady without re-triggering animations
+        val prevFocus = lastFocusCameraTarget
+        if (!enterAnim && !tightenAnim && !forceRecenterNow && speedMps < 0.5f && prevFocus != null &&
+            prevFocus.routeId == activeRouteId &&
+            prevFocus.maneuverIndex == state.turnFocusManeuverIndex &&
+            kotlin.math.abs(prevFocus.zoom - focusZoom) < 0.05 &&
+            kotlin.math.abs(prevFocus.tilt - focusTilt) < 0.5 &&
+            ValhallaResponseParser.angleDiffDegrees(prevFocus.bearing, heading.toDouble()) < 4.0 &&
+            OfflinePlaceSearchEngine.haversineMeters(prevFocus.lat, prevFocus.lon, targetLoc.lat, targetLoc.lon) < 2.5
+        ) {
+            return null
+        }
+
         val animMs = when {
             enterAnim -> turnFocusPendingEnterAnimMs.coerceIn(
                 TurnFocusPlanner.MIN_ENTER_ANIM_MS,
                 CarCameraProfile.FOCUS_ENTER_ANIM_MS
             )
+            tightenAnim -> TurnFocusStageHelper.TIGHTEN_ANIM_MS
             state.isSimulatingDrive -> cameraAnimMs
-            else -> minOf(650, state.turnFocusEnterAnimMs.coerceAtLeast(TurnFocusPlanner.MIN_ENTER_ANIM_MS))
+            else -> minOf(380, cameraAnimMs.coerceAtLeast(TurnFocusPlanner.MIN_ENTER_ANIM_MS))
         }
-        val focusZoom = when {
-            state.turnFocusIsHighway -> TurnFocusPlanner.FOCUS_ZOOM_HIGHWAY
-            state.turnFocusClosePair -> TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
-            else -> TurnFocusPlanner.FOCUS_ZOOM_CITY
-        }
-        return CameraTargetCommand(
+        val cmd = CameraTargetCommand(
             lat = targetLoc.lat,
             lon = targetLoc.lon,
             zoom = focusZoom,
-            tilt = if (s.is3DView) TurnFocusPlanner.FOCUS_TILT_3D else 0.0,
+            tilt = focusTilt,
             bearing = heading.toDouble(),
             animationDurationMs = animMs,
             anchorLowerThird = false,
@@ -211,8 +281,11 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
             generation = currentGeneration,
             isFocusCommand = true
         )
+        lastFocusCameraTarget = cmd
+        return cmd
     }
 
+    lastFocusCameraTarget = null
     val exitAnim = turnFocusPendingExitAnim
     if (exitAnim) turnFocusPendingExitAnim = false
 
@@ -225,7 +298,9 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
             distanceToNextManeuverMeters = state.distanceToNextManeuverMeters,
             travelMode = mode,
             isOffRoute = state.isOffRoute,
-            enabled = s.laneHighlightOnMapEnabled
+            enabled = s.laneHighlightOnMapEnabled,
+            isFocusMode = state.turnFocusActive,
+            focusManeuverIndex = state.turnFocusManeuverIndex
         ) != null
 
     val update = cameraFollowController.computeFollowCameraUpdate(

@@ -1,6 +1,13 @@
 package com.example.car
 
 import android.graphics.Rect
+import com.example.data.search.OfflinePlaceSearchEngine
+import com.example.navigation.LatLon
+import com.example.navigation.TurnFocusPlanner
+import com.example.navigation.TurnFocusStage
+import com.example.navigation.TurnFocusStageHelper
+import com.example.navigation.ValhallaResponseParser
+import kotlin.math.abs
 
 /**
  * A1: Android Auto map zoom profile.
@@ -24,6 +31,16 @@ data class CarCameraTarget(
     val anchorLowerQuarter: Boolean
 )
 
+data class CarCameraSnapshot(
+    val lat: Double,
+    val lon: Double,
+    val zoom: Double,
+    val tilt: Double,
+    val bearing: Double,
+    val routeId: String?,
+    val maneuverIndex: Int
+)
+
 object CarCameraProfile {
     const val CAR_TILT_NAVIGATING = 40.0
     const val CAR_TILT_FREE_DRIVE = 30.0
@@ -36,7 +53,8 @@ object CarCameraProfile {
 
     /**
      * Pure computation of car camera zoom and tilt.
-     * When [focusCameraActive] is true, overrides the normal car profile with Turn Focus zoom/tilt.
+     * When [focusCameraActive] is true, overrides the normal car profile with two-stage
+     * Turn Focus zoom/tilt (1 km approach framing -> tightened lane-level view).
      */
     fun computeCarCameraTarget(
         basePhoneZoom: Double,
@@ -45,12 +63,16 @@ object CarCameraProfile {
         is3DView: Boolean,
         focusCameraActive: Boolean = false,
         focusIsHighway: Boolean = false,
-        focusClosePair: Boolean = false
+        focusClosePair: Boolean = false,
+        focusTargetZoom: Double = 0.0,
+        focusStage: TurnFocusStage = TurnFocusStage.NONE
     ): CarCameraTarget {
         if (focusCameraActive) {
             val focusZoom = when {
+                focusTargetZoom > 0.0 -> focusTargetZoom
+                focusStage == TurnFocusStage.APPROACH -> TurnFocusStageHelper.APPROACH_MIN_ZOOM_1KM
                 focusIsHighway -> FOCUS_ZOOM_HIGHWAY
-                focusClosePair -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
+                focusClosePair -> TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
                 else -> FOCUS_ZOOM_CITY
             }
             return CarCameraTarget(
@@ -70,6 +92,38 @@ object CarCameraProfile {
             tilt = tilt,
             anchorLowerQuarter = false
         )
+    }
+
+    fun resolveCarCameraAnimMs(
+        enteringFocus: Boolean,
+        tighteningToLaneLevel: Boolean,
+        exitingFocus: Boolean,
+        focusEnterAnimMs: Int,
+        defaultFollowAnimMs: Int
+    ): Int = when {
+        enteringFocus -> focusEnterAnimMs.coerceIn(TurnFocusPlanner.MIN_ENTER_ANIM_MS, FOCUS_ENTER_ANIM_MS)
+        tighteningToLaneLevel -> TurnFocusStageHelper.TIGHTEN_ANIM_MS
+        exitingFocus -> FOCUS_EXIT_ANIM_MS
+        else -> defaultFollowAnimMs
+    }
+
+    fun shouldSkipStationaryFocusUpdate(
+        previous: CarCameraSnapshot?,
+        currentLoc: LatLon,
+        targetZoom: Double,
+        targetTilt: Double,
+        bearing: Double,
+        speedMps: Float,
+        routeId: String?,
+        maneuverIndex: Int
+    ): Boolean {
+        if (previous == null || speedMps >= 0.5f) return false
+        return previous.routeId == routeId &&
+            previous.maneuverIndex == maneuverIndex &&
+            abs(previous.zoom - targetZoom) < 0.05 &&
+            abs(previous.tilt - targetTilt) < 0.5 &&
+            ValhallaResponseParser.angleDiffDegrees(previous.bearing, bearing) < 4.0 &&
+            OfflinePlaceSearchEngine.haversineMeters(previous.lat, previous.lon, currentLoc.lat, currentLoc.lon) < 2.5
     }
 
     /**
