@@ -157,11 +157,20 @@ fun DriveScreen(
                     com.example.map.ManeuverArrowGeometry.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode)
                 }
             } else null,
-            laneOverlay = if (navState.isNavigating && !navState.hasArrived) {
-                remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 15.0).toInt(), navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled) {
-                    com.example.map.LaneOverlayBuilder.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled)
+            laneOverlay = run {
+                val laneStartDist = if (navState.turnFocusActive && navState.turnFocusTriggerDistanceMeters > 0.0) {
+                    navState.turnFocusTriggerDistanceMeters
+                } else {
+                    com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
                 }
-            } else null,
+                if (navState.isNavigating && !navState.hasArrived) {
+                    remember(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, (navState.distanceToNextManeuverMeters / 15.0).toInt(), navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, navState.turnFocusActive, laneStartDist.toInt()) {
+                        com.example.map.LaneOverlayBuilder.build(navState.route, navState.currentManeuverIndex, navState.snappedShapeIndex, navState.distanceToNextManeuverMeters, navState.effectiveTravelMode, navState.isOffRoute, settings.laneHighlightOnMapEnabled, startDistanceMeters = laneStartDist, isFocusMode = navState.turnFocusActive)
+                    }
+                } else null
+            },
+            enlargedManeuverArrow = navState.isNavigating && !navState.hasArrived && navState.turnFocusActive &&
+                (navState.route?.maneuvers?.getOrNull(navState.currentManeuverIndex)?.lanes?.size ?: 0) < 2,
             laneHighlightColorHex = settings.laneHighlightColor.hex,
             destinationParkingSpots = destParkingSpots, show3DBuildings = settings.show3DBuildings,
             positionMarkerStyle = settings.positionMarkerStyle,

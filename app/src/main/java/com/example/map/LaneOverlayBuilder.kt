@@ -19,7 +19,7 @@ enum class LaneHighlightColor(val code: String, val hex: String) {
 
     companion object {
         fun fromCode(code: String?): LaneHighlightColor =
-            entries.firstOrNull { it.code.equals(code, ignoreCase = true) } ?: RED
+            entries.firstOrNull { it.code.equals(code, ignoreCase = true) } ?: BLUE
     }
 }
 
@@ -40,7 +40,8 @@ data class LaneArrowMarker(
     val laneIndex: Int,
     val position: LatLon,
     val bearingDegrees: Float,
-    val direction: LaneDirection
+    val direction: LaneDirection,
+    val isLargeArrow: Boolean = false
 )
 
 data class LaneOverlayData(
@@ -68,8 +69,10 @@ object LaneOverlayBuilder {
 
     const val LANE_WIDTH_METERS = 3.6
     const val BEFORE_MANEUVER_METERS = 500.0
+    const val MAX_FOCUS_START_METERS = 1600.0
     const val AFTER_MANEUVER_METERS = 30.0
     const val ARROW_BEFORE_MANEUVER_METERS = 40.0
+    const val FOCUS_ARROW_INTERVAL_METERS = 150.0
     private const val METERS_PER_DEG_LAT = 111_320.0
 
     fun computeLaneOffsetsMeters(laneCount: Int, isOneWay: Boolean): List<Double> {
@@ -106,16 +109,20 @@ object LaneOverlayBuilder {
         distanceToNextManeuverMeters: Double,
         travelMode: TravelMode,
         isOffRoute: Boolean = false,
-        enabled: Boolean = true
+        enabled: Boolean = true,
+        startDistanceMeters: Double = BEFORE_MANEUVER_METERS,
+        isFocusMode: Boolean = false
     ): LaneOverlayData? {
         if (!enabled || isOffRoute || travelMode != TravelMode.DRIVE) return null
         if (route == null || route.shape.size < 2) return null
 
+        val effectiveStart = startDistanceMeters.coerceIn(100.0, MAX_FOCUS_START_METERS)
         val maneuver = selectEligibleManeuver(
             route = route,
             currentManeuverIndex = currentManeuverIndex,
             snappedShapeIndex = snappedShapeIndex,
-            distanceToNextManeuverMeters = distanceToNextManeuverMeters
+            distanceToNextManeuverMeters = distanceToNextManeuverMeters,
+            startDistanceMeters = effectiveStart
         ) ?: return null
 
         val lanes = maneuver.lanes
@@ -136,7 +143,7 @@ object LaneOverlayBuilder {
         if (targetFlags.none { it } || targetFlags.all { it }) return null
 
         val pivotIdx = maneuver.beginShapeIndex.coerceIn(0, route.shape.lastIndex)
-        val beforePts = collectBackward(route.shape, pivotIdx, BEFORE_MANEUVER_METERS)
+        val beforePts = collectBackward(route.shape, pivotIdx, effectiveStart)
         val afterPts = collectForward(route.shape, pivotIdx, AFTER_MANEUVER_METERS)
         val centerLine = ArrayList<LatLon>(beforePts.size + afterPts.size + 1).apply {
             addAll(beforePts)
@@ -170,8 +177,8 @@ object LaneOverlayBuilder {
             )
         }
 
-        val arrowMarkers = laneFeatures.filter { it.isTarget }.mapNotNull { strip ->
-            buildArrowMarkerBeforePivot(strip, pivotLocalIndex)
+        val arrowMarkers = laneFeatures.filter { it.isTarget }.flatMap { strip ->
+            buildArrowMarkersForStrip(strip, pivotLocalIndex, isFocusMode)
         }
 
         return LaneOverlayData(
@@ -187,7 +194,8 @@ object LaneOverlayBuilder {
         route: OfflineRoute,
         currentManeuverIndex: Int,
         snappedShapeIndex: Int,
-        distanceToNextManeuverMeters: Double
+        distanceToNextManeuverMeters: Double,
+        startDistanceMeters: Double
     ): RouteManeuver? {
         // 1. Check if we are still within 30 m past the previous maneuver (keep overlay until 30 m after)
         if (currentManeuverIndex > 0) {
@@ -199,13 +207,13 @@ object LaneOverlayBuilder {
                 }
             }
         }
-        // 2. Active upcoming maneuver within 500 m before (or still before/within 30 m after its pivot)
+        // 2. Active upcoming maneuver within startDistanceMeters before (or still within 30 m after its pivot)
         val cur = route.maneuvers.getOrNull(currentManeuverIndex) ?: return null
         if (cur.lanes.size < 2) return null
         if (snappedShapeIndex > cur.beginShapeIndex) {
             val distPast = distanceAlongShape(route.shape, cur.beginShapeIndex, snappedShapeIndex)
             if (distPast > AFTER_MANEUVER_METERS) return null
-        } else if (distanceToNextManeuverMeters > BEFORE_MANEUVER_METERS) {
+        } else if (distanceToNextManeuverMeters > startDistanceMeters) {
             return null
         }
         return cur
@@ -216,9 +224,42 @@ object LaneOverlayBuilder {
             ?: info.directions.firstOrNull()
             ?: LaneDirection.THROUGH
 
-    private fun buildArrowMarkerBeforePivot(
+    private fun buildArrowMarkersForStrip(
         strip: LaneStripFeature,
-        pivotLocalIndex: Int
+        pivotLocalIndex: Int,
+        isFocusMode: Boolean
+    ): List<LaneArrowMarker> {
+        val primary = buildArrowMarkerAtDistanceBeforePivot(
+            strip = strip,
+            pivotLocalIndex = pivotLocalIndex,
+            distanceBeforePivotMeters = ARROW_BEFORE_MANEUVER_METERS,
+            isLargeArrow = isFocusMode,
+            fallbackToMidpoint = true
+        ) ?: return emptyList()
+        if (!isFocusMode) return listOf(primary)
+        val out = ArrayList<LaneArrowMarker>()
+        out.add(primary)
+        var d = ARROW_BEFORE_MANEUVER_METERS + FOCUS_ARROW_INTERVAL_METERS
+        while (d <= MAX_FOCUS_START_METERS) {
+            val marker = buildArrowMarkerAtDistanceBeforePivot(
+                strip = strip,
+                pivotLocalIndex = pivotLocalIndex,
+                distanceBeforePivotMeters = d,
+                isLargeArrow = false,
+                fallbackToMidpoint = false
+            ) ?: break
+            out.add(marker)
+            d += FOCUS_ARROW_INTERVAL_METERS
+        }
+        return out
+    }
+
+    private fun buildArrowMarkerAtDistanceBeforePivot(
+        strip: LaneStripFeature,
+        pivotLocalIndex: Int,
+        distanceBeforePivotMeters: Double,
+        isLargeArrow: Boolean,
+        fallbackToMidpoint: Boolean
     ): LaneArrowMarker? {
         val pts = strip.points
         if (pts.size < 2) return null
@@ -230,20 +271,20 @@ object LaneOverlayBuilder {
             val prev = pts[i - 1]
             val seg = OfflinePlaceSearchEngine.haversineMeters(cur.lat, cur.lon, prev.lat, prev.lon)
             if (seg > 0.05) {
-                if (acc + seg >= ARROW_BEFORE_MANEUVER_METERS) {
-                    val frac = ((ARROW_BEFORE_MANEUVER_METERS - acc) / seg).coerceIn(0.0, 1.0)
+                if (acc + seg >= distanceBeforePivotMeters) {
+                    val frac = ((distanceBeforePivotMeters - acc) / seg).coerceIn(0.0, 1.0)
                     val pos = interpolate(cur, prev, frac)
                     val bearing = ValhallaResponseParser.bearingDegrees(prev, cur).toFloat()
-                    return LaneArrowMarker(strip.laneIndex, pos, bearing, strip.arrowDirection)
+                    return LaneArrowMarker(strip.laneIndex, pos, bearing, strip.arrowDirection, isLargeArrow)
                 }
                 acc += seg
             }
             i--
         }
-        // Fallback: midpoint of approach segment if route start is closer than 40 m
+        if (!fallbackToMidpoint) return null
         val pos = interpolate(pts[0], pts[safePivot], 0.5)
         val bearing = ValhallaResponseParser.bearingDegrees(pts[0], pts[safePivot]).toFloat()
-        return LaneArrowMarker(strip.laneIndex, pos, bearing, strip.arrowDirection)
+        return LaneArrowMarker(strip.laneIndex, pos, bearing, strip.arrowDirection, isLargeArrow)
     }
 
     internal fun offsetPolylineMeters(

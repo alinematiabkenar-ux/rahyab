@@ -47,6 +47,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
     private var lastOverspeedBeepMs: Long = 0L
     private var lastCameraChimeMs: Long = 0L
     private val laneChangeTonePlayer = LaneChangeTonePlayer()
+    private val turnFocusAudioPlayer = TurnFocusAudioPlayer(appContext)
 
     private lateinit var speechQueue: VoiceSpeechQueue
     private val engineSelector: VoiceTtsEngineSelector = VoiceTtsEngineSelector(
@@ -210,6 +211,7 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
 
     fun stopSpeaking() {
         laneChangeTonePlayer.cancelPending()
+        turnFocusAudioPlayer.cancelPending()
         speechQueue.stopAllSpeech()
     }
 
@@ -363,56 +365,34 @@ class VoiceGuidanceManager(context: Context) : TextToSpeech.OnInitListener {
         return phrase
     }
 
-    fun resetDeduplication() {
-        lastSpokenKey = ""
-        lastSpokenTimeMs = 0L
+    /** F2: Plays 3 short Turn Focus beeps (waiting <= 4 s for voice), optionally speaks blue-lane cue, then calls [onAllBeepsFinished]. */
+    fun playTurnFocusBeeps(language: AppLanguage, speakShortPhrase: Boolean, onAllBeepsFinished: () -> Unit) {
+        if (!voiceEnabled) { onAllBeepsFinished(); return }
+        val effectiveLang = resolveEffectiveLanguage(language)
+        turnFocusAudioPlayer.playTurnFocusBeeps(isVoiceSpeaking = { isSpeakingOrQueued() }) {
+            onAllBeepsFinished()
+            if (speakShortPhrase && voiceEnabled && engineSelector.isInitialized) {
+                val phrase = com.example.i18n.stringsFor(effectiveLang).turnFocusShortPhraseSpoken
+                _lastSpokenText.value = phrase; speechQueue.speakRaw(phrase, effectiveLang)
+            }
+        }
     }
 
-    fun shutdown() {
-        laneChangeTonePlayer.cancelPending()
-        speechQueue.stopAllSpeech()
-        engineSelector.shutdown()
-    }
+    fun cancelTurnFocusBeeps() = turnFocusAudioPlayer.cancelPending()
+    fun resetDeduplication() { lastSpokenKey = ""; lastSpokenTimeMs = 0L }
+    fun shutdown() { laneChangeTonePlayer.cancelPending(); turnFocusAudioPlayer.cancelPending(); speechQueue.stopAllSpeech(); engineSelector.shutdown() }
 
     companion object {
         const val GOOGLE_TTS_PACKAGE = "com.google.android.tts"
-
-        fun splitPersianAndEnglishSegments(text: String): List<SpeechSegment> =
-            VoiceSpeechQueue.splitPersianAndEnglishSegments(text)
-
-        fun formatReroutingPrompt(language: AppLanguage): String =
-            VoicePhraseBuilder.formatReroutingPrompt(language)
-
-        fun formatAlertAnnouncement(
-            alert: AheadAlert,
-            language: AppLanguage,
-            unit: DistanceUnit = DistanceUnit.IMPERIAL
-        ): String = VoicePhraseBuilder.formatAlertAnnouncement(alert, language, unit)
-
-        fun formatArrivalPrompt(type: ManeuverType, destinationName: String, language: AppLanguage): String =
-            VoicePhraseBuilder.formatArrivalPrompt(type, destinationName, language)
-
-        fun formatStartInstruction(route: OfflineRoute, language: AppLanguage): String =
-            VoicePhraseBuilder.formatStartInstruction(route, language)
-
-        fun isEarlyPrepareStage(stage: String): Boolean =
-            VoicePhraseBuilder.isEarlyPrepareStage(stage)
-
-        fun formatSpokenInstruction(
-            maneuver: RouteManeuver,
-            distanceMeters: Double,
-            unit: DistanceUnit,
-            language: AppLanguage,
-            includeLaneGuidance: Boolean = true,
-            announcementStage: String = ""
-        ): String = VoicePhraseBuilder.formatSpokenInstruction(
-            maneuver, distanceMeters, unit, language, includeLaneGuidance, announcementStage
-        )
-
-        fun buildLaneVoiceClause(lanes: List<LaneInfo>, language: AppLanguage): String? =
-            VoicePhraseBuilder.buildLaneVoiceClause(lanes, language)
-
-        internal fun formatSpokenDistance(meters: Double, unit: DistanceUnit, language: AppLanguage): String =
-            VoicePhraseBuilder.formatSpokenDistance(meters, unit, language)
+        fun splitPersianAndEnglishSegments(text: String): List<SpeechSegment> = VoiceSpeechQueue.splitPersianAndEnglishSegments(text)
+        fun formatReroutingPrompt(language: AppLanguage): String = VoicePhraseBuilder.formatReroutingPrompt(language)
+        fun formatAlertAnnouncement(alert: AheadAlert, language: AppLanguage, unit: DistanceUnit = DistanceUnit.IMPERIAL): String = VoicePhraseBuilder.formatAlertAnnouncement(alert, language, unit)
+        fun formatArrivalPrompt(type: ManeuverType, destinationName: String, language: AppLanguage): String = VoicePhraseBuilder.formatArrivalPrompt(type, destinationName, language)
+        fun formatStartInstruction(route: OfflineRoute, language: AppLanguage): String = VoicePhraseBuilder.formatStartInstruction(route, language)
+        fun isEarlyPrepareStage(stage: String): Boolean = VoicePhraseBuilder.isEarlyPrepareStage(stage)
+        fun formatSpokenInstruction(maneuver: RouteManeuver, distanceMeters: Double, unit: DistanceUnit, language: AppLanguage, includeLaneGuidance: Boolean = true, announcementStage: String = ""): String =
+            VoicePhraseBuilder.formatSpokenInstruction(maneuver, distanceMeters, unit, language, includeLaneGuidance, announcementStage)
+        fun buildLaneVoiceClause(lanes: List<LaneInfo>, language: AppLanguage): String? = VoicePhraseBuilder.buildLaneVoiceClause(lanes, language)
+        internal fun formatSpokenDistance(meters: Double, unit: DistanceUnit, language: AppLanguage): String = VoicePhraseBuilder.formatSpokenDistance(meters, unit, language)
     }
 }

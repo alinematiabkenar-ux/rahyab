@@ -68,8 +68,11 @@ class CarMapSurfaceRenderer(
     private var isDarkMode: Boolean = carContext.isDarkMode
     private var currentSettings: UserSettings = UserSettings()
     private var lastLoadedStyleJson: String? = null
+    private var wasFocusCameraActive: Boolean = false
+    private var userPannedDuringFocus: Boolean = false
 
     private val autoRecenterRunnable = Runnable {
+        if (app.navigationHub.navigationState.value.turnFocusActive && userPannedDuringFocus) return@Runnable
         isFollowing = true
         followCurrentLocation(forceImmediate = true)
     }
@@ -111,6 +114,7 @@ class CarMapSurfaceRenderer(
     fun recenter() {
         mainHandler.post {
             mainHandler.removeCallbacks(autoRecenterRunnable)
+            userPannedDuringFocus = false
             isFollowing = true
             followCurrentLocation(forceImmediate = true)
         }
@@ -144,7 +148,12 @@ class CarMapSurfaceRenderer(
 
             val pres = Presentation(carContext, vd.display)
             val root = FrameLayout(carContext)
-            val mv = MapView(pres.context, MapLibreMapOptions.createFromAttributes(pres.context).textureMode(true)).apply {
+            val pixelRatio = maxOf(1.0f, surfaceContainer.dpi.toFloat() / 160f)
+            CarScreenDiagnosticsStore.onSurfaceAvailable(w, h, dpi, pixelRatio)
+            val mapOptions = MapLibreMapOptions.createFromAttributes(pres.context)
+                .textureMode(true)
+                .pixelRatio(pixelRatio)
+            val mv = MapView(pres.context, mapOptions).apply {
                 onCreate(null)
                 onStart()
                 onResume()
@@ -178,6 +187,7 @@ class CarMapSurfaceRenderer(
     override fun onVisibleAreaChanged(visibleArea: Rect) {
         mainHandler.post {
             this.visibleArea = Rect(visibleArea)
+            CarScreenDiagnosticsStore.onVisibleAreaChanged(this.visibleArea)
             speedOverlay?.updateVisibleArea(this.visibleArea)
             if (isFollowing) followCurrentLocation(forceImmediate = true)
         }
@@ -186,6 +196,7 @@ class CarMapSurfaceRenderer(
     override fun onStableAreaChanged(stableArea: Rect) {
         mainHandler.post {
             this.stableArea = Rect(stableArea)
+            CarScreenDiagnosticsStore.onStableAreaChanged(this.stableArea)
             if (isFollowing) followCurrentLocation(forceImmediate = true)
         }
     }
@@ -227,6 +238,9 @@ class CarMapSurfaceRenderer(
 
     private fun pauseFollowWithTimer() {
         isFollowing = false
+        if (app.navigationHub.navigationState.value.turnFocusActive) {
+            userPannedDuringFocus = true
+        }
         followController.recordUserMapGesture(SystemClock.elapsedRealtime())
         mainHandler.removeCallbacks(autoRecenterRunnable)
         mainHandler.postDelayed(autoRecenterRunnable, CameraFollowController.AUTO_RECENTER_DELAY_MS)
@@ -240,7 +254,9 @@ class CarMapSurfaceRenderer(
 
         s.launch {
             app.preferencesRepository.settingsFlow.collectLatest { settings ->
+                val cameraChanged = settings.carMapView != currentSettings.carMapView || settings.is3DView != currentSettings.is3DView
                 currentSettings = settings; reloadMapStyleIfNeeded(force = false); updatePositionAndRoutes(); updateExtraLayers(); refreshSpeedOverlay()
+                if (cameraChanged && isFollowing) followCurrentLocation(forceImmediate = true)
             }
         }
         s.launch {
@@ -255,6 +271,9 @@ class CarMapSurfaceRenderer(
                 app.locationTracker.currentFix,
                 hub.userHeadingDegrees
             ) { nav, fix, heading -> Triple(nav, fix, heading) }.collectLatest { (nav, fix, heading) ->
+                if (!nav.turnFocusActive && userPannedDuringFocus) {
+                    userPannedDuringFocus = false
+                }
                 updatePositionAndRoutes()
                 refreshSpeedOverlay()
                 if (isFollowing) {
@@ -284,7 +303,8 @@ class CarMapSurfaceRenderer(
             installedPmtiles = pmtiles,
             isNightMode = isDarkMode,
             useDevOnlineBasemap = currentSettings.devOnlineOregonMode,
-            language = currentSettings.language
+            language = currentSettings.language,
+            styleProfile = MapStyleBuilder.StyleProfile.CAR
         )
         if (!force && styleJson == lastLoadedStyleJson) return
         lastLoadedStyleJson = styleJson
@@ -325,32 +345,51 @@ class CarMapSurfaceRenderer(
         force: Boolean
     ) {
         val map = mapLibreMap ?: return
-        val laneActive = CarMapStyleHelper.isLaneOverlayActive(app.navigationHub.navigationState.value, currentSettings.laneHighlightOnMapEnabled)
+        val nav = app.navigationHub.navigationState.value
+        val focusCamera = isNavigating && nav.turnFocusCameraActive && !userPannedDuringFocus && !isWalking
+        val enteringFocus = focusCamera && !wasFocusCameraActive
+        val exitingFocus = !focusCamera && wasFocusCameraActive
+        wasFocusCameraActive = focusCamera
         val update = followController.computeFollowCameraUpdate(
             lat = loc.lat, lon = loc.lon, speedMps = speedMps, headingDegrees = bearing,
             isHeadingUpMode = true, is3DView = currentSettings.is3DView, isNavigating = isNavigating,
-            forceImmediate = force, isWalkingMode = isWalking, minZoomFloor = if (laneActive) 16.5 else null
+            forceImmediate = force || enteringFocus || exitingFocus, isWalkingMode = isWalking
         ) ?: return
 
+        val carTarget = CarCameraProfile.computeCarCameraTarget(
+            basePhoneZoom = update.zoom,
+            carMapView = currentSettings.carMapView,
+            isNavigating = isNavigating,
+            is3DView = currentSettings.is3DView,
+            focusCameraActive = focusCamera,
+            focusIsHighway = nav.turnFocusIsHighway
+        )
         val area = if (stableArea.width() > 0 && stableArea.height() > 0) stableArea else visibleArea
-        val leftPad = area.left.toDouble().coerceAtLeast(0.0)
-        val rightPad = (surfaceWidth - area.right).toDouble().coerceAtLeast(0.0)
-        val bottomPad = (surfaceHeight - area.bottom).toDouble().coerceAtLeast(0.0)
-        val lowerThirdOffset = if (update.anchorLowerThird && area.height() > 0) area.height() * 0.28 else 0.0
-        val topPad = (area.top.toDouble() + lowerThirdOffset).coerceAtLeast(0.0)
-
+        val padding = CarCameraProfile.computeCameraPadding(
+            surfaceWidth = surfaceWidth,
+            surfaceHeight = surfaceHeight,
+            area = area,
+            anchorLowerThird = update.anchorLowerThird,
+            anchorLowerQuarter = carTarget.anchorLowerQuarter
+        )
+        val animMs = when {
+            enteringFocus -> CarCameraProfile.FOCUS_ENTER_ANIM_MS
+            exitingFocus -> CarCameraProfile.FOCUS_EXIT_ANIM_MS
+            else -> update.animationDurationMs
+        }
         val pos = CameraPosition.Builder()
             .target(LatLng(update.lat, update.lon))
-            .zoom(update.zoom)
-            .tilt(update.tilt)
+            .zoom(carTarget.zoom)
+            .tilt(carTarget.tilt)
             .bearing(update.bearing)
-            .padding(doubleArrayOf(leftPad, topPad, rightPad, bottomPad))
+            .padding(padding)
             .build()
+        CarScreenDiagnosticsStore.onCameraUpdated(carTarget.zoom, carTarget.tilt)
         runCatching {
-            if (update.animationDurationMs <= 0) {
+            if (animMs <= 0) {
                 map.moveCamera(CameraUpdateFactory.newCameraPosition(pos))
             } else {
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), update.animationDurationMs)
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), animMs)
             }
         }
     }
@@ -382,6 +421,8 @@ class CarMapSurfaceRenderer(
         loadedStyle = null
         mapLibreMap = null
         lastLoadedStyleJson = null
+        wasFocusCameraActive = false
+        userPannedDuringFocus = false
         speedOverlay = null
         runCatching {
             mapView?.onPause()

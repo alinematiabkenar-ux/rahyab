@@ -76,6 +76,8 @@ internal fun RahYabViewModel.evaluateLaneChangeCueImpl(
     maneuverToSpeak: Pair<com.example.navigation.RouteManeuver, String>?
 ): Boolean {
     val s = settings.value
+    // F3: Single beep source — suppress old lane-change beeps, "Change lanes now", and last-chance beep when Turn Focus is ON
+    if (s.turnFocusModeEnabled) return false
     val maneuver = state.currentManeuver ?: return false
     val event = laneChangeCueTracker.evaluate(
         maneuver = maneuver,

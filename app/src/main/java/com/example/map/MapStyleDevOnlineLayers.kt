@@ -14,8 +14,11 @@ internal object MapStyleDevOnlineLayers {
         layers: JSONArray,
         sourceId: String,
         palette: MapPalette,
-        language: AppLanguage
+        language: AppLanguage,
+        isCar: Boolean = false
     ) {
+        val roadScale = if (isCar) 1.3 else 1.0
+        val textScale = if (isCar) 1.15 else 1.0
         val localizedName = MapStylePaletteAndExprs.localizedPlaceNameExpr(language)
         val englishStreet = MapStylePaletteAndExprs.englishStreetNameExpr()
 
@@ -105,7 +108,7 @@ internal object MapStyleDevOnlineLayers {
             })
             put("paint", JSONObject().apply {
                 put("line-color", palette.minorRoad)
-                put("line-width", 2.0)
+                put("line-width", 2.0 * roadScale)
             })
         })
         layers.put(JSONObject().apply {
@@ -120,7 +123,7 @@ internal object MapStyleDevOnlineLayers {
             })
             put("paint", JSONObject().apply {
                 put("line-color", palette.majorRoad)
-                put("line-width", 4.0)
+                put("line-width", 4.0 * roadScale)
             })
         })
         layers.put(JSONObject().apply {
@@ -159,7 +162,7 @@ internal object MapStyleDevOnlineLayers {
             put("layout", JSONObject().apply {
                 put("text-field", localizedName)
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_ITALIC))
-                put("text-size", 12.0)
+                put("text-size", 12.0 * textScale)
             })
             put("paint", JSONObject().apply {
                 put("text-color", palette.waterLabel)
@@ -172,12 +175,12 @@ internal object MapStyleDevOnlineLayers {
             put("type", "symbol")
             put("source", sourceId)
             put("source-layer", "transportation_name")
-            put("minzoom", 13)
+            put("minzoom", if (isCar) 12 else 13)
             put("layout", JSONObject().apply {
                 put("symbol-placement", "line")
                 put("text-field", englishStreet)
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_REGULAR))
-                put("text-size", 12.0)
+                put("text-size", 12.0 * textScale)
             })
             put("paint", JSONObject().apply {
                 put("text-color", palette.majorRoadLabel)
@@ -197,7 +200,7 @@ internal object MapStyleDevOnlineLayers {
                 put("symbol-spacing", 320)
                 put("text-field", JSONArray().put("get").put("ref"))
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_MEDIUM))
-                put("text-size", 11.0)
+                put("text-size", 11.0 * textScale)
                 put("text-rotation-alignment", "viewport")
                 put("icon-image", MapStyleBuilder.IMAGE_HIGHWAY_SHIELD)
                 put("icon-text-fit", "both")
@@ -219,7 +222,7 @@ internal object MapStyleDevOnlineLayers {
             put("layout", JSONObject().apply {
                 put("text-field", localizedName)
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_MEDIUM))
-                put("text-size", 15.0)
+                put("text-size", 15.0 * textScale)
             })
             put("paint", JSONObject().apply {
                 put("text-color", palette.cityLabel)

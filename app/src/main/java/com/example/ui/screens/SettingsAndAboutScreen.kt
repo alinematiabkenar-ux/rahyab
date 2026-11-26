@@ -228,6 +228,11 @@ fun SettingsScreen(
             }
         }
 
+        // 1B. Turn Focus Mode & Android Auto Car Map View
+        item {
+            TurnFocusSettingsSection(settings = settings, viewModel = viewModel)
+        }
+
         // 2. Bilingual Voice Guidance & Persian TTS Install Guide
         item {
             SettingsSectionCard(
@@ -246,40 +251,42 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.setSpeedAudioEnabled(it) },
                     testTag = "switch_speed_audio"
                 )
-                SettingsToggleRow(
-                    label = strings.laneChangeBeepsToggle,
-                    checked = settings.laneChangeBeepsEnabled,
-                    onCheckedChange = { viewModel.setLaneChangeBeepsEnabled(it) },
-                    testTag = "switch_lane_change_beeps"
-                )
-                if (settings.laneChangeBeepsEnabled) {
-                    Text(strings.laneChangeTimingLabel, style = MaterialTheme.typography.labelLarge)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val timingChoices = listOf(
-                            com.example.navigation.LaneChangeTiming.EARLY to strings.laneChangeTimingEarly,
-                            com.example.navigation.LaneChangeTiming.NORMAL to strings.laneChangeTimingNormal,
-                            com.example.navigation.LaneChangeTiming.LATE to strings.laneChangeTimingLate
-                        )
-                        timingChoices.forEach { (timing, label) ->
-                            FilterChip(
-                                selected = settings.laneChangeTiming == timing,
-                                onClick = { viewModel.setLaneChangeTiming(timing) },
-                                label = { Text(label) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("lane_timing_${timing.code}_chip")
-                            )
-                        }
-                    }
+                if (!settings.turnFocusModeEnabled) {
                     SettingsToggleRow(
-                        label = strings.lastChanceBeepToggle,
-                        checked = settings.lastChanceBeepEnabled,
-                        onCheckedChange = { viewModel.setLastChanceBeepEnabled(it) },
-                        testTag = "switch_last_chance_beep"
+                        label = strings.laneChangeBeepsToggle,
+                        checked = settings.laneChangeBeepsEnabled,
+                        onCheckedChange = { viewModel.setLaneChangeBeepsEnabled(it) },
+                        testTag = "switch_lane_change_beeps"
                     )
+                    if (settings.laneChangeBeepsEnabled) {
+                        Text(strings.laneChangeTimingLabel, style = MaterialTheme.typography.labelLarge)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val timingChoices = listOf(
+                                com.example.navigation.LaneChangeTiming.EARLY to strings.laneChangeTimingEarly,
+                                com.example.navigation.LaneChangeTiming.NORMAL to strings.laneChangeTimingNormal,
+                                com.example.navigation.LaneChangeTiming.LATE to strings.laneChangeTimingLate
+                            )
+                            timingChoices.forEach { (timing, label) ->
+                                FilterChip(
+                                    selected = settings.laneChangeTiming == timing,
+                                    onClick = { viewModel.setLaneChangeTiming(timing) },
+                                    label = { Text(label) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("lane_timing_${timing.code}_chip")
+                                )
+                            }
+                        }
+                        SettingsToggleRow(
+                            label = strings.lastChanceBeepToggle,
+                            checked = settings.lastChanceBeepEnabled,
+                            onCheckedChange = { viewModel.setLastChanceBeepEnabled(it) },
+                            testTag = "switch_last_chance_beep"
+                        )
+                    }
                 }
 
                 if (settings.language == AppLanguage.PERSIAN) {

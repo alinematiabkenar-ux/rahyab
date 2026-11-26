@@ -198,4 +198,81 @@ object CarManeuverMapper {
         }
         return if (road.isNotBlank()) "$actionFa · $road" else actionFa
     }
+
+    /**
+     * B2: Always produces a non-blank maneuver cue string even when street names and
+     * `instructionEn` are missing (e.g., unnamed highway connectors or ramps).
+     */
+    fun formatFallbackStepCue(maneuver: RouteManeuver?, language: AppLanguage): String {
+        if (maneuver == null) {
+            return if (language == AppLanguage.PERSIAN) "مستقیم ادامه دهید" else "Continue"
+        }
+        val road = maneuver.signpost?.primaryRoadNumbers?.takeIf { it.isNotBlank() }
+            ?: maneuver.streetNames.firstOrNull()?.takeIf { it.isNotBlank() }
+            ?: ""
+        if (language == AppLanguage.PERSIAN) {
+            val formatted = formatCarStepCue(maneuver, language).trim()
+            if (formatted.isNotBlank()) return formatted
+        } else {
+            if (road.isNotBlank()) return road
+            if (maneuver.instructionEn.isNotBlank()) return maneuver.instructionEn.trim()
+        }
+        val exitNum = maneuver.signpost?.primaryExitNumber?.takeIf { it.isNotBlank() }
+        if (language == AppLanguage.PERSIAN) {
+            return if (exitNum != null) "خروجی $exitNum" else "ادامه دهید"
+        }
+        return when (maneuver.type) {
+            ManeuverType.LEFT -> "Turn left"
+            ManeuverType.SLIGHT_LEFT -> "Bear left"
+            ManeuverType.SHARP_LEFT -> "Sharp left"
+            ManeuverType.RIGHT -> "Turn right"
+            ManeuverType.SLIGHT_RIGHT -> "Bear right"
+            ManeuverType.SHARP_RIGHT -> "Sharp right"
+            ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT -> "Make a U-turn"
+            ManeuverType.EXIT_LEFT, ManeuverType.EXIT_RIGHT -> if (exitNum != null) "Take exit $exitNum" else "Take exit"
+            ManeuverType.RAMP_LEFT, ManeuverType.RAMP_RIGHT -> "Take ramp"
+            ManeuverType.STAY_LEFT -> "Keep left"
+            ManeuverType.STAY_RIGHT -> "Keep right"
+            ManeuverType.MERGE -> "Merge"
+            ManeuverType.ROUNDABOUT -> "Enter roundabout"
+            ManeuverType.ARRIVE, ManeuverType.ARRIVE_LEFT, ManeuverType.ARRIVE_RIGHT -> "Arrive at destination"
+            ManeuverType.DEPART, ManeuverType.STRAIGHT, ManeuverType.FERRY -> "Continue"
+        }
+    }
+
+    /**
+     * B2: Builds a valid Android Auto [androidx.car.app.navigation.model.Step] for any active
+     * navigation state, falling back cleanly when street names or maneuver metadata are missing.
+     */
+    fun buildStepOrFallback(
+        maneuver: RouteManeuver?,
+        language: AppLanguage,
+        includeLanes: Boolean = false,
+        lanesImageProvider: ((List<LaneInfo>) -> androidx.car.app.model.CarIcon?)? = null
+    ): androidx.car.app.navigation.model.Step {
+        val cue = formatFallbackStepCue(maneuver, language)
+        val carManeuver = if (maneuver != null) {
+            toCarManeuver(maneuver)
+        } else {
+            Maneuver.Builder(Maneuver.TYPE_STRAIGHT).build()
+        }
+        val stepBuilder = androidx.car.app.navigation.model.Step.Builder(cue)
+            .setManeuver(carManeuver)
+
+        val roadName = maneuver?.streetNames?.firstOrNull()?.takeIf { it.isNotBlank() }
+            ?: maneuver?.signpost?.primaryRoadNumbers?.takeIf { it.isNotBlank() }
+        if (!roadName.isNullOrBlank()) {
+            stepBuilder.setRoad(roadName)
+        }
+
+        if (includeLanes && maneuver != null && maneuver.lanes.isNotEmpty()) {
+            toCarLanes(maneuver.lanes).forEach { lane ->
+                stepBuilder.addLane(lane)
+            }
+            lanesImageProvider?.invoke(maneuver.lanes)?.let { icon ->
+                stepBuilder.setLanesImage(icon)
+            }
+        }
+        return stepBuilder.build()
+    }
 }

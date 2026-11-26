@@ -52,7 +52,7 @@ internal object CarMapStyleHelper {
         app: RahYabApplication,
         style: Style?,
         laneHighlightEnabled: Boolean = true,
-        laneHighlightColorHex: String = com.example.map.LaneHighlightColor.RED.hex
+        laneHighlightColorHex: String = com.example.map.LaneHighlightColor.BLUE.hex
     ) {
         if (style == null || !style.isFullyLoaded) return
         val hub = app.navigationHub
@@ -124,7 +124,11 @@ internal object CarMapStyleHelper {
             } else {
                 null
             }
-            MapExtraLayersHelper.updateManeuverArrow(style, arrow)
+            val laneStartDist = if (nav.turnFocusActive && nav.turnFocusTriggerDistanceMeters > 0.0) {
+                nav.turnFocusTriggerDistanceMeters
+            } else {
+                com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
+            }
             val laneOverlay = if (nav.isNavigating && !nav.hasArrived) {
                 com.example.map.LaneOverlayBuilder.build(
                     route = nav.route,
@@ -133,9 +137,16 @@ internal object CarMapStyleHelper {
                     distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
                     travelMode = nav.effectiveTravelMode,
                     isOffRoute = nav.isOffRoute,
-                    enabled = laneHighlightEnabled
+                    enabled = laneHighlightEnabled,
+                    startDistanceMeters = laneStartDist,
+                    isFocusMode = nav.turnFocusActive
                 )
             } else null
+            MapExtraLayersHelper.updateManeuverArrow(
+                style = style,
+                arrow = arrow,
+                enlarged = nav.isNavigating && !nav.hasArrived && nav.turnFocusActive && laneOverlay == null
+            )
             com.example.map.LaneMapLayerHelper.updateLaneOverlay(style, laneOverlay, laneHighlightColorHex)
         }
     }
@@ -143,15 +154,24 @@ internal object CarMapStyleHelper {
     fun isLaneOverlayActive(
         nav: com.example.navigation.ActiveNavigationState,
         laneHighlightEnabled: Boolean
-    ): Boolean = nav.isNavigating && !nav.hasArrived && com.example.map.LaneOverlayBuilder.build(
-        route = nav.route,
-        currentManeuverIndex = nav.currentManeuverIndex,
-        snappedShapeIndex = nav.snappedShapeIndex,
-        distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
-        travelMode = nav.effectiveTravelMode,
-        isOffRoute = nav.isOffRoute,
-        enabled = laneHighlightEnabled
-    ) != null
+    ): Boolean {
+        val laneStartDist = if (nav.turnFocusActive && nav.turnFocusTriggerDistanceMeters > 0.0) {
+            nav.turnFocusTriggerDistanceMeters
+        } else {
+            com.example.map.LaneOverlayBuilder.BEFORE_MANEUVER_METERS
+        }
+        return nav.isNavigating && !nav.hasArrived && com.example.map.LaneOverlayBuilder.build(
+            route = nav.route,
+            currentManeuverIndex = nav.currentManeuverIndex,
+            snappedShapeIndex = nav.snappedShapeIndex,
+            distanceToNextManeuverMeters = nav.distanceToNextManeuverMeters,
+            travelMode = nav.effectiveTravelMode,
+            isOffRoute = nav.isOffRoute,
+            enabled = laneHighlightEnabled,
+            startDistanceMeters = laneStartDist,
+            isFocusMode = nav.turnFocusActive
+        ) != null
+    }
 
     fun updateExtraLayers(
         app: RahYabApplication,

@@ -514,6 +514,22 @@ interface AppStrings {
     val voiceStoppedConfirm: String
     val voiceRoadClosedConfirm: String
     val voiceNoSearchMatches: String
+    // A1, A4: Android Auto Car Map View & Diagnostics
+    val carMapViewLabel: String
+    val carMapViewClose: String
+    val carMapViewNormal: String
+    val carMapViewWide: String
+    val diagSectionCarScreen: String
+    val diagCarNotConnected: String
+    // F2, F7: Turn Focus Mode
+    val turnFocusSectionTitle: String
+    val turnFocusModeToggle: String
+    val turnFocusBeepsToggle: String
+    val turnFocusCityDistanceLabel: String
+    val turnFocusHighwayDistanceLabel: String
+    val turnFocusWideHighwayToggle: String
+    val turnFocusShortPhraseToggle: String
+    val turnFocusShortPhraseSpoken: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

@@ -96,13 +96,24 @@ object MapStyleBuilder {
         ROUTE_COLOR_3
     )
 
+    enum class StyleProfile {
+        PHONE,
+        CAR
+    }
+
     fun buildOfflineStyleJson(
         installedPmtiles: List<Pair<String, File>>,
         isNightMode: Boolean,
         useDevOnlineBasemap: Boolean = false,
-        language: AppLanguage = AppLanguage.ENGLISH
+        language: AppLanguage = AppLanguage.ENGLISH,
+        styleProfile: StyleProfile = StyleProfile.PHONE
     ): String {
-        val palette = if (isNightMode) MapStylePaletteAndExprs.NightMapPalette else MapStylePaletteAndExprs.DayMapPalette
+        val isCar = styleProfile == StyleProfile.CAR
+        val palette = when {
+            isNightMode && isCar -> MapStylePaletteAndExprs.NightCarMapPalette
+            isNightMode -> MapStylePaletteAndExprs.NightMapPalette
+            else -> MapStylePaletteAndExprs.DayMapPalette
+        }
 
         val sources = JSONObject()
         val layers = JSONArray()
@@ -127,11 +138,11 @@ object MapStyleBuilder {
                         put("url", "pmtiles://file://${pmtilesFile.absolutePath}")
                     }
                 )
-                MapStyleProtomapsGeometry.addProtomapsBaseGeometryLayers(layers, sourceId, palette)
+                MapStyleProtomapsGeometry.addProtomapsBaseGeometryLayers(layers, sourceId, palette, isCar)
             }
             for (sourceId in sourceIds) {
-                MapStyleProtomapsRoadLabels.addRoadAndNaturalLabels(layers, sourceId, palette, language)
-                MapStyleProtomapsPlaceLabels.addPlaceAndPoiLabels(layers, sourceId, palette, language)
+                MapStyleProtomapsRoadLabels.addRoadAndNaturalLabels(layers, sourceId, palette, language, isCar)
+                MapStyleProtomapsPlaceLabels.addPlaceAndPoiLabels(layers, sourceId, palette, language, isCar)
             }
         } else if (useDevOnlineBasemap) {
             val sourceId = "openfreemap_dev"
@@ -142,7 +153,7 @@ object MapStyleBuilder {
                     put("url", "https://tiles.openfreemap.org/planet")
                 }
             )
-            MapStyleDevOnlineLayers.addDevOnlineBasemapLayers(layers, sourceId, palette, language)
+            MapStyleDevOnlineLayers.addDevOnlineBasemapLayers(layers, sourceId, palette, language, isCar)
         }
 
         MapStyleOverlayLayers.addDynamicOverlaySourcesAndLayers(sources, layers, isNightMode)

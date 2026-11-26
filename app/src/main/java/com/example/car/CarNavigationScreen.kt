@@ -27,6 +27,7 @@ import com.example.navigation.JunctionScene
 import com.example.navigation.JunctionSceneBuilder
 import com.example.navigation.TravelMode
 import com.example.ui.components.JunctionViewRenderer
+import com.example.util.CrashLogManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -36,12 +37,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
- * AA6 & AA7: Android Auto Active Turn-by-Turn Navigation screen.
+ * AA6/AA7 & B2-B4: Android Auto Active Turn-by-Turn Navigation screen.
  *
- * Renders [NavigationTemplate] with live [RoutingInfo] (Valhalla -> Car Maneuver, road/highway
- * cue, lane arrows + bitmap, and upcoming "then" step), [Trip] / [TravelEstimate] updates to
- * [NavigationManager], Stop / Mute / Report closure actions, map zoom/recenter/pan controls,
- * DHU `onAutoDriveEnabled` simulation hook, and Car Alerts for cameras/speed bumps/hazards/arrival.
+ * Guarantees a valid [Step] in [RoutingInfo] and [Trip] (fallback step when road names are absent),
+ * refreshes at most 1/sec on distance ticks and immediately on maneuver changes, reports
+ * `navigationStarted()`/`updateTrip()`/`navigationEnded()` to [NavigationManager], and wraps
+ * template assembly in `runCatching` with Diagnostics error logging and a [MessageTemplate] fallback.
  */
 class CarNavigationScreen(
     carContext: CarContext,
@@ -58,8 +59,10 @@ class CarNavigationScreen(
     private var navState: ActiveNavigationState = app.navigationHub.navigationState.value
     private var isNavStartedReported: Boolean = false
     private var hasShownArrival: Boolean = false
-    private var lastTripPushElapsedMs: Long = 0L
+    private var lastRefreshElapsedMs: Long = 0L
     private var lastReportedManeuverIdx: Int = -1
+    private var lastReportedRerouting: Boolean = false
+    private var lastReportedArrived: Boolean = false
     private var cachedJunctionKey: Pair<JunctionScene, Boolean>? = null
     private var cachedJunctionIcon: CarIcon? = null
 
@@ -79,6 +82,7 @@ class CarNavigationScreen(
             override fun onStart(owner: LifecycleOwner) {
                 alertHelper.reset()
                 hasShownArrival = false
+                lastRefreshElapsedMs = 0L
                 runCatching { navigationManager.setNavigationManagerCallback(navCallback) }
 
                 scope?.cancel()
@@ -103,9 +107,6 @@ class CarNavigationScreen(
                         navState = nav
                         if (!nav.isNavigating) {
                             endNavManagerSession()
-                            if (screenManager.top === this@CarNavigationScreen) {
-                                screenManager.pop()
-                            }
                             return@collectLatest
                         }
 
@@ -130,7 +131,7 @@ class CarNavigationScreen(
                                 language = settings.language
                             )
                             alertHelper.showWeatherAlertIfNew(weatherAlert, settings.language)
-                            if (nav.laneChangeCuePulseAtMs > 0L) {
+                            if (nav.laneChangeCuePulseAtMs > 0L && !settings.turnFocusModeEnabled) {
                                 alertHelper.showLaneChangeCueAlert(
                                     maneuverIndex = nav.laneChangeCueManeuverIndex,
                                     pulseAtMs = nav.laneChangeCuePulseAtMs,
@@ -139,8 +140,18 @@ class CarNavigationScreen(
                             }
                         }
 
-                        pushTripUpdateIfNeeded(nav)
-                        invalidate()
+                        val nowMs = SystemClock.elapsedRealtime()
+                        val criticalChange = nav.currentManeuverIndex != lastReportedManeuverIdx ||
+                            nav.isRerouting != lastReportedRerouting ||
+                            nav.hasArrived != lastReportedArrived
+                        if (criticalChange || lastRefreshElapsedMs == 0L || nowMs - lastRefreshElapsedMs >= 1000L) {
+                            lastRefreshElapsedMs = nowMs
+                            lastReportedManeuverIdx = nav.currentManeuverIndex
+                            lastReportedRerouting = nav.isRerouting
+                            lastReportedArrived = nav.hasArrived
+                            pushTripUpdate(nav)
+                            invalidate()
+                        }
                     }
                 }
             }
@@ -153,6 +164,10 @@ class CarNavigationScreen(
                 }
                 runCatching { navigationManager.clearNavigationManagerCallback() }
             }
+
+            override fun onDestroy(owner: LifecycleOwner) {
+                endNavManagerSession()
+            }
         })
     }
 
@@ -163,35 +178,31 @@ class CarNavigationScreen(
         }
     }
 
-    private fun pushTripUpdateIfNeeded(nav: ActiveNavigationState) {
-        val nowMs = SystemClock.elapsedRealtime()
-        val maneuverChanged = nav.currentManeuverIndex != lastReportedManeuverIdx
-        if (!maneuverChanged && nowMs - lastTripPushElapsedMs < 1000L) return
-        lastTripPushElapsedMs = nowMs
-        lastReportedManeuverIdx = nav.currentManeuverIndex
-
-        val step = buildCurrentStep(nav) ?: return
-        val destEstimate = CarManeuverMapper.toCarTravelEstimate(
-            remainingDistanceMeters = nav.remainingDistanceMeters,
-            remainingTimeSeconds = nav.remainingTimeSeconds,
-            unit = settings.distanceUnit
-        )
-        val stepEstimate = CarManeuverMapper.toCarTravelEstimate(
-            remainingDistanceMeters = nav.distanceToNextManeuverMeters,
-            remainingTimeSeconds = nav.timeToNextManeuverSeconds,
-            unit = settings.distanceUnit
-        )
-        val destBuilder = Destination.Builder()
-            .setName(nav.destinationName.ifBlank { stringsFor(settings.language).appName })
-        if (nav.destinationAddress.isNotBlank()) {
-            destBuilder.setAddress(nav.destinationAddress)
+    private fun pushTripUpdate(nav: ActiveNavigationState) {
+        runCatching {
+            val step = buildCurrentStepSafe(nav, suppressLanes = false)
+            val destEstimate = CarManeuverMapper.toCarTravelEstimate(
+                remainingDistanceMeters = nav.remainingDistanceMeters,
+                remainingTimeSeconds = nav.remainingTimeSeconds,
+                unit = settings.distanceUnit
+            )
+            val stepEstimate = CarManeuverMapper.toCarTravelEstimate(
+                remainingDistanceMeters = nav.distanceToNextManeuverMeters,
+                remainingTimeSeconds = nav.timeToNextManeuverSeconds,
+                unit = settings.distanceUnit
+            )
+            val destBuilder = Destination.Builder()
+                .setName(nav.destinationName.ifBlank { stringsFor(settings.language).appName })
+            if (nav.destinationAddress.isNotBlank()) {
+                destBuilder.setAddress(nav.destinationAddress)
+            }
+            val trip = Trip.Builder()
+                .addDestination(destBuilder.build(), destEstimate)
+                .addStep(step, stepEstimate)
+                .setLoading(nav.isRerouting)
+                .build()
+            navigationManager.updateTrip(trip)
         }
-        val trip = Trip.Builder()
-            .addDestination(destBuilder.build(), destEstimate)
-            .addStep(step, stepEstimate)
-            .setLoading(nav.isRerouting)
-            .build()
-        runCatching { navigationManager.updateTrip(trip) }
     }
 
     private fun buildJunctionCarIcon(nav: ActiveNavigationState): CarIcon? {
@@ -222,36 +233,60 @@ class CarNavigationScreen(
         return icon
     }
 
-    private fun buildCurrentStep(
+    private fun buildCurrentStepSafe(
         nav: ActiveNavigationState,
-        suppressLanes: Boolean = false
-    ): Step? {
-        val maneuver = nav.currentManeuver ?: return null
-        val cue = CarManeuverMapper.formatCarStepCue(maneuver, settings.language)
-        val stepBuilder = Step.Builder(cue)
-            .setManeuver(CarManeuverMapper.toCarManeuver(maneuver))
-
-        val roadName = maneuver.streetNames.firstOrNull()?.takeIf { it.isNotBlank() }
-            ?: maneuver.signpost?.primaryRoadNumbers?.takeIf { it.isNotBlank() }
-        if (!roadName.isNullOrBlank()) {
-            stepBuilder.setRoad(roadName)
+        suppressLanes: Boolean
+    ): Step {
+        val includeLanes = !suppressLanes && !nav.isWalkingMode && nav.showLaneStrip &&
+            nav.currentManeuver?.lanes?.isNotEmpty() == true
+        return runCatching {
+            CarManeuverMapper.buildStepOrFallback(
+                maneuver = nav.currentManeuver,
+                language = settings.language,
+                includeLanes = includeLanes,
+                lanesImageProvider = { lanes -> CarLaneBitmapRenderer.renderLanesIcon(lanes) }
+            )
+        }.getOrElse {
+            CarManeuverMapper.buildStepOrFallback(
+                maneuver = nav.currentManeuver,
+                language = settings.language,
+                includeLanes = false
+            )
         }
-
-        if (!suppressLanes && !nav.isWalkingMode && nav.showLaneStrip && maneuver.lanes.isNotEmpty()) {
-            CarManeuverMapper.toCarLanes(maneuver.lanes).forEach { lane ->
-                stepBuilder.addLane(lane)
-            }
-            CarLaneBitmapRenderer.renderLanesIcon(maneuver.lanes)?.let { icon ->
-                stepBuilder.setLanesImage(icon)
-            }
-        }
-        return stepBuilder.build()
     }
 
     override fun onGetTemplate(): Template {
+        CarScreenDiagnosticsStore.onTopScreenChanged("CarNavigationScreen")
         val str = stringsFor(settings.language)
         val nav = navState
 
+        return runCatching {
+            buildActiveNavigationTemplate(nav, str)
+        }.getOrElse { err ->
+            val summary = "${err::class.java.simpleName}: ${err.message ?: "template error"}"
+            CarScreenDiagnosticsStore.onTemplateError(summary)
+            CarScreenDiagnosticsStore.onTemplateBuilt("MessageTemplate(fallback)", routingInfoHadStep = false)
+            CrashLogManager.logError(app, "CarNavigationScreen", "Failed to build NavigationTemplate", err)
+            val fallbackInstruction = CarManeuverMapper.formatFallbackStepCue(nav.currentManeuver, settings.language)
+            MessageTemplate.Builder(fallbackInstruction)
+                .setTitle(str.appName)
+                .addAction(
+                    Action.Builder()
+                        .setTitle(str.carActionStop)
+                        .setOnClickListener {
+                            app.navigationHub.stopNavigation()
+                            endNavManagerSession()
+                        }
+                        .build()
+                )
+                .build()
+        }
+    }
+
+    private fun buildActiveNavigationTemplate(
+        nav: ActiveNavigationState,
+        str: com.example.i18n.AppStrings
+    ): Template {
         val voiceAction = Action.Builder()
             .setIcon(
                 CarMapActionsHelper.icon(
@@ -278,11 +313,11 @@ class CarNavigationScreen(
             .setOnClickListener {
                 app.navigationHub.stopNavigation()
                 endNavManagerSession()
-                screenManager.pop()
             }
             .build()
 
         if (nav.isNavigating && nav.effectiveTravelMode != TravelMode.DRIVE) {
+            CarScreenDiagnosticsStore.onTemplateBuilt("MessageTemplate(walkBike)", routingInfoHadStep = false)
             return MessageTemplate.Builder(str.carWalkBikePhoneOnlyNotice)
                 .setTitle(str.appName)
                 .setHeaderAction(Action.BACK)
@@ -305,29 +340,32 @@ class CarNavigationScreen(
                 .setPanModeListener { enabled -> if (!enabled) renderer.recenter() }
         }
 
+        val hadStep: Boolean
         if (nav.isRerouting) {
             templateBuilder.setNavigationInfo(RoutingInfo.Builder().setLoading(true).build())
+            hadStep = false
         } else {
             val junctionIcon = buildJunctionCarIcon(nav)
-            val step = buildCurrentStep(nav, suppressLanes = junctionIcon != null)
-            if (step != null) {
-                val routingBuilder = RoutingInfo.Builder()
-                    .setCurrentStep(
-                        step,
-                        CarMapActionsHelper.toCarDistance(nav.distanceToNextManeuverMeters, settings.distanceUnit)
-                    )
-                if (junctionIcon != null) {
-                    runCatching { routingBuilder.setJunctionImage(junctionIcon) }
-                }
-                val thenManeuver = nav.thenManeuver
-                if (thenManeuver != null) {
-                    val nextStep = Step.Builder(CarManeuverMapper.formatCarStepCue(thenManeuver, settings.language))
-                        .setManeuver(CarManeuverMapper.toCarManeuver(thenManeuver))
-                        .build()
-                    routingBuilder.setNextStep(nextStep)
-                }
-                templateBuilder.setNavigationInfo(routingBuilder.build())
+            val step = buildCurrentStepSafe(nav, suppressLanes = junctionIcon != null)
+            val routingBuilder = RoutingInfo.Builder()
+                .setCurrentStep(
+                    step,
+                    CarMapActionsHelper.toCarDistance(nav.distanceToNextManeuverMeters, settings.distanceUnit)
+                )
+            if (junctionIcon != null) {
+                runCatching { routingBuilder.setJunctionImage(junctionIcon) }
             }
+            val thenManeuver = nav.thenManeuver
+            if (thenManeuver != null) {
+                val nextStep = CarManeuverMapper.buildStepOrFallback(
+                    maneuver = thenManeuver,
+                    language = settings.language,
+                    includeLanes = false
+                )
+                routingBuilder.setNextStep(nextStep)
+            }
+            templateBuilder.setNavigationInfo(routingBuilder.build())
+            hadStep = true
         }
 
         templateBuilder.setDestinationTravelEstimate(
@@ -338,6 +376,7 @@ class CarNavigationScreen(
             )
         )
 
+        CarScreenDiagnosticsStore.onTemplateBuilt("NavigationTemplate", routingInfoHadStep = hadStep)
         return templateBuilder.build()
     }
 }

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.car.CarMapView
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
@@ -90,6 +91,32 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_LAST_CHANCE_BEEP = booleanPreferencesKey("last_chance_beep_enabled")
         val KEY_LANE_HIGHLIGHT_ON_MAP = booleanPreferencesKey("lane_highlight_on_map")
         val KEY_LANE_HIGHLIGHT_COLOR = stringPreferencesKey("lane_highlight_color")
+        val KEY_LANE_COLOR_MIGRATED_TO_BLUE = booleanPreferencesKey("lane_color_migrated_to_blue_v32")
+        val KEY_LANE_COLOR_USER_MODIFIED = booleanPreferencesKey("lane_color_user_modified")
+        val KEY_CAR_MAP_VIEW = stringPreferencesKey("car_map_view")
+        val KEY_TURN_FOCUS_MODE = booleanPreferencesKey("turn_focus_mode_enabled")
+        val KEY_TURN_FOCUS_BEEPS = booleanPreferencesKey("turn_focus_beeps_enabled")
+        val KEY_TURN_FOCUS_CITY_DIST = intPreferencesKey("turn_focus_city_distance_m")
+        val KEY_TURN_FOCUS_HIGHWAY_DIST = intPreferencesKey("turn_focus_highway_distance_m")
+        val KEY_TURN_FOCUS_WIDE_HIGHWAY = booleanPreferencesKey("turn_focus_wide_highway_earlier")
+        val KEY_TURN_FOCUS_SHORT_PHRASE = booleanPreferencesKey("turn_focus_short_phrase_enabled")
+
+        /**
+         * F6: One-time migration from the legacy default RED lane highlight color to BLUE.
+         * Preserves any explicit user choice (e.g. GREEN, or RED explicitly chosen after migration).
+         */
+        fun resolveMigratedLaneColor(
+            storedCode: String?,
+            migratedToBlue: Boolean,
+            userModified: Boolean
+        ): LaneHighlightColor {
+            if (!migratedToBlue && !userModified &&
+                (storedCode == null || storedCode.equals(LaneHighlightColor.RED.code, ignoreCase = true))
+            ) {
+                return LaneHighlightColor.BLUE
+            }
+            return LaneHighlightColor.fromCode(storedCode)
+        }
 
         fun mapPreferencesToSettings(prefs: Preferences): UserSettings {
             val defaultMode = TravelMode.fromCode(prefs[Keys.DEFAULT_TRAVEL_MODE])
@@ -97,12 +124,23 @@ class UserPreferencesRepository(private val context: Context) {
                 language = AppLanguage.entries.find { it.code == prefs[Keys.LANGUAGE] } ?: AppLanguage.ENGLISH,
                 distanceUnit = DistanceUnit.entries.find { it.code == prefs[Keys.DISTANCE_UNIT] } ?: DistanceUnit.IMPERIAL,
                 themeMode = MapThemeMode.entries.find { it.code == prefs[Keys.THEME_MODE] } ?: MapThemeMode.AUTO,
+                carMapView = CarMapView.fromCode(prefs[KEY_CAR_MAP_VIEW]),
                 voiceGuidanceEnabled = prefs[Keys.VOICE_ENABLED] ?: true,
                 speedWarningAudioEnabled = prefs[Keys.SPEED_AUDIO_ENABLED] ?: true,
                 speedWarningThresholdMph = prefs[Keys.SPEED_THRESHOLD_MPH] ?: 5,
                 junctionPreviewEnabled = prefs[Keys.JUNCTION_PREVIEW_ENABLED] ?: true,
                 laneHighlightOnMapEnabled = prefs[KEY_LANE_HIGHLIGHT_ON_MAP] ?: true,
-                laneHighlightColor = LaneHighlightColor.fromCode(prefs[KEY_LANE_HIGHLIGHT_COLOR]),
+                laneHighlightColor = resolveMigratedLaneColor(
+                    storedCode = prefs[KEY_LANE_HIGHLIGHT_COLOR],
+                    migratedToBlue = prefs[KEY_LANE_COLOR_MIGRATED_TO_BLUE] ?: false,
+                    userModified = prefs[KEY_LANE_COLOR_USER_MODIFIED] ?: false
+                ),
+                turnFocusModeEnabled = prefs[KEY_TURN_FOCUS_MODE] ?: true,
+                turnFocusBeepsEnabled = prefs[KEY_TURN_FOCUS_BEEPS] ?: true,
+                turnFocusCityDistanceMeters = (prefs[KEY_TURN_FOCUS_CITY_DIST] ?: 500).coerceIn(300, 800),
+                turnFocusHighwayDistanceMeters = (prefs[KEY_TURN_FOCUS_HIGHWAY_DIST] ?: 1000).coerceIn(800, 1500),
+                turnFocusWideHighwayEarlierEnabled = prefs[KEY_TURN_FOCUS_WIDE_HIGHWAY] ?: true,
+                turnFocusShortPhraseEnabled = prefs[KEY_TURN_FOCUS_SHORT_PHRASE] ?: false,
                 laneChangeBeepsEnabled = prefs[KEY_LANE_CHANGE_BEEPS] ?: true,
                 laneChangeTiming = LaneChangeTiming.fromCode(prefs[KEY_LANE_CHANGE_TIMING]),
                 lastChanceBeepEnabled = prefs[KEY_LAST_CHANCE_BEEP] ?: true,
@@ -158,12 +196,37 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setLanguage(language: AppLanguage) { context.rahYabDataStore.edit { it[Keys.LANGUAGE] = language.code } }
     suspend fun setDistanceUnit(unit: DistanceUnit) { context.rahYabDataStore.edit { it[Keys.DISTANCE_UNIT] = unit.code } }
     suspend fun setThemeMode(mode: MapThemeMode) { context.rahYabDataStore.edit { it[Keys.THEME_MODE] = mode.code } }
+    suspend fun setCarMapView(view: CarMapView) { context.rahYabDataStore.edit { it[KEY_CAR_MAP_VIEW] = view.code } }
     suspend fun setVoiceGuidanceEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.VOICE_ENABLED] = enabled } }
     suspend fun setSpeedWarningAudioEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SPEED_AUDIO_ENABLED] = enabled } }
     suspend fun setSpeedWarningThresholdMph(thresholdMph: Int) { context.rahYabDataStore.edit { it[Keys.SPEED_THRESHOLD_MPH] = thresholdMph.coerceIn(0, 15) } }
     suspend fun setJunctionPreviewEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.JUNCTION_PREVIEW_ENABLED] = enabled } }
     suspend fun setLaneHighlightOnMapEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LANE_HIGHLIGHT_ON_MAP] = enabled } }
-    suspend fun setLaneHighlightColor(color: LaneHighlightColor) { context.rahYabDataStore.edit { it[KEY_LANE_HIGHLIGHT_COLOR] = color.code } }
+    suspend fun setLaneHighlightColor(color: LaneHighlightColor) {
+        context.rahYabDataStore.edit {
+            it[KEY_LANE_HIGHLIGHT_COLOR] = color.code
+            it[KEY_LANE_COLOR_USER_MODIFIED] = true
+            it[KEY_LANE_COLOR_MIGRATED_TO_BLUE] = true
+        }
+    }
+
+    suspend fun runOneTimeLaneColorMigrationIfNeeded() {
+        context.rahYabDataStore.edit { prefs ->
+            if (prefs[KEY_LANE_COLOR_MIGRATED_TO_BLUE] == true) return@edit
+            val userModified = prefs[KEY_LANE_COLOR_USER_MODIFIED] == true
+            val stored = prefs[KEY_LANE_HIGHLIGHT_COLOR]
+            if (!userModified && (stored == null || stored.equals(LaneHighlightColor.RED.code, ignoreCase = true))) {
+                prefs[KEY_LANE_HIGHLIGHT_COLOR] = LaneHighlightColor.BLUE.code
+            }
+            prefs[KEY_LANE_COLOR_MIGRATED_TO_BLUE] = true
+        }
+    }
+    suspend fun setTurnFocusModeEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_MODE] = enabled } }
+    suspend fun setTurnFocusBeepsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_BEEPS] = enabled } }
+    suspend fun setTurnFocusCityDistanceMeters(meters: Int) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_CITY_DIST] = meters } }
+    suspend fun setTurnFocusHighwayDistanceMeters(meters: Int) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_HIGHWAY_DIST] = meters } }
+    suspend fun setTurnFocusWideHighwayEarlierEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_WIDE_HIGHWAY] = enabled } }
+    suspend fun setTurnFocusShortPhraseEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_SHORT_PHRASE] = enabled } }
     suspend fun setLaneChangeBeepsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_BEEPS] = enabled } }
     suspend fun setLaneChangeTiming(timing: LaneChangeTiming) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_TIMING] = timing.code } }
     suspend fun setLastChanceBeepEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LAST_CHANCE_BEEP] = enabled } }

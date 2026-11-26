@@ -81,6 +81,11 @@ internal object MapStylePaletteAndExprs {
         shieldHalo = "#091022"
     )
 
+    val NightCarMapPalette = NightMapPalette.copy(
+        minorRoad = "#3E5682",
+        majorRoad = "#5470A3"
+    )
+
     fun protomapsKindExpr(): JSONArray =
         JSONArray()
             .put("coalesce")

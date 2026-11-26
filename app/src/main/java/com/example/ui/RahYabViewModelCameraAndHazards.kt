@@ -26,6 +26,7 @@ data class CameraTargetCommand(
     val bearing: Double = 0.0,
     val animationDurationMs: Int = 500,
     val anchorLowerThird: Boolean = false,
+    val anchorLowerQuarter: Boolean = false,
     val nonce: Long = System.currentTimeMillis()
 )
 
@@ -35,6 +36,7 @@ internal fun RahYabViewModel.initializeViewModel() {
         _snackbarMessage.value = com.example.i18n.stringsFor(settings.value.language).mapUpdatePostponedNotice
     }
     viewModelScope.launch {
+        prefs.runOneTimeLaneColorMigrationIfNeeded()
         packManager.applyPendingSwapsIfIdle()
         packManager.auditInstalledPacks()
     }
@@ -316,6 +318,9 @@ internal fun RahYabViewModel.getEffectiveReferenceLocationImpl(): LatLon {
 
 internal fun RahYabViewModel.pauseCameraFollowImpl() {
     _isCameraFollowing.value = false
+    if (_navigationState.value.turnFocusActive) {
+        turnFocusUserPannedDuringActive = true
+    }
     val touchMs = SystemClock.elapsedRealtime()
     cameraFollowController.recordUserMapGesture(touchMs)
     scheduleAutoRecenterCheckImpl()
@@ -326,6 +331,7 @@ internal fun RahYabViewModel.scheduleAutoRecenterCheckImpl() {
     autoRecenterJob = viewModelScope.launch {
         delay(CameraFollowController.AUTO_RECENTER_DELAY_MS)
         val nav = _navigationState.value
+        if (nav.turnFocusActive && turnFocusUserPannedDuringActive) return@launch
         val isPlaceOrPreviewOpen = !nav.isNavigating &&
             (_selectedPlace.value != null || _candidateRoutes.value.isNotEmpty())
         val speedMps = if (nav.isNavigating) nav.currentSpeedMps else (currentGpsFix.value?.speedMps ?: 0f)
@@ -359,6 +365,7 @@ internal fun RahYabViewModel.toggleCompassHeadingModeImpl() {
 
 internal fun RahYabViewModel.recenterCameraImpl() {
     autoRecenterJob?.cancel()
+    turnFocusUserPannedDuringActive = false
     _isCameraFollowing.value = true
     emitImmediateFollowCameraImpl()
 }
@@ -376,13 +383,29 @@ internal fun RahYabViewModel.emitImmediateFollowCameraImpl(is3DViewOverride: Boo
     } else {
         _userHeadingDegrees.value
     }
+    val effective3D = is3DViewOverride ?: s.is3DView
+    if (nav.isNavigating && nav.turnFocusCameraActive && !turnFocusUserPannedDuringActive &&
+        nav.effectiveTravelMode == com.example.navigation.TravelMode.DRIVE
+    ) {
+        _cameraCommand.value = CameraTargetCommand(
+            lat = ref.lat,
+            lon = ref.lon,
+            zoom = if (nav.turnFocusIsHighway) com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_HIGHWAY else com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CITY,
+            tilt = if (effective3D) com.example.navigation.TurnFocusPlanner.FOCUS_TILT_3D else 0.0,
+            bearing = heading.toDouble(),
+            animationDurationMs = 450,
+            anchorLowerThird = false,
+            anchorLowerQuarter = true
+        )
+        return
+    }
     val update = cameraFollowController.computeFollowCameraUpdate(
         lat = ref.lat,
         lon = ref.lon,
         speedMps = speedMps,
         headingDegrees = heading,
         isHeadingUpMode = _isHeadingUpMode.value,
-        is3DView = is3DViewOverride ?: s.is3DView,
+        is3DView = effective3D,
         isNavigating = nav.isNavigating,
         simulationSpeedMultiplier = if (nav.isSimulatingDrive) _simulationSpeedMultiplier.value else 1,
         forceImmediate = true

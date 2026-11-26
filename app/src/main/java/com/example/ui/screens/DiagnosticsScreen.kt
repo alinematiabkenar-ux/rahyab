@@ -111,6 +111,7 @@ fun DiagnosticsScreen(
     val ttsDiag by viewModel.ttsDiagnostics.collectAsStateWithLifecycle()
     val parkedCar by viewModel.parkedCar.collectAsStateWithLifecycle()
     val navState by viewModel.navigationState.collectAsStateWithLifecycle()
+    val carScreenDiag by com.example.car.CarScreenDiagnosticsStore.state.collectAsStateWithLifecycle()
 
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var errorLines by remember { mutableStateOf(viewModel.readLastErrorLogLines(20)) }
@@ -154,7 +155,8 @@ fun DiagnosticsScreen(
         settings.lastManifestCheckEpochMs,
         settings.lastMapUpdateCheckResult,
         parkedCar,
-        navState.speedLimitSource
+        navState.speedLimitSource,
+        carScreenDiag
     ) {
         formatDiagnosticsReport(
             strings = strings,
@@ -172,7 +174,8 @@ fun DiagnosticsScreen(
             lastMapUpdateCheckResult = settings.lastMapUpdateCheckResult,
             parkedCarTimeEpochMs = parkedCar?.parkedAtEpochMs,
             parkedCarAccuracyMeters = parkedCar?.accuracyMeters,
-            speedLimitSource = navState.speedLimitSource
+            speedLimitSource = navState.speedLimitSource,
+            carScreenDiag = carScreenDiag
         )
     }
 
@@ -265,6 +268,11 @@ fun DiagnosticsScreen(
                         value = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
                     )
                 }
+            }
+
+            // 1b. Android Auto Car Screen Diagnostics (A4)
+            item {
+                DiagnosticsCarScreenCard(diag = carScreenDiag, strings = strings)
             }
 
             // 2. Installed Map Packs
@@ -682,7 +690,8 @@ fun formatDiagnosticsReport(
     lastMapUpdateCheckResult: String = "",
     parkedCarTimeEpochMs: Long? = null,
     parkedCarAccuracyMeters: Float? = null,
-    speedLimitSource: String = "none"
+    speedLimitSource: String = "none",
+    carScreenDiag: com.example.car.CarScreenDiagnosticsSnapshot = com.example.car.CarScreenDiagnosticsSnapshot()
 ): String = buildString {
     appendLine("=== ${strings.appName} — ${strings.diagnosticsTitle} ===")
     appendLine()
@@ -690,6 +699,8 @@ fun formatDiagnosticsReport(
     appendLine("${strings.appVersionLabel}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
     appendLine("${strings.diagAndroidVersion}: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
     appendLine("${strings.diagPhoneModel}: ${Build.MANUFACTURER} ${Build.MODEL}".trim())
+    appendLine()
+    appendLine(formatCarScreenDiagnosticsSection(carScreenDiag, strings))
     appendLine()
     appendLine("[${strings.diagSectionPacks}]")
     if (installedPacks.isEmpty()) {

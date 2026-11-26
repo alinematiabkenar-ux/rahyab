@@ -117,6 +117,7 @@ internal fun RahYabViewModel.startSimulationOnActiveRouteImpl() {
     trafficLightVoiceEvaluator.reset()
     laneChangeCueTracker.reset()
     speedLimitDropTracker.reset()
+    resetTurnFocusImpl()
     seedSimulationSpeedBumpsImpl(route.shape)
     voiceManager.resetDeduplication()
     simulatedWrongTurnTicksRemaining = 0
@@ -258,9 +259,10 @@ internal fun RahYabViewModel.setSimulateDriveEnabledImpl(enabled: Boolean) {
 }
 
 /**
- * L6: Simulation-only lane enrichment for highway exits/ramps (e.g., I-5 Eugene/Springfield)
- * when an exit maneuver lacks OSM turn:lanes metadata, ensuring Drive Simulation reliably
- * exercises lane-change beeps, visual pulses, and junction views without affecting real GPS.
+ * L6 & F9: Simulation-only lane enrichment for BOTH highway exits/ramps (e.g., I-5 Eugene/Springfield)
+ * AND city left/right turns (e.g., Eugene city streets) when a maneuver lacks OSM turn:lanes metadata,
+ * ensuring Drive Simulation reliably exercises Turn Focus mode (3 beeps, focus zoom, blue lanes)
+ * without affecting real GPS navigation.
  */
 internal fun enrichHighwayExitLanesForSimulation(
     route: com.example.navigation.OfflineRoute
@@ -274,6 +276,11 @@ internal fun enrichHighwayExitLanesForSimulation(
             m.type == com.example.navigation.ManeuverType.RAMP_LEFT ||
             m.type == com.example.navigation.ManeuverType.STAY_RIGHT ||
             m.type == com.example.navigation.ManeuverType.STAY_LEFT
+        val isCityTurn = m.type == com.example.navigation.ManeuverType.LEFT ||
+            m.type == com.example.navigation.ManeuverType.RIGHT ||
+            m.type == com.example.navigation.ManeuverType.SHARP_LEFT ||
+            m.type == com.example.navigation.ManeuverType.SHARP_RIGHT
+
         if (isExitOrSplit) {
             val startIdx = (m.beginShapeIndex - 20).coerceAtLeast(0)
             val endIdx = (m.beginShapeIndex + 10).coerceAtMost((route.shape.size - 1).coerceAtLeast(0))
@@ -281,11 +288,8 @@ internal fun enrichHighwayExitLanesForSimulation(
                 updatedOneWay.putIfAbsent(idx, true)
             }
         }
-        if (!isExitOrSplit || m.lanes.size >= 2) return@map m
+        if (m.lanes.size >= 2) return@map m
 
-        val isLeft = m.type == com.example.navigation.ManeuverType.EXIT_LEFT ||
-            m.type == com.example.navigation.ManeuverType.RAMP_LEFT ||
-            m.type == com.example.navigation.ManeuverType.STAY_LEFT
         val thruLane = com.example.navigation.LaneInfo(
             directions = listOf(com.example.navigation.LaneDirection.THROUGH),
             activeDirections = emptyList(),
@@ -293,21 +297,48 @@ internal fun enrichHighwayExitLanesForSimulation(
             isActive = false,
             isValid = false
         )
-        val exitDir = if (isLeft) com.example.navigation.LaneDirection.SLIGHT_LEFT else com.example.navigation.LaneDirection.SLIGHT_RIGHT
-        val exitLane = com.example.navigation.LaneInfo(
-            directions = listOf(exitDir),
-            activeDirections = listOf(exitDir),
-            isRecommended = true,
-            isActive = true,
-            isValid = true
-        )
-        val lanes = if (isLeft) listOf(exitLane, thruLane, thruLane) else listOf(thruLane, thruLane, exitLane)
-        m.copy(
-            lanes = lanes,
-            laneCount = lanes.size,
-            isMultiLaneRoad = true,
-            isHighwayExitOrSplit = true
-        )
+
+        if (isExitOrSplit) {
+            val isLeft = m.type == com.example.navigation.ManeuverType.EXIT_LEFT ||
+                m.type == com.example.navigation.ManeuverType.RAMP_LEFT ||
+                m.type == com.example.navigation.ManeuverType.STAY_LEFT
+            val exitDir = if (isLeft) com.example.navigation.LaneDirection.SLIGHT_LEFT else com.example.navigation.LaneDirection.SLIGHT_RIGHT
+            val exitLane = com.example.navigation.LaneInfo(
+                directions = listOf(exitDir),
+                activeDirections = listOf(exitDir),
+                isRecommended = true,
+                isActive = true,
+                isValid = true
+            )
+            val lanes = if (isLeft) listOf(exitLane, thruLane, thruLane) else listOf(thruLane, thruLane, exitLane)
+            return@map m.copy(
+                lanes = lanes,
+                laneCount = lanes.size,
+                isMultiLaneRoad = true,
+                isHighwayExitOrSplit = true
+            )
+        }
+
+        if (isCityTurn) {
+            val isLeft = m.type == com.example.navigation.ManeuverType.LEFT ||
+                m.type == com.example.navigation.ManeuverType.SHARP_LEFT
+            val turnDir = if (isLeft) com.example.navigation.LaneDirection.LEFT else com.example.navigation.LaneDirection.RIGHT
+            val turnLane = com.example.navigation.LaneInfo(
+                directions = listOf(turnDir),
+                activeDirections = listOf(turnDir),
+                isRecommended = true,
+                isActive = true,
+                isValid = true
+            )
+            val lanes = if (isLeft) listOf(turnLane, thruLane) else listOf(thruLane, turnLane)
+            return@map m.copy(
+                lanes = lanes,
+                laneCount = lanes.size,
+                isMultiLaneRoad = true
+            )
+        }
+
+        m
     }
     return route.copy(maneuvers = updated, oneWayByShapeIndex = updatedOneWay)
 }

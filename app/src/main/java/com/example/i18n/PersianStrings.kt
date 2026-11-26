@@ -465,4 +465,20 @@ object PersianStrings : AppStrings {
     override val voiceStoppedConfirm = "مسیریابی متوقف شد"
     override val voiceRoadClosedConfirm = "مسدودی جاده گزارش شد"
     override val voiceNoSearchMatches = "مکان مطابقی به‌صورت آفلاین پیدا نشد"
+    // A1, A4: Android Auto Car Map View & Diagnostics
+    override val carMapViewLabel = "نمای نقشه خودرو"
+    override val carMapViewClose = "نزدیک"
+    override val carMapViewNormal = "عادی"
+    override val carMapViewWide = "باز"
+    override val diagSectionCarScreen = "صفحه خودرو"
+    override val diagCarNotConnected = "اندروید اتو متصل نیست"
+    // F2, F7: Turn Focus Mode
+    override val turnFocusSectionTitle = "حالت تمرکز روی پیچ"
+    override val turnFocusModeToggle = "حالت تمرکز روی پیچ"
+    override val turnFocusBeepsToggle = "بوق پیش از پیچ و خروجی"
+    override val turnFocusCityDistanceLabel = "فاصله در شهر"
+    override val turnFocusHighwayDistanceLabel = "فاصله در بزرگراه"
+    override val turnFocusWideHighwayToggle = "شروع زودتر در بزرگراههای عریض"
+    override val turnFocusShortPhraseToggle = "جملهٔ کوتاه بعد از بوق"
+    override val turnFocusShortPhraseSpoken = "به خط آبی بروید"
 }

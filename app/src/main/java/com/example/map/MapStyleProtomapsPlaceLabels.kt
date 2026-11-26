@@ -14,8 +14,10 @@ internal object MapStyleProtomapsPlaceLabels {
         layers: JSONArray,
         sourceId: String,
         palette: MapPalette,
-        language: AppLanguage
+        language: AppLanguage,
+        isCar: Boolean = false
     ) {
+        val textScale = if (isCar) 1.15 else 1.0
         val localizedName = MapStylePaletteAndExprs.localizedPlaceNameExpr(language)
 
         val poiIconMatchExpr = JSONArray()
@@ -61,7 +63,7 @@ internal object MapStyleProtomapsPlaceLabels {
                 put("icon-padding", 4)
                 put("text-field", localizedName)
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_REGULAR))
-                put("text-size", 11.0)
+                put("text-size", 11.0 * textScale)
                 put("text-anchor", "top")
                 put("text-offset", JSONArray().put(0.0).put(0.95))
                 put("text-max-width", 8)
@@ -96,8 +98,8 @@ internal object MapStyleProtomapsPlaceLabels {
                 put("text-letter-spacing", 0.08)
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(12).put(10.0)
-                    .put(15).put(12.5)
+                    .put(12).put(10.0 * textScale)
+                    .put(15).put(12.5 * textScale)
                 )
                 put("text-max-width", 9)
             })
@@ -128,20 +130,20 @@ internal object MapStyleProtomapsPlaceLabels {
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
                     .put(5).put(
                         JSONArray().put("case")
-                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("city")).put(13.0)
-                            .put(10.5)
+                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("city")).put(13.0 * textScale)
+                            .put(10.5 * textScale)
                     )
                     .put(10).put(
                         JSONArray().put("case")
-                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("city")).put(17.0)
-                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("town")).put(13.5)
-                            .put(11.5)
+                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("city")).put(17.0 * textScale)
+                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("town")).put(13.5 * textScale)
+                            .put(11.5 * textScale)
                     )
                     .put(14).put(
                         JSONArray().put("case")
-                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("city")).put(20.0)
-                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("town")).put(15.5)
-                            .put(13.0)
+                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("city")).put(20.0 * textScale)
+                            .put(JSONArray().put("==").put(JSONArray().put("get").put("kind_detail")).put("town")).put(15.5 * textScale)
+                            .put(13.0 * textScale)
                     )
                 )
                 put("text-max-width", 9)
@@ -175,8 +177,8 @@ internal object MapStyleProtomapsPlaceLabels {
                 put("text-letter-spacing", 0.12)
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(3).put(10.0)
-                    .put(7).put(14.0)
+                    .put(3).put(10.0 * textScale)
+                    .put(7).put(14.0 * textScale)
                 )
             })
             put("paint", JSONObject().apply {

@@ -92,13 +92,22 @@ object LaneMapLayerHelper {
                 Expression.stop(19, 1.2f)
             )
 
+            val scaledArrowSizeExpr = Expression.product(
+                arrowSizeExpr,
+                Expression.switchCase(
+                    Expression.eq(Expression.get("is_large"), Expression.literal(true)),
+                    Expression.literal(1.38f),
+                    Expression.literal(1.0f)
+                )
+            )
+
             if (style.getLayer(LAYER_LANE_NON_TARGET) == null) {
                 val otherLayer = LineLayer(LAYER_LANE_NON_TARGET, SOURCE_LANE_STRIPS).apply {
-                    minZoom = 16.0f
+                    minZoom = 15.5f
                     setFilter(Expression.eq(Expression.get("is_target"), Expression.literal(false)))
                     setProperties(
                         PropertyFactory.lineColor("#64748B"),
-                        PropertyFactory.lineOpacity(0.60f),
+                        PropertyFactory.lineOpacity(0.45f),
                         PropertyFactory.lineWidth(laneWidthExpr),
                         PropertyFactory.lineCap(Property.LINE_CAP_BUTT),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
@@ -109,11 +118,11 @@ object LaneMapLayerHelper {
 
             if (style.getLayer(LAYER_LANE_TARGET) == null) {
                 val targetLayer = LineLayer(LAYER_LANE_TARGET, SOURCE_LANE_STRIPS).apply {
-                    minZoom = 16.0f
+                    minZoom = 15.5f
                     setFilter(Expression.eq(Expression.get("is_target"), Expression.literal(true)))
                     setProperties(
                         PropertyFactory.lineColor(Expression.get("color")),
-                        PropertyFactory.lineOpacity(0.88f),
+                        PropertyFactory.lineOpacity(0.85f),
                         PropertyFactory.lineWidth(laneWidthExpr),
                         PropertyFactory.lineCap(Property.LINE_CAP_BUTT),
                         PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
@@ -124,7 +133,7 @@ object LaneMapLayerHelper {
 
             if (style.getLayer(LAYER_LANE_SEPARATORS) == null) {
                 val sepLayer = LineLayer(LAYER_LANE_SEPARATORS, SOURCE_LANE_SEPARATORS).apply {
-                    minZoom = 16.0f
+                    minZoom = 15.5f
                     setProperties(
                         PropertyFactory.lineColor("#FFFFFF"),
                         PropertyFactory.lineOpacity(0.92f),
@@ -137,10 +146,10 @@ object LaneMapLayerHelper {
 
             if (style.getLayer(LAYER_LANE_ARROWS) == null) {
                 val arrowLayer = SymbolLayer(LAYER_LANE_ARROWS, SOURCE_LANE_ARROWS).apply {
-                    minZoom = 16.0f
+                    minZoom = 15.5f
                     setProperties(
                         PropertyFactory.iconImage(Expression.get("icon")),
-                        PropertyFactory.iconSize(arrowSizeExpr),
+                        PropertyFactory.iconSize(scaledArrowSizeExpr),
                         PropertyFactory.iconRotate(Expression.get("bearing")),
                         PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
                         PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_MAP),
@@ -156,7 +165,7 @@ object LaneMapLayerHelper {
     fun updateLaneOverlay(
         style: Style,
         overlay: LaneOverlayData?,
-        highlightColorHex: String = LaneHighlightColor.RED.hex
+        highlightColorHex: String = LaneHighlightColor.BLUE.hex
     ) {
         if (!style.isFullyLoaded) return
         val emptyFc = FeatureCollection.fromFeatures(emptyArray())
@@ -189,6 +198,7 @@ object LaneMapLayerHelper {
                 addNumberProperty("lane_index", m.laneIndex)
                 addNumberProperty("bearing", m.bearingDegrees)
                 addStringProperty("icon", iconForDirection(m.direction))
+                addBooleanProperty("is_large", m.isLargeArrow)
             }
         }
 

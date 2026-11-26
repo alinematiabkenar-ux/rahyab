@@ -166,7 +166,7 @@ object MapExtraLayersHelper {
         }
     }
 
-    fun updateManeuverArrow(style: Style, arrow: ManeuverArrowData?) {
+    fun updateManeuverArrow(style: Style, arrow: ManeuverArrowData?, enlarged: Boolean = false) {
         if (!style.isFullyLoaded) return
         val emptyFc = FeatureCollection.fromFeatures(emptyArray())
         val lineFc = if (arrow != null && arrow.points.size >= 2) {
@@ -184,6 +184,15 @@ object MapExtraLayersHelper {
             emptyFc
         }
         runCatching {
+            style.getLayerAs<LineLayer>(LAYER_MANEUVER_ARROW_CASING)?.setProperties(
+                PropertyFactory.lineWidth(if (enlarged) 17.5f else 12.5f)
+            )
+            style.getLayerAs<LineLayer>(LAYER_MANEUVER_ARROW_LINE)?.setProperties(
+                PropertyFactory.lineWidth(if (enlarged) 11.0f else 7.5f)
+            )
+            style.getLayerAs<SymbolLayer>(LAYER_MANEUVER_ARROW_HEAD)?.setProperties(
+                PropertyFactory.iconSize(if (enlarged) 1.25f else 0.86f)
+            )
             style.getSourceAs<GeoJsonSource>(SOURCE_MANEUVER_ARROW_LINE)?.setGeoJson(lineFc)
             style.getSourceAs<GeoJsonSource>(SOURCE_MANEUVER_ARROW_HEAD)?.setGeoJson(headFc)
         }

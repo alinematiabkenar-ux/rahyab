@@ -68,10 +68,17 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     val visualDrop = speedDropAhead?.takeIf {
         it.distanceMeters <= com.example.navigation.SpeedLimitChangeAhead.VISUAL_SIGN_WINDOW_METERS
     }
-    _navigationState.value = state.copy(
+    val prevNav = _navigationState.value
+    val baseState = state.copy(
         upcomingSpeedLimitMph = visualDrop?.newLimitMph,
-        upcomingSpeedLimitDistanceMeters = visualDrop?.distanceMeters
+        upcomingSpeedLimitDistanceMeters = visualDrop?.distanceMeters,
+        turnFocusActive = prevNav.turnFocusActive,
+        turnFocusCameraActive = prevNav.turnFocusCameraActive,
+        turnFocusIsHighway = prevNav.turnFocusIsHighway,
+        turnFocusManeuverIndex = prevNav.turnFocusManeuverIndex,
+        turnFocusTriggerDistanceMeters = prevNav.turnFocusTriggerDistanceMeters
     )
+    val effectiveState = evaluateTurnFocusImpl(baseState, speedMps)
 
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc
@@ -210,7 +217,8 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     // Follow driving camera unless user manually panned/zoomed away (or auto-recenter triggers after 10s > 10 mph)
     val nowElapsed = SystemClock.elapsedRealtime()
     var forceRecenterNow = false
-    if (cameraFollowController.shouldAutoRecenter(
+    if (!(effectiveState.turnFocusActive && turnFocusUserPannedDuringActive) &&
+        cameraFollowController.shouldAutoRecenter(
             isCameraFollowing = _isCameraFollowing.value,
             isPlaceOrPreviewOpen = false,
             speedMps = speedMps,
@@ -221,48 +229,23 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         forceRecenterNow = true
     }
     if (_isCameraFollowing.value) {
-        val targetLoc = state.snappedLocation ?: fallbackLoc
+        val targetLoc = effectiveState.snappedLocation ?: fallbackLoc
         if (targetLoc != null) {
-            val heading = if (speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || state.isSimulatingDrive) {
-                state.snappedBearing
+            val heading = if (speedMps > LocationTracker.MIN_BEARING_SPEED_MPS || effectiveState.isSimulatingDrive) {
+                effectiveState.snappedBearing
             } else {
                 _userHeadingDegrees.value
             }
-            val simMultiplier = if (state.isSimulatingDrive) _simulationSpeedMultiplier.value else 1
-            val isLaneOverlayActive = !state.hasArrived && com.example.map.LaneOverlayBuilder.build(
-                route = state.route,
-                currentManeuverIndex = state.currentManeuverIndex,
-                snappedShapeIndex = state.snappedShapeIndex,
-                distanceToNextManeuverMeters = state.distanceToNextManeuverMeters,
-                travelMode = mode,
-                isOffRoute = state.isOffRoute,
-                enabled = s.laneHighlightOnMapEnabled
-            ) != null
-            val update = cameraFollowController.computeFollowCameraUpdate(
-                lat = targetLoc.lat,
-                lon = targetLoc.lon,
+            val simMultiplier = if (effectiveState.isSimulatingDrive) _simulationSpeedMultiplier.value else 1
+            computeFocusOrFollowCameraCommandImpl(
+                state = effectiveState,
+                targetLoc = targetLoc,
                 speedMps = speedMps,
-                headingDegrees = heading,
-                isHeadingUpMode = _isHeadingUpMode.value,
-                is3DView = s.is3DView,
-                isNavigating = true,
-                simulationSpeedMultiplier = simMultiplier,
-                forceImmediate = forceRecenterNow,
-                isWalkingMode = state.isWalkingMode,
-                travelMode = mode,
-                minZoomFloor = if (isLaneOverlayActive) 16.5 else null
-            )
-            if (update != null) {
-                _cameraCommand.value = CameraTargetCommand(
-                    lat = update.lat,
-                    lon = update.lon,
-                    zoom = update.zoom,
-                    tilt = update.tilt,
-                    bearing = update.bearing,
-                    animationDurationMs = if (state.isSimulatingDrive) cameraAnimMs else update.animationDurationMs,
-                    anchorLowerThird = update.anchorLowerThird
-                )
-            }
+                heading = heading,
+                simMultiplier = simMultiplier,
+                cameraAnimMs = cameraAnimMs,
+                forceRecenterNow = forceRecenterNow
+            )?.let { cmd -> _cameraCommand.value = cmd }
         }
     }
 
@@ -306,6 +289,7 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
             navController.reset()
             trafficLightVoiceEvaluator.reset()
             laneChangeCueTracker.reset()
+            resetTurnFocusImpl()
             speedLimitDropTracker.reset()
             voiceManager.resetDeduplication()
             val spoken = voiceManager.speakStartInstruction(newRoute, s.language)

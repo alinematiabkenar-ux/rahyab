@@ -465,4 +465,20 @@ object EnglishStrings : AppStrings {
     override val voiceStoppedConfirm = "Navigation stopped"
     override val voiceRoadClosedConfirm = "Road closure reported"
     override val voiceNoSearchMatches = "No matching offline places found"
+    // A1, A4: Android Auto Car Map View & Diagnostics
+    override val carMapViewLabel = "Car map view"
+    override val carMapViewClose = "Close"
+    override val carMapViewNormal = "Normal"
+    override val carMapViewWide = "Wide"
+    override val diagSectionCarScreen = "Car screen"
+    override val diagCarNotConnected = "Android Auto not connected"
+    // F2, F7: Turn Focus Mode
+    override val turnFocusSectionTitle = "Turn focus mode"
+    override val turnFocusModeToggle = "Turn focus mode"
+    override val turnFocusBeepsToggle = "Beeps before turns and exits"
+    override val turnFocusCityDistanceLabel = "City distance"
+    override val turnFocusHighwayDistanceLabel = "Highway distance"
+    override val turnFocusWideHighwayToggle = "Start earlier on wide highways"
+    override val turnFocusShortPhraseToggle = "Short phrase after beeps"
+    override val turnFocusShortPhraseSpoken = "Get in the blue lane"
 }

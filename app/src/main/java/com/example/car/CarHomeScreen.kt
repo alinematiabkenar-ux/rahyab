@@ -49,13 +49,6 @@ class CarHomeScreen(
                     }
                 }
                 s.launch {
-                    app.navigationHub.navigationState.collectLatest { nav ->
-                        if (nav.isNavigating && screenManager.top === this@CarHomeScreen) {
-                            screenManager.push(CarNavigationScreen(carContext, app, renderer))
-                        }
-                    }
-                }
-                s.launch {
                     app.navigationHub.freeDriveAheadAlert.collectLatest { alert ->
                         alertHelper.showAheadAlertIfNew(alert, settings.distanceUnit, settings.language)
                     }
@@ -70,6 +63,7 @@ class CarHomeScreen(
     }
 
     override fun onGetTemplate(): Template {
+        CarScreenDiagnosticsStore.onTopScreenChanged("CarHomeScreen")
         val str = stringsFor(settings.language)
         val actionStrip = ActionStrip.Builder()
             .addAction(
@@ -116,6 +110,7 @@ class CarHomeScreen(
                     if (!enabled) renderer.recenter()
                 }
         }
+        CarScreenDiagnosticsStore.onTemplateBuilt("NavigationTemplate", routingInfoHadStep = false)
         return builder.build()
     }
 }

@@ -241,6 +241,11 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val speedBumpEvaluator = com.example.navigation.SpeedBumpAlertEvaluator()
     internal val trafficLightVoiceEvaluator = com.example.navigation.TrafficLightVoiceEvaluator()
     internal val laneChangeCueTracker = com.example.navigation.LaneChangeCueTracker()
+    internal val turnFocusTracker = com.example.navigation.TurnFocusSessionTracker()
+    internal var turnFocusZoomDelayJob: Job? = null
+    internal var turnFocusUserPannedDuringActive: Boolean = false
+    internal var turnFocusPendingEnterAnim: Boolean = false
+    internal var turnFocusPendingExitAnim: Boolean = false
     internal val speedLimitDropTracker = com.example.navigation.SpeedLimitDropVoiceTracker()
     internal val hpmsFallbackCache = com.example.navigation.HpmsSpeedFallbackCache()
     internal val voiceCommandManager = com.example.navigation.OfflineVoiceCommandManager(app)
@@ -393,12 +398,19 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun dismissPersianTtsNotice() = dismissPersianTtsNoticeImpl()
     fun setDistanceUnit(unit: DistanceUnit) { viewModelScope.launch { prefs.setDistanceUnit(unit) } }
     fun setThemeMode(mode: MapThemeMode) { viewModelScope.launch { prefs.setThemeMode(mode) } }
+    fun setCarMapView(view: com.example.car.CarMapView) { viewModelScope.launch { prefs.setCarMapView(view) } }
     fun setVoiceEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setVoiceGuidanceEnabled(enabled) } }
     fun setSpeedAudioEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setSpeedWarningAudioEnabled(enabled) } }
     fun setSpeedWarningThresholdMph(thresholdMph: Int) { viewModelScope.launch { prefs.setSpeedWarningThresholdMph(thresholdMph) } }
     fun setJunctionPreviewEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setJunctionPreviewEnabled(enabled) } }
     fun setLaneHighlightOnMapEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLaneHighlightOnMapEnabled(enabled) } }
     fun setLaneHighlightColor(color: com.example.map.LaneHighlightColor) { viewModelScope.launch { prefs.setLaneHighlightColor(color) } }
+    fun setTurnFocusModeEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setTurnFocusModeEnabled(enabled) } }
+    fun setTurnFocusBeepsEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setTurnFocusBeepsEnabled(enabled) } }
+    fun setTurnFocusCityDistanceMeters(meters: Int) { viewModelScope.launch { prefs.setTurnFocusCityDistanceMeters(meters) } }
+    fun setTurnFocusHighwayDistanceMeters(meters: Int) { viewModelScope.launch { prefs.setTurnFocusHighwayDistanceMeters(meters) } }
+    fun setTurnFocusWideHighwayEarlierEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setTurnFocusWideHighwayEarlierEnabled(enabled) } }
+    fun setTurnFocusShortPhraseEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setTurnFocusShortPhraseEnabled(enabled) } }
     fun setLaneChangeBeepsEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLaneChangeBeepsEnabled(enabled) } }
     fun setLaneChangeTiming(timing: com.example.navigation.LaneChangeTiming) { viewModelScope.launch { prefs.setLaneChangeTiming(timing) } }
     fun setLastChanceBeepEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setLastChanceBeepEnabled(enabled) } }

@@ -101,8 +101,9 @@ fun MapLibreMapContainer(
     stopSigns: List<RoadHazardPoint> = emptyList(),
     parkedCarLocation: LatLon? = null,
     maneuverArrow: com.example.map.ManeuverArrowData? = null,
+    enlargedManeuverArrow: Boolean = false,
     laneOverlay: com.example.map.LaneOverlayData? = null,
-    laneHighlightColorHex: String = com.example.map.LaneHighlightColor.RED.hex,
+    laneHighlightColorHex: String = com.example.map.LaneHighlightColor.BLUE.hex,
     destinationParkingSpots: List<com.example.navigation.DestinationParkingOption> = emptyList(),
     show3DBuildings: Boolean = true,
     positionMarkerStyle: String = "arrow",
@@ -454,9 +455,9 @@ fun MapLibreMapContainer(
         val style = loadedStyle ?: return@LaunchedEffect
         com.example.map.MapExtraLayersHelper.updateParkedCar(style, parkedCarLocation)
     }
-    LaunchedEffect(loadedStyle, maneuverArrow) {
+    LaunchedEffect(loadedStyle, maneuverArrow, enlargedManeuverArrow) {
         val style = loadedStyle ?: return@LaunchedEffect
-        com.example.map.MapExtraLayersHelper.updateManeuverArrow(style, maneuverArrow)
+        com.example.map.MapExtraLayersHelper.updateManeuverArrow(style, maneuverArrow, enlargedManeuverArrow)
     }
     LaunchedEffect(loadedStyle, laneOverlay, laneHighlightColorHex) {
         val style = loadedStyle ?: return@LaunchedEffect
@@ -521,10 +522,10 @@ fun MapLibreMapContainer(
         val map = mapLibreMap ?: return@LaunchedEffect
         val cmd = cameraCommand ?: return@LaunchedEffect
         lastAppliedHeadingBearing = cmd.bearing.toFloat()
-        val topPadding = if (cmd.anchorLowerThird && mapView.height > 0) {
-            (mapView.height * 0.34)
-        } else {
-            0.0
+        val topPadding = when {
+            cmd.anchorLowerQuarter && mapView.height > 0 -> mapView.height * 0.42
+            cmd.anchorLowerThird && mapView.height > 0 -> mapView.height * 0.34
+            else -> 0.0
         }
         val pos = CameraPosition.Builder()
             .target(LatLng(cmd.lat, cmd.lon))

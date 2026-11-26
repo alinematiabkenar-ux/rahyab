@@ -12,8 +12,10 @@ internal object MapStyleProtomapsGeometry {
     fun addProtomapsBaseGeometryLayers(
         layers: JSONArray,
         sourceId: String,
-        palette: MapPalette
+        palette: MapPalette,
+        isCar: Boolean = false
     ) {
+        val roadScale = if (isCar) 1.3 else 1.0
         layers.put(
             JSONObject().apply {
                 put("id", "${sourceId}_earth")
@@ -127,9 +129,9 @@ internal object MapStyleProtomapsGeometry {
                         "line-width",
                         JSONArray()
                             .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                            .put(12).put(0.8)
-                            .put(15).put(2.4)
-                            .put(18).put(6.0)
+                            .put(12).put(0.8 * roadScale)
+                            .put(15).put(2.4 * roadScale)
+                            .put(18).put(6.0 * roadScale)
                     )
                 })
             }
@@ -151,9 +153,9 @@ internal object MapStyleProtomapsGeometry {
                         "line-width",
                         JSONArray()
                             .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                            .put(8).put(1.2)
-                            .put(13).put(3.6)
-                            .put(17).put(8.5)
+                            .put(8).put(1.2 * roadScale)
+                            .put(13).put(3.6 * roadScale)
+                            .put(17).put(8.5 * roadScale)
                     )
                 })
             }

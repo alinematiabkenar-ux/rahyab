@@ -10,6 +10,13 @@ import androidx.car.app.validation.HostValidator
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.example.RahYabApplication
+import com.example.navigation.TravelMode
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 /**
  * Android Auto entry point for RahYab offline turn-by-turn navigation.
@@ -29,9 +36,14 @@ class RahYabCarAppService : CarAppService() {
     }
 }
 
+/**
+ * B1: Single source of truth for switching Android Auto between [CarHomeScreen] and
+ * [CarNavigationScreen] whenever navigation starts or ends (from phone OR car).
+ */
 class RahYabCarSession : Session() {
 
     private var surfaceRenderer: CarMapSurfaceRenderer? = null
+    private var sessionScope: CoroutineScope? = null
 
     override fun onCreateScreen(intent: Intent): Screen {
         val app = carContext.applicationContext as RahYabApplication
@@ -39,21 +51,54 @@ class RahYabCarSession : Session() {
         surfaceRenderer = renderer
         renderer.attachToHost()
         app.navigationHub.setCarSessionConnected(true)
+        CarScreenDiagnosticsStore.onSessionConnected(carContext.carAppApiLevel)
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        sessionScope = scope
 
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onDestroy(owner: LifecycleOwner) {
+                sessionScope?.cancel()
+                sessionScope = null
                 app.navigationHub.setCarSessionConnected(false)
+                CarScreenDiagnosticsStore.onSessionDisconnected()
                 surfaceRenderer?.release()
                 surfaceRenderer = null
             }
         })
 
+        val screenManager = carContext.getCarService(ScreenManager::class.java)
         val home = CarHomeScreen(carContext, app, renderer)
-        if (app.navigationHub.navigationState.value.isNavigating) {
-            carContext.getCarService(ScreenManager::class.java).push(home)
-            return CarNavigationScreen(carContext, app, renderer)
+        val initialNav = app.navigationHub.navigationState.value
+        val startInNav = initialNav.isNavigating && initialNav.effectiveTravelMode == TravelMode.DRIVE
+
+        scope.launch {
+            app.navigationHub.navigationState.collectLatest { nav ->
+                runCatching {
+                    val top = screenManager.top
+                    val shouldShowNav = nav.isNavigating && nav.effectiveTravelMode == TravelMode.DRIVE
+                    if (shouldShowNav && top !is CarNavigationScreen) {
+                        screenManager.popToRoot()
+                        screenManager.push(CarNavigationScreen(carContext, app, renderer))
+                        CarScreenDiagnosticsStore.onTopScreenChanged("CarNavigationScreen")
+                    } else if (!nav.isNavigating && top is CarNavigationScreen) {
+                        screenManager.popToRoot()
+                        CarScreenDiagnosticsStore.onTopScreenChanged("CarHomeScreen")
+                    } else {
+                        CarScreenDiagnosticsStore.onTopScreenChanged(top.javaClass.simpleName)
+                    }
+                }
+            }
         }
-        return home
+
+        return if (startInNav) {
+            screenManager.push(home)
+            CarScreenDiagnosticsStore.onTopScreenChanged("CarNavigationScreen")
+            CarNavigationScreen(carContext, app, renderer)
+        } else {
+            CarScreenDiagnosticsStore.onTopScreenChanged("CarHomeScreen")
+            home
+        }
     }
 
     override fun onCarConfigurationChanged(newConfiguration: Configuration) {

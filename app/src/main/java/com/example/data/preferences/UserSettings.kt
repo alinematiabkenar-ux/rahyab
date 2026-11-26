@@ -1,5 +1,6 @@
 package com.example.data.preferences
 
+import com.example.car.CarMapView
 import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.i18n.MapThemeMode
@@ -14,13 +15,21 @@ data class UserSettings(
     val language: AppLanguage = AppLanguage.ENGLISH,
     val distanceUnit: DistanceUnit = DistanceUnit.IMPERIAL,
     val themeMode: MapThemeMode = MapThemeMode.AUTO,
+    val carMapView: CarMapView = CarMapView.NORMAL,
     val voiceGuidanceEnabled: Boolean = true,
     val speedWarningAudioEnabled: Boolean = true,
     val speedWarningThresholdMph: Int = 5, // 0, 5, or 10 mph (converted automatically for km/h)
     val junctionPreviewEnabled: Boolean = true,
-    // LN3: Lane highlight on the map itself
+    // LN3 / F6: Lane highlight on the map itself (default BLUE)
     val laneHighlightOnMapEnabled: Boolean = true,
-    val laneHighlightColor: LaneHighlightColor = LaneHighlightColor.RED,
+    val laneHighlightColor: LaneHighlightColor = LaneHighlightColor.BLUE,
+    // F1-F7: Turn Focus Mode (3 beeps, zoom, blue lanes)
+    val turnFocusModeEnabled: Boolean = true,
+    val turnFocusBeepsEnabled: Boolean = true,
+    val turnFocusCityDistanceMeters: Int = 500,
+    val turnFocusHighwayDistanceMeters: Int = 1000,
+    val turnFocusWideHighwayEarlierEnabled: Boolean = true,
+    val turnFocusShortPhraseEnabled: Boolean = false,
     // L4: Lane change beeps & timing
     val laneChangeBeepsEnabled: Boolean = true,
     val laneChangeTiming: LaneChangeTiming = LaneChangeTiming.NORMAL,

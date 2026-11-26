@@ -14,8 +14,11 @@ internal object MapStyleProtomapsRoadLabels {
         layers: JSONArray,
         sourceId: String,
         palette: MapPalette,
-        language: AppLanguage
+        language: AppLanguage,
+        isCar: Boolean = false
     ) {
+        val textScale = if (isCar) 1.15 else 1.0
+        val minorRoadMinZoom = if (isCar) 14 else 15
         val localizedName = MapStylePaletteAndExprs.localizedPlaceNameExpr(language)
         val englishStreet = MapStylePaletteAndExprs.englishStreetNameExpr()
         val highwayRef = MapStylePaletteAndExprs.highwayRefExpr()
@@ -32,8 +35,8 @@ internal object MapStyleProtomapsRoadLabels {
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_ITALIC))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(8).put(10.5)
-                    .put(14).put(13.5)
+                    .put(8).put(10.5 * textScale)
+                    .put(14).put(13.5 * textScale)
                 )
                 put("text-max-width", 8)
             })
@@ -55,7 +58,7 @@ internal object MapStyleProtomapsRoadLabels {
                 put("symbol-placement", "line")
                 put("text-field", localizedName)
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_ITALIC))
-                put("text-size", 11.5)
+                put("text-size", 11.5 * textScale)
                 put("text-max-angle", 35)
             })
             put("paint", JSONObject().apply {
@@ -88,8 +91,8 @@ internal object MapStyleProtomapsRoadLabels {
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_ITALIC))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(13).put(10.5)
-                    .put(16).put(12.5)
+                    .put(13).put(10.5 * textScale)
+                    .put(16).put(12.5 * textScale)
                 )
                 put("text-max-width", 8)
             })
@@ -105,7 +108,7 @@ internal object MapStyleProtomapsRoadLabels {
             put("type", "symbol")
             put("source", sourceId)
             put("source-layer", "roads")
-            put("minzoom", 15)
+            put("minzoom", minorRoadMinZoom)
             put(
                 "filter",
                 JSONArray()
@@ -120,8 +123,8 @@ internal object MapStyleProtomapsRoadLabels {
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_REGULAR))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(15).put(11.0)
-                    .put(18).put(13.5)
+                    .put(minorRoadMinZoom).put(11.0 * textScale)
+                    .put(18).put(13.5 * textScale)
                 )
                 put("text-max-angle", 30)
                 put("text-padding", 4)
@@ -153,8 +156,8 @@ internal object MapStyleProtomapsRoadLabels {
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_MEDIUM))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(13).put(11.5)
-                    .put(16).put(14.0)
+                    .put(13).put(11.5 * textScale)
+                    .put(16).put(14.0 * textScale)
                 )
                 put("text-max-angle", 30)
                 put("text-padding", 4)
@@ -201,9 +204,9 @@ internal object MapStyleProtomapsRoadLabels {
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_MEDIUM))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(7).put(9.5)
-                    .put(13).put(11.5)
-                    .put(16).put(12.5)
+                    .put(7).put(9.5 * textScale)
+                    .put(13).put(11.5 * textScale)
+                    .put(16).put(12.5 * textScale)
                 )
                 put("text-rotation-alignment", "viewport")
                 put("icon-image", MapStyleBuilder.IMAGE_SHIELD_INTERSTATE)
@@ -240,9 +243,9 @@ internal object MapStyleProtomapsRoadLabels {
                 put("text-font", JSONArray().put(MapStyleBuilder.FONT_MEDIUM))
                 put("text-size", JSONArray()
                     .put("interpolate").put(JSONArray().put("linear")).put(JSONArray().put("zoom"))
-                    .put(8).put(9.5)
-                    .put(13).put(11.0)
-                    .put(16).put(12.0)
+                    .put(8).put(9.5 * textScale)
+                    .put(13).put(11.0 * textScale)
+                    .put(16).put(12.0 * textScale)
                 )
                 put("text-rotation-alignment", "viewport")
                 put(
