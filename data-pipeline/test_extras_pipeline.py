@@ -559,10 +559,173 @@ class ExtrasPipelineUnitTest(unittest.TestCase):
             out_db = Path(tmp) / "or_extras.db"
             with mock.patch("extras_fra_hpms.populate_fra_crossings", return_value=0), \
                  mock.patch("extras_fra_hpms.populate_hpms_speed", side_effect=RuntimeError("boom")), \
+                 mock.patch("extras_tiger.populate_tiger_ranges", return_value=0), \
+                 mock.patch("extras_gnis.populate_gnis_names", return_value=0), \
                  redirect_stdout(buf):
                 result = build_extras_db("or", "OR", or_bbox, out_db)
             self.assertEqual(result, out_db)
+            conn = sqlite3.connect(str(out_db))
+            sv = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
+            conn.close()
+            self.assertEqual(sv, "2")
         self.assertIn("[warn] extras step hpms_speed skipped: RuntimeError: boom", buf.getvalue())
+
+    def test_d1_tiger_year_fallback_and_populate_ranges_mocked(self):
+        from extras_tiger import (
+            discover_newest_tiger_year,
+            parse_tiger_feature_row,
+            populate_tiger_ranges,
+        )
+
+        or_bbox = (-124.57, 41.99, -116.46, 46.29)
+        html_2025 = '<a href="tl_2025_41039_addrfeat.zip">tl_2025_41039_addrfeat.zip</a>'
+
+        def fake_get_text(url: str, timeout_sec: int = 30) -> str:
+            if "TIGER2026" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=io.BytesIO(b""))
+            return html_2025
+
+        with mock.patch("extras_tiger.http_get_text", side_effect=fake_get_text):
+            year, html = discover_newest_tiger_year()
+        self.assertEqual(year, 2025)
+        self.assertIn("41039", html)
+
+        sample_feature = {
+            "FULLNAME": "North Oak Street",
+            "LFROMHN": "100",
+            "LTOHN": "198",
+            "RFROMHN": "101",
+            "RTOHN": "199",
+            "PARITYL": "E",
+            "PARITYR": "O",
+            "ZIPL": "97401",
+            "CITY": "Eugene",
+            "GEOM_GEOJSON": json.dumps(
+                {
+                    "type": "LineString",
+                    "coordinates": [[-123.0900, 44.0500], [-123.0900, 44.0510]],
+                }
+            ),
+        }
+        parsed = parse_tiger_feature_row(sample_feature, or_bbox)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0][1], "n oak st")  # normalized via address_utils.normalize_street
+
+        def fake_download(url: str, dest: Path, timeout_sec: int = 120):
+            dest.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+            return dest
+
+        conn = sqlite3.connect(":memory:")
+        buf = io.StringIO()
+        with mock.patch("extras_tiger.discover_newest_tiger_year", return_value=(2025, html_2025)), \
+             mock.patch("extras_tiger.discover_intersecting_county_fips", return_value=["41039"]), \
+             mock.patch("extras_tiger.download_file", side_effect=fake_download), \
+             mock.patch("extras_tiger.read_addrfeat_zip_rows", return_value=[sample_feature]), \
+             redirect_stdout(buf):
+            count = populate_tiger_ranges(conn, "or", "OR", or_bbox)
+        self.assertEqual(count, 1)
+        self.assertIn("[check] tiger_ranges count=1", buf.getvalue())
+        row = conn.execute(
+            "SELECT street, street_norm, zip, from_left, to_left, parity_left, from_right, to_right, parity_right FROM tiger_ranges"
+        ).fetchone()
+        self.assertEqual(row, ("North Oak Street", "n oak st", "97401", 100, 198, "E", 101, 199, "O"))
+        conn.close()
+
+    def test_d2_gnis_download_fallback_filtering_and_fts5_mocked(self):
+        import zipfile as _zipfile
+        from extras_gnis import find_gnis_url_from_s3_listing, populate_gnis_names
+
+        or_bbox = (-124.57, 41.99, -116.46, 46.29)
+        s3_xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Contents><Key>StagedProducts/GeographicNames/DomesticNames/DomesticNames_OR_Text_2026.zip</Key></Contents>
+        </ListBucketResult>"""
+        found_url = find_gnis_url_from_s3_listing(s3_xml, "OR")
+        self.assertTrue(found_url and found_url.endswith("DomesticNames_OR_Text_2026.zip"))
+
+        gnis_pipe = "\n".join(
+            [
+                "feature_id|feature_name|feature_class|county_name|prim_lat_dec|prim_long_dec",
+                "1|Spencer Butte|Summit|Lane|43.9832|-123.0978",
+                "2|Crater Lake|Lake|Klamath|42.9446|-122.1090",
+                "3|Old Post Office|Building|Lane|44.0500|-123.0900",  # excluded class
+                "4|Bad Coord Lake|Lake|Lane|0|0",  # invalid coord
+            ]
+        )
+
+        def fake_download_gnis(state_abbr: str, dest_path: Path, timeout_sec: int = 120):
+            with _zipfile.ZipFile(dest_path, "w") as zf:
+                zf.writestr("DomesticNames_OR.txt", gnis_pipe)
+            return dest_path
+
+        conn = sqlite3.connect(":memory:")
+        buf = io.StringIO()
+        with mock.patch("extras_gnis.download_gnis_state_file", side_effect=fake_download_gnis), \
+             redirect_stdout(buf):
+            count = populate_gnis_names(conn, "OR", or_bbox)
+        self.assertEqual(count, 2)
+        self.assertIn("[check] gnis_names count=2", buf.getvalue())
+        fts_hits = conn.execute(
+            "SELECT g.name, g.feature_class FROM gnis_fts f JOIN gnis_names g ON g.id = f.rowid WHERE gnis_fts MATCH 'spen*'"
+        ).fetchall()
+        self.assertEqual(fts_hits, [("Spencer Butte", "Summit")])
+        conn.close()
+
+    def test_d3_hpms_through_lanes_discovery_and_table_population(self):
+        or_bbox = (-124.57, 41.99, -116.46, 46.29)
+        fake_columns = [
+            {"fieldName": "speed_limit", "name": "Speed Limit", "dataTypeName": "number"},
+            {"fieldName": "thru_lanes", "name": "Through Lanes", "dataTypeName": "number"},
+            {"fieldName": "line", "name": "Line", "dataTypeName": "line"},
+        ]
+        fake_rows = [
+            {
+                "speed_limit": "65",
+                "routename": "I-5",
+                "route_number": "5",
+                "thru_lanes": "4",
+                "line": {
+                    "type": "LineString",
+                    "coordinates": [[-123.0900, 44.0500], [-123.0900, 44.0600]],
+                },
+            },
+            {
+                "speed_limit": "55",
+                "routename": "OR-99",
+                "route_number": "99",
+                "thru_lanes": "",  # missing -> skipped for hpms_lanes, kept for hpms_speed
+                "line": {
+                    "type": "LineString",
+                    "coordinates": [[-123.0800, 44.0500], [-123.0800, 44.0600]],
+                },
+            },
+        ]
+        seen_urls: list[str] = []
+
+        def fake_get(url: str, timeout_sec: int = 45):
+            seen_urls.append(url)
+            if "columns.json" in url:
+                return fake_columns
+            return fake_rows
+
+        conn = sqlite3.connect(":memory:")
+        init_extras_schema(conn)
+        buf = io.StringIO()
+        with mock.patch("extras_fra_hpms.http_get_json", side_effect=fake_get), redirect_stdout(buf):
+            speed_count = populate_hpms_speed(conn, "OR", or_bbox, include_lanes=True)
+
+        self.assertEqual(speed_count, 2)
+        self.assertIn("thru_lanes", seen_urls[1])
+        self.assertIn("[check] hpms_lanes count=1", buf.getvalue())
+        lanes_rows = conn.execute("SELECT through_lanes FROM hpms_lanes").fetchall()
+        self.assertEqual(lanes_rows, [(4,)])
+        # Verify hpms_speed table schema was not changed
+        speed_cols = [r[1] for r in conn.execute("PRAGMA table_info(hpms_speed)").fetchall()]
+        self.assertEqual(
+            speed_cols,
+            ["id", "speed_mph", "route_name", "min_lat", "min_lon", "max_lat", "max_lon", "polyline"],
+        )
+        conn.close()
 
     def test_http_get_json_logs_status_and_first_300_chars_on_http_error(self):
         long_body = ("ERR_DETAIL_" * 50).encode("utf-8")

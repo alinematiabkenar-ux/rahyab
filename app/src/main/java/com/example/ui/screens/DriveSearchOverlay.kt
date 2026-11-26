@@ -233,20 +233,32 @@ internal fun SearchResultPlaceRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        val isGnisLandmark = place.source == com.example.data.search.GnisPlaceSearchHelper.SOURCE_GNIS_LANDMARK
         Box(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
                 .background(
-                    if (isOnlineResult) CyanBeacon.copy(alpha = 0.16f)
-                    else MaterialTheme.colorScheme.primaryContainer
+                    when {
+                        isOnlineResult -> CyanBeacon.copy(alpha = 0.16f)
+                        isGnisLandmark -> MaterialTheme.colorScheme.tertiaryContainer
+                        else -> MaterialTheme.colorScheme.primaryContainer
+                    }
                 ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = if (isOnlineResult) Icons.Filled.Cloud else Icons.Filled.Place,
-                contentDescription = if (isOnlineResult) onlineBadgeLabel else null,
-                tint = if (isOnlineResult) CyanBeacon else MaterialTheme.colorScheme.onPrimaryContainer
+                imageVector = when {
+                    isOnlineResult -> Icons.Filled.Cloud
+                    isGnisLandmark -> com.example.ui.components.gnisIconForFeatureClass(place.category)
+                    else -> Icons.Filled.Place
+                },
+                contentDescription = if (isOnlineResult) onlineBadgeLabel else place.category.takeIf { isGnisLandmark },
+                tint = when {
+                    isOnlineResult -> CyanBeacon
+                    isGnisLandmark -> MaterialTheme.colorScheme.onTertiaryContainer
+                    else -> MaterialTheme.colorScheme.onPrimaryContainer
+                }
             )
         }
         Column(modifier = Modifier.weight(1f)) {
@@ -285,6 +297,19 @@ internal fun SearchResultPlaceRow(
                             text = strings.addressApproximateBadge,
                             style = MaterialTheme.typography.labelSmall,
                             color = AlertAmber,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                } else if (isGnisLandmark) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.tertiaryContainer
+                    ) {
+                        Text(
+                            text = place.category.ifBlank { strings.gnisLandmarkBadge },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                         )

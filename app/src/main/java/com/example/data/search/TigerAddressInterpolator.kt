@@ -179,7 +179,7 @@ object TigerAddressInterpolator {
             val displayName = AddressNormalizer.formatUsAddress(
                 number = displayNumber,
                 street = rec.street,
-                unit = parsed.unit,
+                unit = "",
                 city = rec.city,
                 state = rec.stateCode.uppercase(),
                 postcode = rec.zip

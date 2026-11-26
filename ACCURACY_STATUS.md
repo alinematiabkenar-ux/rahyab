@@ -15,11 +15,11 @@
 - [x] D1 Pipeline: TIGER/Line `ADDRFEAT` address ranges (`tiger_ranges` table + indexes, try 2026/2025/2024, state + neighboring bbox counties, DuckDB spatial `/vsizip/`, `address_utils.py` normalizer, schema_version 2)
 - [x] D2 Pipeline: USGS GNIS Domestic Names (`gnis_names` + FTS5 `gnis_fts`, filtered feature classes)
 - [x] D3 Pipeline: HPMS through-lanes (`hpms_lanes` table, keep `hpms_speed` unchanged)
-- [ ] D4 App: TIGER address range fallback with linear interpolation and "approximate" / "تقریبی" badge (exact `addresses` always win)
-- [ ] D5 App: GNIS place search results (natural features & landmarks) after places & addresses, prefix search, sorted by distance, icon by feature class
+- [x] D4 App: TIGER address range fallback with linear interpolation and "approximate" / "تقریبی" badge (exact `addresses` always win)
+- [x] D5 App: GNIS place search results (natural features & landmarks) after places & addresses, prefix search, sorted by distance, icon by feature class
 
 ## T. Tests
-- [ ] T1 Unit tests (Kotlin + Python pipeline tests with mocked downloads + `python3 -m py_compile data-pipeline/*.py`)
+- [x] T1 Unit tests (Kotlin + Python pipeline tests with mocked downloads + `python3 -m py_compile data-pipeline/*.py`)
 
 ## Final
-- [ ] FINAL All unit tests pass, APK builds with zero errors, mark everything DONE
+- [x] FINAL All unit tests pass, APK builds with zero errors, mark everything DONE

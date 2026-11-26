@@ -83,13 +83,16 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
 
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc
-    if (isDriveMode && navPos != null && state.isNavigating && !state.hasArrived &&
-        state.speedLimitSource != com.example.navigation.HpmsSpeedFallbackCache.SOURCE_OSM
-    ) {
+    if (isDriveMode && navPos != null && state.isNavigating && !state.hasArrived) {
         val heading = state.snappedBearing.takeIf { it.isFinite() }
-        hpmsFallbackCache.maybeRefreshAsync(viewModelScope, System.currentTimeMillis(), navPos.lat, navPos.lon) {
-            app.extrasDbReader.lookupHpmsSpeedLimitMph(navPos.lat, navPos.lon, heading)
+        if (state.speedLimitSource != com.example.navigation.HpmsSpeedFallbackCache.SOURCE_OSM) {
+            hpmsFallbackCache.maybeRefreshAsync(viewModelScope, System.currentTimeMillis(), navPos.lat, navPos.lon) {
+                app.extrasDbReader.lookupHpmsSpeedLimitMph(navPos.lat, navPos.lon, heading)
+            }
         }
+        val curM = state.currentManeuver
+        val isHwy = curM != null && (curM.isHighwayRoad || curM.isHighwayExitOrSplit)
+        refreshHpmsThroughLanesImpl(navPos.lat, navPos.lon, heading, isHwy)
     }
     if (navPos != null && state.isNavigating && !state.hasArrived && s.showStopSignsOnMap) {
         refreshNearbyStopSignsImpl(navPos.lat, navPos.lon)

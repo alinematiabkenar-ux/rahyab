@@ -78,7 +78,8 @@ data class LaneInfo(
         isActive -> LaneHighlightTier.ACTIVE
         isValid || isRecommended -> LaneHighlightTier.VALID
         else -> LaneHighlightTier.INACTIVE
-    }
+    },
+    val isUnmarkedSlot: Boolean = false
 ) {
     val highlightTier: LaneHighlightTier
         get() = level
@@ -252,6 +253,7 @@ data class ActiveNavigationState(
     val laneConfidence: LaneConfidence = LaneConfidence.HIGH,
     val laneConfidenceReasons: List<String> = emptyList(),
     val laneSideHint: LaneTargetSide? = null,
+    val laneDecision: LaneGuidanceDecision? = null,
     val travelMode: TravelMode = TravelMode.DRIVE,
     val isWalkingMode: Boolean = (travelMode == TravelMode.WALK)
 ) {

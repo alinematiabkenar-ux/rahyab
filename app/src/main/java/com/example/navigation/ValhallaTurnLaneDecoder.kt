@@ -136,26 +136,30 @@ internal object ValhallaTurnLaneDecoder {
                 else -> LaneHighlightTier.INACTIVE
             }
 
-            if (dirs.isNotEmpty()) {
-                val distinctDirs = dirs.distinct()
-                val resolvedActiveDirs = when {
-                    activeDirs.isNotEmpty() -> activeDirs.distinct().filter { it in distinctDirs }.ifEmpty { activeDirs.distinct() }
-                    isRecommended && distinctDirs.size > 1 && preferredDirs.isNotEmpty() ->
-                        distinctDirs.filter { it in preferredDirs }.ifEmpty { distinctDirs }
-                    isRecommended -> distinctDirs
-                    else -> emptyList()
-                }
-                result.add(
-                    LaneInfo(
-                        directions = distinctDirs,
-                        activeDirections = resolvedActiveDirs,
-                        isRecommended = isRecommended,
-                        isActive = isActive,
-                        isValid = isValid,
-                        level = level
-                    )
-                )
+            val isUnmarked = dirs.isEmpty() ||
+                (rawDirections is Number && directionsInt == 1) ||
+                (rawDirections is String && rawDirections.trim().equals("none", ignoreCase = true))
+            val distinctDirs = dirs.distinct()
+            val resolvedActiveDirs = when {
+                activeDirs.isNotEmpty() -> activeDirs.distinct().filter { it in distinctDirs }.ifEmpty { activeDirs.distinct() }
+                isRecommended && distinctDirs.size > 1 && preferredDirs.isNotEmpty() ->
+                    distinctDirs.filter { it in preferredDirs }.ifEmpty { distinctDirs }
+                isRecommended -> distinctDirs
+                else -> emptyList()
             }
+            // Preserve every physical lane slot in order even when directions are unmarked/empty
+            // so lanes to the right never shift leftward.
+            result.add(
+                LaneInfo(
+                    directions = distinctDirs,
+                    activeDirections = resolvedActiveDirs,
+                    isRecommended = isRecommended,
+                    isActive = isActive,
+                    isValid = isValid,
+                    level = level,
+                    isUnmarkedSlot = isUnmarked
+                )
+            )
         }
         return result
     }

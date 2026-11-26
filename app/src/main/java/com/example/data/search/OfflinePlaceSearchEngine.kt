@@ -67,6 +67,7 @@ class OfflinePlaceSearchEngine(
         limit: Int = 30
     ): List<PlaceSearchResult> = withContext(Dispatchers.IO) {
         val dbFiles = packManager.getInstalledPlacesDatabases()
+        val extrasFiles = packManager.getInstalledExtrasDatabases()
         val savedPlaces = runCatching { savedPlaceDao.getAllOnce() }.getOrDefault(emptyList())
         searchAcrossDatabases(
             query = query,
@@ -74,7 +75,8 @@ class OfflinePlaceSearchEngine(
             userLon = userLon,
             stateDbFiles = dbFiles,
             savedPlaces = savedPlaces,
-            limit = limit
+            limit = limit,
+            extrasDbFiles = extrasFiles
         )
     }
 
@@ -84,7 +86,8 @@ class OfflinePlaceSearchEngine(
         userLon: Double,
         stateDbFiles: List<Pair<String, File>>,
         savedPlaces: List<SavedPlaceEntity> = emptyList(),
-        limit: Int = 30
+        limit: Int = 30,
+        extrasDbFiles: List<Pair<String, File>> = emptyList()
     ): List<PlaceSearchResult> {
         val parsedAddress = AddressNormalizer.parseAddressQuery(query)
         val addressResults = if (OfflineAddressSearchEngine.shouldRunAddressSearch(parsedAddress)) {
@@ -93,7 +96,8 @@ class OfflinePlaceSearchEngine(
                 userLat = userLat,
                 userLon = userLon,
                 stateDbFiles = stateDbFiles,
-                limit = minOf(12, limit)
+                limit = minOf(12, limit),
+                extrasDbFiles = extrasDbFiles
             )
         } else {
             emptyList()
@@ -150,11 +154,29 @@ class OfflinePlaceSearchEngine(
 
         val placeResults = deduplicateResults(candidates)
             .sortedByDescending { it.relevanceScore }
-        return if (parsedAddress.isAddressLike && addressResults.isNotEmpty()) {
-            (addressResults + placeResults).take(limit)
+        val primaryResults = if (parsedAddress.isAddressLike && addressResults.isNotEmpty()) {
+            addressResults + placeResults
         } else {
-            (placeResults + addressResults).take(limit)
+            placeResults + addressResults
         }
+        val gnisResults = if (extrasDbFiles.isNotEmpty() && primaryResults.size < limit) {
+            GnisPlaceSearchHelper.searchInFiles(
+                extrasDbFiles = extrasDbFiles,
+                queries = expanded.normalizedLatinQueries,
+                userLat = userLat,
+                userLon = userLon,
+                sqliteDriver = sqliteDriver,
+                limit = limit - primaryResults.size
+            ).filterNot { g ->
+                primaryResults.any { p ->
+                    p.name.equals(g.name, ignoreCase = true) &&
+                        haversineMeters(p.lat, p.lon, g.lat, g.lon) < 100.0
+                }
+            }
+        } else {
+            emptyList()
+        }
+        return (primaryResults + gnisResults).take(limit)
     }
 
     /**

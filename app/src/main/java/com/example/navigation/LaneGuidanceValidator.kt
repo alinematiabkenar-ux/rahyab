@@ -328,10 +328,13 @@ object LaneGuidanceValidator {
         }
         if (!allTargetsHaveExplicitRight) return false
         val lanesToRight = ((targetIndices.last() + 1)..lanes.lastIndex).map { lanes[it] }
+        val targetsAreSlightRight = targetIndices.all { idx ->
+            LaneDirection.SLIGHT_RIGHT in lanes[idx].directions && LaneDirection.RIGHT !in lanes[idx].directions
+        }
         return lanesToRight.all { lane ->
             lane.directions.isNotEmpty() &&
                 LaneDirection.THROUGH !in lane.directions &&
-                LaneDirection.RIGHT !in lane.directions
+                (LaneDirection.RIGHT !in lane.directions || (targetsAreSlightRight && LaneDirection.SHARP_RIGHT in lane.directions || targetsAreSlightRight && lane.directions == listOf(LaneDirection.RIGHT)))
         }
     }
 
