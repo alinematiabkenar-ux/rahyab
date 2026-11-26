@@ -85,7 +85,8 @@ fun FullLaneDiagramOverlay(
     highlightColor: LaneHighlightColor = LaneHighlightColor.BLUE,
     compact: Boolean = false,
     pulseTriggerKey: Int = 0,
-    laneChangeCuePulseKey: Long = 0L
+    laneChangeCuePulseKey: Long = 0L,
+    maneuverLabel: String? = null
 ) {
     if (decision.slots.isEmpty() || decision.shouldSkipLaneChangeInstruction) return
 
@@ -168,6 +169,23 @@ fun FullLaneDiagramOverlay(
                 .padding(horizontal = 8.dp, vertical = if (compact) 6.dp else 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            if (!maneuverLabel.isNullOrBlank()) {
+                Text(
+                    text = maneuverLabel,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = if (compact) 11.sp else 12.sp
+                    ),
+                    color = Color.White.copy(alpha = 0.88f),
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = if (compact) 4.dp else 6.dp)
+                        .testTag("lane_panel_maneuver_label")
+                )
+            }
             // CRITICAL: Always render lanes in physical Left-to-Right windshield order,
             // never mirrored even when LocalLayoutDirection is RTL in Persian.
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -336,7 +354,8 @@ fun FullLaneDiagramOverlay(
     highlightColor: LaneHighlightColor = LaneHighlightColor.BLUE,
     compact: Boolean = false,
     pulseTriggerKey: Int = 0,
-    laneChangeCuePulseKey: Long = 0L
+    laneChangeCuePulseKey: Long = 0L,
+    maneuverLabel: String? = null
 ) {
     val decision = remember(maneuver) { LaneGuidanceDecision.evaluate(maneuver) }
     FullLaneDiagramOverlay(
@@ -346,7 +365,8 @@ fun FullLaneDiagramOverlay(
         highlightColor = highlightColor,
         compact = compact,
         pulseTriggerKey = pulseTriggerKey,
-        laneChangeCuePulseKey = laneChangeCuePulseKey
+        laneChangeCuePulseKey = laneChangeCuePulseKey,
+        maneuverLabel = maneuverLabel
     )
 }
 

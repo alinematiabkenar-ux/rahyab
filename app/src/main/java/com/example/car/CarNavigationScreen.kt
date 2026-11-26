@@ -63,6 +63,8 @@ class CarNavigationScreen(
     private var lastReportedManeuverIdx: Int = -1
     private var lastReportedRerouting: Boolean = false
     private var lastReportedArrived: Boolean = false
+    private var lastReportedShowLaneStrip: Boolean = false
+    private var lastReportedLaneDecision: com.example.navigation.LaneGuidanceDecision? = null
     private var cachedJunctionKey: Triple<JunctionScene, Boolean, com.example.navigation.LaneConfidence>? = null
     private var cachedJunctionIcon: CarIcon? = null
 
@@ -143,12 +145,16 @@ class CarNavigationScreen(
                         val nowMs = SystemClock.elapsedRealtime()
                         val criticalChange = nav.currentManeuverIndex != lastReportedManeuverIdx ||
                             nav.isRerouting != lastReportedRerouting ||
-                            nav.hasArrived != lastReportedArrived
+                            nav.hasArrived != lastReportedArrived ||
+                            nav.showLaneStrip != lastReportedShowLaneStrip ||
+                            nav.laneDecision != lastReportedLaneDecision
                         if (criticalChange || lastRefreshElapsedMs == 0L || nowMs - lastRefreshElapsedMs >= 1000L) {
                             lastRefreshElapsedMs = nowMs
                             lastReportedManeuverIdx = nav.currentManeuverIndex
                             lastReportedRerouting = nav.isRerouting
                             lastReportedArrived = nav.hasArrived
+                            lastReportedShowLaneStrip = nav.showLaneStrip
+                            lastReportedLaneDecision = nav.laneDecision
                             pushTripUpdate(nav)
                             invalidate()
                         }
@@ -238,7 +244,10 @@ class CarNavigationScreen(
         nav: ActiveNavigationState,
         suppressLanes: Boolean
     ): Step {
-        val includeLanes = !suppressLanes && !nav.isWalkingMode && nav.showLaneStrip &&
+        val includeLanes = !suppressLanes &&
+            !nav.isWalkingMode &&
+            !nav.isRerouting &&
+            (nav.showLaneStrip || nav.turnFocusActive) &&
             nav.currentManeuver?.lanes?.isNotEmpty() == true
         return runCatching {
             CarManeuverMapper.buildStepOrFallback(
@@ -246,10 +255,11 @@ class CarNavigationScreen(
                 language = settings.language,
                 includeLanes = includeLanes,
                 lanesImageProvider = { lanes ->
-                    CarLaneBitmapRenderer.renderLanesIcon(lanes, nav.laneConfidence)
+                    CarLaneBitmapRenderer.renderLanesIcon(lanes, nav.laneConfidence, nav.laneDecision)
                 },
                 laneConfidence = nav.laneConfidence,
-                laneSideHint = nav.laneSideHint
+                laneSideHint = nav.laneSideHint,
+                laneDecision = nav.laneDecision
             )
         }.getOrElse {
             CarManeuverMapper.buildStepOrFallback(
@@ -351,7 +361,7 @@ class CarNavigationScreen(
             hadStep = false
         } else {
             val junctionIcon = buildJunctionCarIcon(nav)
-            val step = buildCurrentStepSafe(nav, suppressLanes = junctionIcon != null)
+            val step = buildCurrentStepSafe(nav, suppressLanes = false)
             val routingBuilder = RoutingInfo.Builder()
                 .setCurrentStep(
                     step,

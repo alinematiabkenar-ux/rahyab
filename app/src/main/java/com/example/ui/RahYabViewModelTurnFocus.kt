@@ -85,7 +85,9 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
         turnFocusUserPannedDuringActive = false
         turnFocusPendingExitAnim = false
         turnFocusZoomDelayJob?.cancel()
+        val showPanelNow = state.showLaneStrip || (state.laneDecision?.shouldShowFullDiagram == true)
         val enteredState = state.copy(
+            showLaneStrip = showPanelNow,
             turnFocusActive = true,
             turnFocusCameraActive = !decision.shouldBeep,
             turnFocusIsHighway = decision.isHighway,
@@ -93,10 +95,51 @@ internal fun RahYabViewModel.evaluateTurnFocusImpl(
             turnFocusTriggerDistanceMeters = decision.triggerDistanceMeters
         )
         _navigationState.value = enteredState
+        val expectedRouteId = enteredState.route?.id
+        val expectedManeuverIndex = decision.maneuverIndex
         if (decision.shouldBeep) {
+            val isStillValid: () -> Boolean = {
+                val cur = _navigationState.value
+                cur.isNavigating &&
+                    !cur.isRerouting &&
+                    !cur.isOffRoute &&
+                    !cur.hasArrived &&
+                    cur.route?.id == expectedRouteId &&
+                    cur.currentManeuver?.index == expectedManeuverIndex
+            }
+            val phraseProvider: () -> String? = {
+                val cur = _navigationState.value
+                val curSettings = settings.value
+                val maneuver = cur.currentManeuver
+                if (!isStillValid() || maneuver == null) {
+                    null
+                } else {
+                    val activeDecision = cur.laneDecision
+                        ?.takeIf { it.maneuverIndex == maneuver.index }
+                        ?: com.example.navigation.LaneGuidanceDecision.evaluate(maneuver)
+                    val surface = navigationHub.resolveActiveLaneDisplaySurface()
+                    val isDiagramVisibleOnPhone = surface == com.example.navigation.LaneDisplaySurface.PHONE_SCREEN &&
+                        cur.showLaneStrip &&
+                        activeDecision.shouldShowFullDiagram
+                    activeDecision.resolveVoiceCue(
+                        surface = surface,
+                        isDiagramVisibleOnActiveDisplay = isDiagramVisibleOnPhone,
+                        highlightColor = curSettings.laneHighlightColor,
+                        isCarHostColorControlled = navigationHub.isCarSessionActive,
+                        language = curSettings.language
+                    )
+                }
+            }
             voiceManager.playTurnFocusBeeps(
                 language = s.language,
                 speakShortPhrase = s.turnFocusShortPhraseEnabled,
+                context = com.example.navigation.SpeechContextTag(
+                    routeId = expectedRouteId,
+                    maneuverIndex = expectedManeuverIndex,
+                    stage = "turn_focus"
+                ),
+                isStillValid = isStillValid,
+                phraseProvider = phraseProvider,
                 onAllBeepsFinished = {
                     turnFocusZoomDelayJob?.cancel()
                     turnFocusZoomDelayJob = viewModelScope.launch {

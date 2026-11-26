@@ -9,6 +9,7 @@ import com.example.i18n.AppLanguage
 import com.example.i18n.DistanceUnit
 import com.example.navigation.LaneConfidence
 import com.example.navigation.LaneDirection
+import com.example.navigation.LaneGuidanceDecision
 import com.example.navigation.LaneInfo
 import com.example.navigation.LaneTargetSide
 import com.example.navigation.ManeuverType
@@ -130,11 +131,14 @@ object CarManeuverMapper {
     fun toCarLanes(lanes: List<LaneInfo>): List<Lane> {
         return lanes.map { laneInfo ->
             val builder = Lane.Builder()
-            val dirs = laneInfo.directions.ifEmpty { listOf(LaneDirection.THROUGH) }
-            for (dir in dirs) {
-                val recommended = laneInfo.isRecommended &&
-                    (laneInfo.activeDirections.isEmpty() || dir in laneInfo.activeDirections)
-                builder.addDirection(CarLaneDirection.create(toCarLaneDirectionShape(dir), recommended))
+            if (laneInfo.isUnmarkedSlot || laneInfo.directions.isEmpty()) {
+                builder.addDirection(CarLaneDirection.create(CarLaneDirection.SHAPE_UNKNOWN, false))
+            } else {
+                for (dir in laneInfo.directions) {
+                    val recommended = laneInfo.isRecommended &&
+                        (laneInfo.activeDirections.isEmpty() || dir in laneInfo.activeDirections)
+                    builder.addDirection(CarLaneDirection.create(toCarLaneDirectionShape(dir), recommended))
+                }
             }
             builder.build()
         }
@@ -253,15 +257,29 @@ object CarManeuverMapper {
         includeLanes: Boolean = false,
         lanesImageProvider: ((List<LaneInfo>) -> androidx.car.app.model.CarIcon?)? = null,
         laneConfidence: LaneConfidence = LaneConfidence.HIGH,
-        laneSideHint: LaneTargetSide? = null
+        laneSideHint: LaneTargetSide? = null,
+        laneDecision: LaneGuidanceDecision? = null
     ): androidx.car.app.navigation.model.Step {
         val baseCue = formatFallbackStepCue(maneuver, language)
+        val effectiveDecision = if (includeLanes && maneuver != null && maneuver.lanes.isNotEmpty()) {
+            laneDecision ?: LaneGuidanceDecision.evaluate(maneuver)
+        } else {
+            null
+        }
+        val effectiveConfidence = when {
+            laneConfidence == LaneConfidence.LOW -> LaneConfidence.LOW
+            effectiveDecision != null -> effectiveDecision.confidence
+            else -> laneConfidence
+        }
+        val effectiveSideHint = laneSideHint ?: effectiveDecision?.suggestedSide
+        val skipAllSuitable = effectiveDecision?.shouldSkipLaneChangeInstruction == true
         val useLowConfidenceHint = includeLanes &&
+            !skipAllSuitable &&
             maneuver != null &&
             maneuver.lanes.isNotEmpty() &&
-            laneConfidence == LaneConfidence.LOW
-        val cue = if (useLowConfidenceHint && laneSideHint != null) {
-            "$baseCue · ${formatCarLaneSideHint(laneSideHint, language)}"
+            (effectiveConfidence == LaneConfidence.LOW || effectiveDecision?.hasActionableLaneGuidance == false)
+        val cue = if (useLowConfidenceHint && effectiveSideHint != null) {
+            "$baseCue · ${formatCarLaneSideHint(effectiveSideHint, language)}"
         } else {
             baseCue
         }
@@ -279,7 +297,14 @@ object CarManeuverMapper {
             stepBuilder.setRoad(roadName)
         }
 
-        if (includeLanes && !useLowConfidenceHint && maneuver != null && maneuver.lanes.isNotEmpty()) {
+        val canAttachCarLanes = includeLanes &&
+            !skipAllSuitable &&
+            !useLowConfidenceHint &&
+            maneuver != null &&
+            maneuver.lanes.isNotEmpty() &&
+            (effectiveDecision == null || (effectiveDecision.hasActionableLaneGuidance && effectiveDecision.shouldShowFullDiagram))
+
+        if (canAttachCarLanes && maneuver != null) {
             toCarLanes(maneuver.lanes).forEach { lane ->
                 stepBuilder.addLane(lane)
             }

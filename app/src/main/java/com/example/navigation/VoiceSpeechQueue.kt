@@ -9,26 +9,70 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Pure mechanical extraction from [VoiceGuidanceManager] (R1):
- * sequences bilingual Persian/English speech segments and pending low-priority alerts.
+ * Priority-aware bilingual Persian/English speech queue with route/maneuver generation guards
+ * and actual playback-start telemetry.
+ *
+ * Key guarantees:
+ * - Higher-priority utterances ([SpeechPriority.IMMINENT_MANEUVER], [SpeechPriority.REROUTE])
+ *   immediately preempt lower-priority alerts and flush stale queued speech.
+ * - Lower-priority alerts ([SpeechPriority.LOW_PRIORITY_ALERT]) never interrupt an active
+ *   maneuver or lane guidance instruction.
+ * - [stopAllSpeech] and [cancelStaleForContext] discard pending segments, pending post-speech
+ *   actions, AND queued low-priority alerts so stale phrases never speak after rerouting or
+ *   passing a turn.
  */
 internal class VoiceSpeechQueue(
     private val appContext: Context,
     private val engineSelector: VoiceTtsEngineSelector,
-    private val isVoiceEnabledProvider: () -> Boolean
+    private val isVoiceEnabledProvider: () -> Boolean,
+    private val clockMsProvider: () -> Long = { System.currentTimeMillis() }
 ) {
+    private data class QueuedPostAction(
+        val context: SpeechContextTag,
+        val isStillValid: () -> Boolean,
+        val action: () -> Unit
+    )
+
     private val speechGeneration = AtomicLong(0L)
     private val sequenceLock = Any()
     private val pendingSegments = ArrayDeque<VoiceGuidanceManager.SpeechSegment>()
     private val pendingLowPriorityAlerts = PendingLowPriorityAlertQueue()
-    private val pendingPostSpeechActions = ArrayDeque<() -> Unit>()
+    private val pendingPostSpeechActions = ArrayDeque<QueuedPostAction>()
+
     @Volatile
     private var activeSequenceGeneration: Long = 0L
+    @Volatile
+    private var activePriority: SpeechPriority = SpeechPriority.LOW_PRIORITY_ALERT
+    @Volatile
+    private var activeContext: SpeechContextTag = SpeechContextTag()
+    @Volatile
+    private var activeFullText: String = ""
+    @Volatile
+    private var activeLanguage: AppLanguage = AppLanguage.ENGLISH
+    @Volatile
+    private var activeQueuedAtMs: Long = 0L
+    @Volatile
+    private var activePlaybackStartReported: Boolean = false
+    @Volatile
+    private var isSequenceActive: Boolean = false
 
-    fun enqueueAfterCurrentSpeech(action: () -> Unit) {
+    @Volatile
+    var playbackSink: SpeechPlaybackSink? = null
+
+    fun isSpeakingOrQueued(): Boolean =
+        isSequenceActive || engineSelector.isAnyEngineSpeaking() || hasPendingSegments()
+
+    fun currentActivePriority(): SpeechPriority? =
+        if (isSpeakingOrQueued()) activePriority else null
+
+    fun enqueueAfterCurrentSpeech(
+        context: SpeechContextTag = SpeechContextTag(),
+        isStillValid: () -> Boolean = { true },
+        action: () -> Unit
+    ) {
         synchronized(sequenceLock) {
             if (pendingPostSpeechActions.size >= 4) pendingPostSpeechActions.removeFirst()
-            pendingPostSpeechActions.addLast(action)
+            pendingPostSpeechActions.addLast(QueuedPostAction(context, isStillValid, action))
         }
     }
 
@@ -44,28 +88,91 @@ internal class VoiceSpeechQueue(
         targetLat: Double,
         targetLon: Double
     ) {
+        // Never queue a low-priority alert while an imminent maneuver or reroute is active.
+        if (isSpeakingOrQueued() && activePriority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank) {
+            return
+        }
         pendingLowPriorityAlerts.offer(
             text = text,
             effectiveLanguage = effectiveLanguage,
             targetLat = targetLat,
-            targetLon = targetLon
+            targetLon = targetLon,
+            nowMs = clockMsProvider()
         )
     }
 
-    fun stopAllSpeech() {
+    fun stopAllSpeech(clearPendingActions: Boolean = true) {
         speechGeneration.incrementAndGet()
         synchronized(sequenceLock) {
             pendingSegments.clear()
+            if (clearPendingActions) {
+                pendingPostSpeechActions.clear()
+                pendingLowPriorityAlerts.clear()
+            }
         }
+        isSequenceActive = false
+        activePriority = SpeechPriority.LOW_PRIORITY_ALERT
+        activeContext = SpeechContextTag()
         engineSelector.stopEngines()
     }
 
-    fun speakRaw(text: String, effectiveLanguage: AppLanguage) {
-        if (text.isBlank()) return
+    /**
+     * Cancels any currently playing or queued speech / post-speech callbacks belonging to a
+     * different route or an older/passed maneuver.
+     */
+    fun cancelStaleForContext(activeRouteId: String?, activeManeuverIndex: Int?) {
+        var shouldStopActive = false
+        synchronized(sequenceLock) {
+            val iter = pendingPostSpeechActions.iterator()
+            while (iter.hasNext()) {
+                val item = iter.next()
+                if (item.context.isStaleFor(activeRouteId, activeManeuverIndex) || !item.isStillValid()) {
+                    iter.remove()
+                }
+            }
+            if (isSequenceActive && activeContext.isStaleFor(activeRouteId, activeManeuverIndex)) {
+                shouldStopActive = true
+            }
+            pendingLowPriorityAlerts.clear()
+        }
+        if (shouldStopActive) {
+            stopAllSpeech(clearPendingActions = false)
+        }
+    }
+
+    fun speakRaw(
+        text: String,
+        effectiveLanguage: AppLanguage,
+        priority: SpeechPriority = SpeechPriority.PREPARATION_MANEUVER,
+        context: SpeechContextTag = SpeechContextTag()
+    ): Boolean {
+        if (text.isBlank()) return false
+
+        // Lower-priority alerts must NEVER interrupt an active higher-priority maneuver instruction.
+        if (isSpeakingOrQueued() && priority.rank < activePriority.rank) {
+            if (priority == SpeechPriority.LOW_PRIORITY_ALERT) {
+                pendingLowPriorityAlerts.offer(
+                    text = text,
+                    effectiveLanguage = effectiveLanguage,
+                    nowMs = clockMsProvider()
+                )
+            }
+            return false
+        }
+
+        val queuedAt = clockMsProvider()
         runCatching {
-            stopAllSpeech()
+            val clearPending = priority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank
+            stopAllSpeech(clearPendingActions = clearPending)
             val gen = speechGeneration.incrementAndGet()
             activeSequenceGeneration = gen
+            activePriority = priority
+            activeContext = context
+            activeFullText = text
+            activeLanguage = effectiveLanguage
+            activeQueuedAtMs = queuedAt
+            activePlaybackStartReported = false
+            isSequenceActive = true
 
             val segments = if (effectiveLanguage == AppLanguage.PERSIAN) {
                 splitPersianAndEnglishSegments(text)
@@ -73,7 +180,10 @@ internal class VoiceSpeechQueue(
                 listOf(VoiceGuidanceManager.SpeechSegment(text = text, isEnglish = true))
             }
 
-            if (segments.isEmpty()) return
+            if (segments.isEmpty()) {
+                isSequenceActive = false
+                return false
+            }
             synchronized(sequenceLock) {
                 pendingSegments.clear()
                 segments.forEach { pendingSegments.addLast(it) }
@@ -83,9 +193,15 @@ internal class VoiceSpeechQueue(
         }.onFailure { err ->
             CrashLogManager.logError(appContext, "TTS", "speakRaw failed, falling back to default engine", err)
             runCatching {
-                engineSelector.tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rahyab_fb_${System.currentTimeMillis()}")
+                engineSelector.tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rahyab_fb_${clockMsProvider()}")
+                reportPlaybackStartedOnce()
             }
         }
+        return true
+    }
+
+    fun handleUtteranceStarted() {
+        reportPlaybackStartedOnce()
     }
 
     fun handleUtteranceFinished(utteranceId: String?) {
@@ -96,6 +212,7 @@ internal class VoiceSpeechQueue(
         if (gen == null || gen != activeSequenceGeneration) {
             val isStillPending = synchronized(sequenceLock) { pendingSegments.isNotEmpty() }
             if (!isStillPending) {
+                isSequenceActive = false
                 speakPendingLowPriorityAlertIfReady()
             }
             return
@@ -103,11 +220,30 @@ internal class VoiceSpeechQueue(
         dispatchNextSegment(gen)
     }
 
+    private fun reportPlaybackStartedOnce() {
+        if (activePlaybackStartReported) return
+        activePlaybackStartReported = true
+        val sink = playbackSink ?: return
+        sink.onSpeakStarted(
+            SpeechPlaybackEvent(
+                text = activeFullText,
+                language = activeLanguage,
+                priority = activePriority,
+                context = activeContext,
+                queuedAtMs = activeQueuedAtMs,
+                playbackStartedAtMs = clockMsProvider()
+            )
+        )
+    }
+
     private fun speakPendingLowPriorityAlertIfReady(): Boolean {
-        val nextAlert = pendingLowPriorityAlerts.pollIfStillValid() ?: return false
+        val nextAlert = pendingLowPriorityAlerts.pollIfStillValid(clockMsProvider()) ?: return false
         if (!isVoiceEnabledProvider() || !engineSelector.isInitialized) return false
-        speakRaw(nextAlert.text, nextAlert.effectiveLanguage)
-        return true
+        return speakRaw(
+            text = nextAlert.text,
+            effectiveLanguage = nextAlert.effectiveLanguage,
+            priority = SpeechPriority.LOW_PRIORITY_ALERT
+        )
     }
 
     private fun dispatchNextSegment(gen: Long) {
@@ -117,11 +253,18 @@ internal class VoiceSpeechQueue(
             else pendingSegments.removeFirst()
         }
         if (next == null) {
+            isSequenceActive = false
+            activePriority = SpeechPriority.LOW_PRIORITY_ALERT
             val queuedAction = synchronized(sequenceLock) {
-                if (pendingPostSpeechActions.isNotEmpty()) pendingPostSpeechActions.removeFirst() else null
+                var valid: QueuedPostAction? = null
+                while (pendingPostSpeechActions.isNotEmpty() && valid == null) {
+                    val candidate = pendingPostSpeechActions.removeFirst()
+                    if (candidate.isStillValid()) valid = candidate
+                }
+                valid
             }
             if (queuedAction != null) {
-                queuedAction.invoke()
+                queuedAction.action.invoke()
                 return
             }
             if (!speakPendingLowPriorityAlertIfReady()) {
@@ -136,6 +279,7 @@ internal class VoiceSpeechQueue(
             engineSelector.activePersianEngine() ?: engineSelector.tts
         }
         if (engine == null) {
+            isSequenceActive = false
             engineSelector.abandonDuckingFocus()
             return
         }
@@ -153,7 +297,9 @@ internal class VoiceSpeechQueue(
             CrashLogManager.logError(appContext, "TTS", "Segment speak failed (${next.isEnglish})", err)
         }.getOrDefault(false)
 
-        if (!spokenOk) {
+        if (spokenOk) {
+            reportPlaybackStartedOnce()
+        } else {
             val fallbackEngine = engineSelector.tts
             val fbOk = if (fallbackEngine != null && fallbackEngine !== engine) {
                 runCatching {
@@ -161,7 +307,9 @@ internal class VoiceSpeechQueue(
                     fallbackEngine.speak(next.text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) == TextToSpeech.SUCCESS
                 }.getOrDefault(false)
             } else false
-            if (!fbOk) {
+            if (fbOk) {
+                reportPlaybackStartedOnce()
+            } else {
                 dispatchNextSegment(gen)
             }
         }

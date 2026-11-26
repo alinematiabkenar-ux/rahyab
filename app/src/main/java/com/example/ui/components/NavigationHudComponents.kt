@@ -143,17 +143,47 @@ fun TurnByTurnTopHud(
     laneDecision: com.example.navigation.LaneGuidanceDecision? = null,
     laneHighlightColor: com.example.map.LaneHighlightColor = com.example.map.LaneHighlightColor.BLUE,
     showReportWrongLaneButton: Boolean = false,
-    onReportWrongLane: () -> Unit = {}
+    onReportWrongLane: () -> Unit = {},
+    turnFocusActive: Boolean = false
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
     val distText = BilingualFormatter.formatDistance(distanceMeters, unit, language)
     val signpost = maneuver.signpost
     val useHighwayGreen = signpost != null || maneuver.isHighwayExitOrSplit
+    val primaryRoad = signpost?.primaryDestinations?.takeIf { it.isNotBlank() }
+        ?: maneuver.streetNames.joinToString(" / ").ifBlank { maneuver.instructionEn }
     val junctionScene = androidx.compose.runtime.remember(junctionManeuver, showJunctionPreview) {
         if (showJunctionPreview) com.example.navigation.JunctionSceneBuilder.build(junctionManeuver) else null
     }
     val showingJunctionCard = showJunctionPreview && junctionScene != null
+    val effectiveLaneDecision = androidx.compose.runtime.remember(
+        maneuver,
+        laneDecision,
+        laneConfidence,
+        laneSideHint
+    ) {
+        if (maneuver.lanes.isEmpty()) {
+            null
+        } else {
+            val base = laneDecision ?: com.example.navigation.LaneGuidanceDecision.evaluate(maneuver)
+            if (laneConfidence == com.example.navigation.LaneConfidence.LOW && base.confidence != com.example.navigation.LaneConfidence.LOW) {
+                base.copy(
+                    confidence = com.example.navigation.LaneConfidence.LOW,
+                    suggestedSide = laneSideHint ?: base.suggestedSide,
+                    hasActionableLaneGuidance = false,
+                    shouldShowFullDiagram = false
+                )
+            } else {
+                base
+            }
+        }
+    }
+    val showingDedicatedLanePanel = !isRerouting &&
+        (showLaneStrip || turnFocusActive) &&
+        effectiveLaneDecision != null &&
+        effectiveLaneDecision.slots.isNotEmpty() &&
+        !effectiveLaneDecision.shouldSkipLaneChangeInstruction
 
     val bannerBg = when {
         useHighwayGreen && isNightMode -> Color(0xFF004B3B)
@@ -182,7 +212,9 @@ fun TurnByTurnTopHud(
                 color = bannerBorder
             ),
             shadowElevation = 10.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("next_turn_instruction_card")
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                 if (signpost != null && signpost.hasContent) {
@@ -219,8 +251,6 @@ fun TurnByTurnTopHud(
                             color = Color.White,
                             maxLines = 1
                         )
-                        val primaryRoad = signpost?.primaryDestinations?.takeIf { it.isNotBlank() }
-                            ?: maneuver.streetNames.joinToString(" / ").ifBlank { maneuver.instructionEn }
                         Text(
                             text = primaryRoad,
                             style = MaterialTheme.typography.titleMedium,
@@ -233,33 +263,32 @@ fun TurnByTurnTopHud(
                         ReportWrongLaneFlagButton(onClick = onReportWrongLane)
                     }
                 }
+            }
+        }
 
-                // Full lane diagram overlay driven by shared Valhalla LaneGuidanceDecision
-                // Stays visible even when Junction View is active (adapting height via compact mode)
-                if (showLaneStrip && maneuver.lanes.isNotEmpty()) {
-                    val effectiveDecision = androidx.compose.runtime.remember(maneuver, laneDecision, laneConfidence, laneSideHint) {
-                        val base = laneDecision ?: com.example.navigation.LaneGuidanceDecision.evaluate(maneuver)
-                        if (laneConfidence == com.example.navigation.LaneConfidence.LOW && base.confidence != com.example.navigation.LaneConfidence.LOW) {
-                            base.copy(
-                                confidence = com.example.navigation.LaneConfidence.LOW,
-                                suggestedSide = laneSideHint ?: base.suggestedSide,
-                                hasActionableLaneGuidance = false,
-                                shouldShowFullDiagram = false
-                            )
-                        } else {
-                            base
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    FullLaneDiagramOverlay(
-                        decision = effectiveDecision,
-                        isNightMode = isNightMode,
-                        highlightColor = laneHighlightColor,
-                        compact = showingJunctionCard,
-                        pulseTriggerKey = lanePulseTriggerKey,
-                        laneChangeCuePulseKey = laneChangeCuePulseKey
-                    )
-                }
+        // Dedicated top lane-guidance panel directly below the next-turn instruction.
+        // Driven by the same active maneuver & LaneGuidanceDecision as voice guidance,
+        // and stays visible when Junction View or Turn Focus is active.
+        if (showingDedicatedLanePanel && effectiveLaneDecision != null) {
+            val lanePanelLabel = if (thenManeuver != null && primaryRoad.isNotBlank()) {
+                if (language == AppLanguage.PERSIAN) "خطوط برای: $primaryRoad" else "Lanes for $primaryRoad"
+            } else {
+                null
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("dedicated_lane_panel")
+            ) {
+                FullLaneDiagramOverlay(
+                    decision = effectiveLaneDecision,
+                    isNightMode = isNightMode,
+                    highlightColor = laneHighlightColor,
+                    compact = showingJunctionCard,
+                    pulseTriggerKey = lanePulseTriggerKey,
+                    laneChangeCuePulseKey = laneChangeCuePulseKey,
+                    maneuverLabel = lanePanelLabel
+                )
             }
         }
 
@@ -318,6 +347,7 @@ fun TurnByTurnTopHud(
                     laneChangeCuePulseKey = laneChangeCuePulseKey,
                     laneConfidence = laneConfidence,
                     laneSideHint = laneSideHint,
+                    compactWithLanePanel = showingDedicatedLanePanel,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

@@ -57,7 +57,30 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     private var headlessCachedHazards: List<RoadHazardPoint> = emptyList()
     private var headlessCachedFraCrossings: List<com.example.data.packs.FraCrossingRecord> = emptyList()
     private val headlessHpmsFallbackCache = HpmsSpeedFallbackCache()
+    @Volatile
     private var isCarSessionConnected: Boolean = false
+    @Volatile
+    private var phoneUiInForeground: Boolean = false
+
+    val isCarSessionActive: Boolean get() = isCarSessionConnected
+    val isPhoneUiInForeground: Boolean get() = phoneUiInForeground
+
+    fun setPhoneUiInForeground(inForeground: Boolean) {
+        phoneUiInForeground = inForeground
+    }
+
+    fun resolveActiveLaneDisplaySurface(isScreenInteractiveOverride: Boolean? = null): LaneDisplaySurface {
+        if (isCarSessionConnected) return LaneDisplaySurface.ANDROID_AUTO
+        val interactive = isScreenInteractiveOverride ?: runCatching {
+            val pm = app.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+            pm?.isInteractive ?: true
+        }.getOrDefault(true)
+        return if (phoneUiInForeground && interactive) {
+            LaneDisplaySurface.PHONE_SCREEN
+        } else {
+            LaneDisplaySurface.SCREEN_OFF
+        }
+    }
 
     fun attachPhoneDelegate(delegate: PhoneNavigationDelegate) {
         phoneDelegate = delegate
@@ -344,18 +367,33 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
         chime: Boolean,
         s: UserSettings
     ) {
-        val wasArrived = navigationState.value.hasArrived
-        stateStore._navigationState.value = state
-        val loc = state.snappedLocation
-        if (loc != null && state.isNavigating && !state.hasArrived && state.speedLimitSource != HpmsSpeedFallbackCache.SOURCE_OSM) {
+        val prev = navigationState.value
+        val wasArrived = prev.hasArrived
+        val curManeuver = state.currentManeuver
+        val decision = if (state.isNavigating && state.effectiveTravelMode == TravelMode.DRIVE && curManeuver != null && curManeuver.lanes.isNotEmpty()) {
+            val edgeLanes = state.route?.let { LaneGuidanceValidator.findApproachEdgeLaneCount(it, curManeuver) }
+            LaneGuidanceDecision.evaluate(curManeuver, edgeLaneCountBeforeManeuver = edgeLanes)
+        } else null
+        val enriched = state.copy(
+            laneConfidence = decision?.confidence ?: LaneConfidence.HIGH,
+            laneConfidenceReasons = decision?.reasons.orEmpty(),
+            laneSideHint = decision?.suggestedSide,
+            laneDecision = decision
+        )
+        if (prev.route?.id != enriched.route?.id || prev.currentManeuverIndex != enriched.currentManeuverIndex) {
+            app.voiceGuidanceManager.cancelStaleForManeuverOrReroute(enriched.route?.id, enriched.currentManeuverIndex)
+        }
+        stateStore._navigationState.value = enriched
+        val loc = enriched.snappedLocation
+        if (loc != null && enriched.isNavigating && !enriched.hasArrived && enriched.speedLimitSource != HpmsSpeedFallbackCache.SOURCE_OSM) {
             headlessHpmsFallbackCache.maybeRefreshAsync(hubScope, System.currentTimeMillis(), loc.lat, loc.lon) {
-                app.extrasDbReader.lookupHpmsSpeedLimitMph(loc.lat, loc.lon, state.snappedBearing)
+                app.extrasDbReader.lookupHpmsSpeedLimitMph(loc.lat, loc.lon, enriched.snappedBearing)
             }
         }
         if (chime) app.voiceGuidanceManager.playOverspeedChime()
-        if (state.hasArrived && !wasArrived) {
-            val arrivalType = state.route?.maneuvers?.lastOrNull()?.type ?: ManeuverType.ARRIVE
-            app.voiceGuidanceManager.speakArrival(arrivalType, state.destinationName, s.language)
+        if (enriched.hasArrived && !wasArrived) {
+            val arrivalType = enriched.route?.maneuvers?.lastOrNull()?.type ?: ManeuverType.ARRIVE
+            app.voiceGuidanceManager.speakArrival(arrivalType, enriched.destinationName, s.language)
             headlessArrivalJob?.cancel()
             headlessArrivalJob = hubScope.launch {
                 delay(6000L)
@@ -363,24 +401,24 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             }
         } else {
             maneuverToSpeak?.let { (m, stage) ->
-                app.voiceGuidanceManager.speakManeuver(m, state.distanceToNextManeuverMeters, s.distanceUnit, s.language, stage, m.lanes.isNotEmpty())
+                val nextFollowUp = ManeuverTimingPlanner.findBackToBackFollowUp(enriched.route, enriched.currentManeuverIndex, enriched.currentSpeedMps)
+                app.voiceGuidanceManager.speakManeuver(
+                    maneuver = m, distanceMeters = enriched.distanceToNextManeuverMeters, unit = s.distanceUnit,
+                    language = s.language, announcementStage = stage, includeLaneGuidance = decision?.hasActionableLaneGuidance == true,
+                    nextManeuver = nextFollowUp, laneDecision = decision, routeId = enriched.route?.id
+                )
             }
             alertToSpeak?.let { alert ->
-                if (alert.kind == RoadAlertKind.SPEED_CAMERA || alert.kind == RoadAlertKind.RED_LIGHT_CAMERA) {
-                    app.voiceGuidanceManager.playCameraAlertSound()
-                }
+                if (alert.kind == RoadAlertKind.SPEED_CAMERA || alert.kind == RoadAlertKind.RED_LIGHT_CAMERA) app.voiceGuidanceManager.playCameraAlertSound()
                 app.voiceGuidanceManager.speakAlert(alert, s.language, s.distanceUnit)
             }
         }
     }
 
     private fun stopHeadlessLoops() {
-        headlessGpsJob?.cancel()
-        headlessGpsJob = null
-        headlessSimJob?.cancel()
-        headlessSimJob = null
-        headlessArrivalJob?.cancel()
-        headlessArrivalJob = null
+        headlessGpsJob?.cancel(); headlessGpsJob = null
+        headlessSimJob?.cancel(); headlessSimJob = null
+        headlessArrivalJob?.cancel(); headlessArrivalJob = null
     }
 
     private suspend fun currentSettings(): UserSettings =
@@ -394,12 +432,8 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
                 .map { LatLon(it.lat, it.lon) }
         }.getOrDefault(emptyList())
         return RouteOptions(
-            avoidTolls = s.avoidTolls,
-            avoidHighways = s.avoidHighways,
-            avoidFerries = s.avoidFerries,
-            preferShortest = s.routePreference == RoutePreference.SHORTEST,
-            avoidLocations = closures,
-            travelMode = TravelMode.DRIVE
+            avoidTolls = s.avoidTolls, avoidHighways = s.avoidHighways, avoidFerries = s.avoidFerries,
+            preferShortest = s.routePreference == RoutePreference.SHORTEST, avoidLocations = closures, travelMode = TravelMode.DRIVE
         )
     }
 }

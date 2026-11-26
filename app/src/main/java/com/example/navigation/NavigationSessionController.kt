@@ -134,10 +134,22 @@ class NavigationSessionController {
         val snappedLoc = if (shouldSnapToRoute) snap.point else LatLon(fix.lat, fix.lon)
         val snappedBearing = if (shouldSnapToRoute) snap.roadBearing else fix.bearing
 
-        // 3. Determine upcoming maneuver
+        // 3. Determine upcoming maneuver (with GPS jitter guard so stopped/slow jitter never bounces backward)
         var upcomingManeuverIdx = route.maneuvers.indexOfFirst { it.beginShapeIndex > bestIdx }
         if (upcomingManeuverIdx == -1) {
             upcomingManeuverIdx = route.maneuvers.lastIndex
+        }
+        if (currentState.route?.id == route.id &&
+            upcomingManeuverIdx < currentState.currentManeuverIndex &&
+            currentState.currentManeuverIndex in route.maneuvers.indices
+        ) {
+            val prevActive = route.maneuvers[currentState.currentManeuverIndex]
+            val regressDist = if (bestIdx < prevActive.beginShapeIndex) {
+                TurnFocusPlanner.distanceAlongShape(route.shape, bestIdx, prevActive.beginShapeIndex)
+            } else 0.0
+            if (fix.speedMps < 2.5f || regressDist < 35.0) {
+                upcomingManeuverIdx = currentState.currentManeuverIndex
+            }
         }
         val upcomingManeuver = route.maneuvers[upcomingManeuverIdx]
 
@@ -206,10 +218,19 @@ class NavigationSessionController {
         lastSpokenManeuverTimeMs = voiceTrigger.lastSpokenManeuverTimeMs
         val maneuverToSpeak = voiceTrigger.maneuverToSpeak
 
-        // 7. Lane guidance visibility (DRIVE only)
-        val laneWindowMeters = laneStripWindowMeters(unit)
+        // 7. Lane guidance visibility (DRIVE only; always visible before any preparation or Turn Focus cue)
+        val laneWindowMeters = ManeuverTimingPlanner.lanePanelLeadDistanceMeters(
+            maneuver = upcomingManeuver,
+            approachManeuver = approachManeuver,
+            speedMps = fix.speedMps,
+            isHighway = isHighway,
+            baseLaneWindowMeters = laneStripWindowMeters(unit)
+        )
         val showLaneStrip = isDrive &&
             !hasArrived &&
+            !isOffRouteNow &&
+            !shouldReroute &&
+            !currentState.isRerouting &&
             upcomingManeuver.lanes.isNotEmpty() &&
             distToNextManeuver <= laneWindowMeters
 

@@ -141,7 +141,8 @@ internal fun DriveTopOverlay(
                 showReportWrongLaneButton = isDriveMode &&
                     activeManeuver.lanes.isNotEmpty() &&
                     (navState.showLaneStrip || navState.showJunctionPreview || navState.turnFocusActive),
-                onReportWrongLane = onReportWrongLane
+                onReportWrongLane = onReportWrongLane,
+                turnFocusActive = isDriveMode && navState.turnFocusActive
             )
 
             Row(

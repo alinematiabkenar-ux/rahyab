@@ -307,6 +307,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setAppInForeground(inForeground: Boolean) {
+        navigationHub.setPhoneUiInForeground(inForeground)
         locationTracker.setAppInForeground(inForeground)
         compassTracker.setAppInForeground(inForeground)
     }

@@ -161,22 +161,35 @@ internal object VoicePhraseBuilder {
             stage == NavigationSessionController.STAGE_HW_HALF_MI ||
             stage == NavigationSessionController.STAGE_HW_2MI
 
+    fun isFinalTurnStage(stage: String): Boolean =
+        stage == NavigationSessionController.STAGE_CITY_NOW ||
+            stage == NavigationSessionController.STAGE_HW_NOW ||
+            stage == NavigationSessionController.STAGE_BIKE_30M
+
     fun formatSpokenInstruction(
         maneuver: RouteManeuver,
         distanceMeters: Double,
         unit: DistanceUnit,
         language: AppLanguage,
         includeLaneGuidance: Boolean = true,
-        announcementStage: String = ""
+        announcementStage: String = "",
+        nextManeuver: RouteManeuver? = null,
+        laneDecision: LaneGuidanceDecision? = null
     ): String {
-        val distPhrase = formatSpokenDistance(distanceMeters, unit, language)
-        val lanePhrase = if (includeLaneGuidance) buildLaneVoiceClause(maneuver.lanes, language) else null
+        val isFinalStage = isFinalTurnStage(announcementStage)
+        val distPhrase = if (isFinalStage) "" else formatSpokenDistance(distanceMeters, unit, language)
+        val allowLanes = includeLaneGuidance &&
+            !isFinalStage &&
+            (laneDecision == null || (laneDecision.hasActionableLaneGuidance &&
+                !laneDecision.shouldSkipLaneChangeInstruction &&
+                laneDecision.confidence != LaneConfidence.LOW))
+        val lanePhrase = if (allowLanes) buildLaneVoiceClause(maneuver.lanes, language) else null
         val isEarlyPrepare = lanePhrase.isNullOrBlank() && isEarlyPrepareStage(announcementStage)
         val exitNum = maneuver.signpost?.primaryExitNumber
         val toward = maneuver.signpost?.exitTowards?.firstOrNull().orEmpty()
         val roadName = maneuver.streetNames.firstOrNull().orEmpty()
 
-        return if (language == AppLanguage.PERSIAN) {
+        val primary = if (language == AppLanguage.PERSIAN) {
             VoicePersianPhraseBuilder.buildPersianInstruction(
                 type = maneuver.type,
                 distPhrase = distPhrase,
@@ -198,6 +211,56 @@ internal object VoicePhraseBuilder {
                 roadName = roadName,
                 roundaboutExit = maneuver.roundaboutExitCount
             )
+        }
+        val followUpClause = nextManeuver?.let { buildBackToBackClause(it, language) }
+        return if (!followUpClause.isNullOrBlank()) {
+            val base = primary.trimEnd('.', '۔')
+            if (language == AppLanguage.PERSIAN) "$base، $followUpClause." else "$base, $followUpClause."
+        } else {
+            primary
+        }
+    }
+
+    fun buildBackToBackClause(nextManeuver: RouteManeuver, language: AppLanguage): String? {
+        val road = nextManeuver.streetNames.firstOrNull()?.takeIf { it.isNotBlank() }
+        return if (language == AppLanguage.PERSIAN) {
+            when (nextManeuver.type) {
+                ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT ->
+                    if (road != null) "سپس بلافاصله به راست وارد $road شوید" else "سپس بلافاصله به راست بپیچید"
+                ManeuverType.SLIGHT_RIGHT -> "سپس بلافاصله کمی به راست بروید"
+                ManeuverType.LEFT, ManeuverType.SHARP_LEFT ->
+                    if (road != null) "سپس بلافاصله به چپ وارد $road شوید" else "سپس بلافاصله به چپ بپیچید"
+                ManeuverType.SLIGHT_LEFT -> "سپس بلافاصله کمی به چپ بروید"
+                ManeuverType.EXIT_RIGHT -> "سپس از خروجی سمت راست خارج شوید"
+                ManeuverType.EXIT_LEFT -> "سپس از خروجی سمت چپ خارج شوید"
+                ManeuverType.RAMP_RIGHT -> "سپس وارد رمپ سمت راست شوید"
+                ManeuverType.RAMP_LEFT -> "سپس وارد رمپ سمت چپ شوید"
+                ManeuverType.STAY_RIGHT -> "سپس در سمت راست بمانید"
+                ManeuverType.STAY_LEFT -> "سپس در سمت چپ بمانید"
+                ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT -> "سپس دور بزنید"
+                ManeuverType.ROUNDABOUT -> "سپس وارد میدان شوید"
+                else -> null
+            }
+        } else {
+            when (nextManeuver.type) {
+                ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT ->
+                    if (road != null) "then take the next right onto $road" else "then take the next right"
+                ManeuverType.SLIGHT_RIGHT ->
+                    if (road != null) "then bear right onto $road" else "then bear right"
+                ManeuverType.LEFT, ManeuverType.SHARP_LEFT ->
+                    if (road != null) "then take the next left onto $road" else "then take the next left"
+                ManeuverType.SLIGHT_LEFT ->
+                    if (road != null) "then bear left onto $road" else "then bear left"
+                ManeuverType.EXIT_RIGHT -> "then take the right exit"
+                ManeuverType.EXIT_LEFT -> "then take the left exit"
+                ManeuverType.RAMP_RIGHT -> "then take the right ramp"
+                ManeuverType.RAMP_LEFT -> "then take the left ramp"
+                ManeuverType.STAY_RIGHT -> "then keep right"
+                ManeuverType.STAY_LEFT -> "then keep left"
+                ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT -> "then make a U-turn"
+                ManeuverType.ROUNDABOUT -> "then enter the roundabout"
+                else -> null
+            }
         }
     }
 
@@ -307,14 +370,24 @@ internal object VoicePhraseBuilder {
         }.ifEmpty {
             lanes.mapIndexedNotNull { idx, lane -> if (lane.isRecommended) idx else null }
         }
-        if (activeIndices.isEmpty()) return null
-        if (activeIndices.size == lanes.size) {
-            return if (language == AppLanguage.PERSIAN) "هر خطی" else "any lane"
-        }
+        if (activeIndices.isEmpty() || activeIndices.size == lanes.size) return null
 
         val count = activeIndices.size
         val fromRight = activeIndices.last() == lanes.lastIndex
         val fromLeft = activeIndices.first() == 0
+
+        if (count == 1 && !fromRight && !fromLeft && lanes.size >= 4) {
+            val idx = activeIndices.first()
+            val posFromLeft = idx + 1
+            val posFromRight = lanes.size - idx
+            return if (posFromRight <= posFromLeft) {
+                if (language == AppLanguage.PERSIAN) "خط ${persianLaneOrdinal(posFromRight)} از سمت راست"
+                else "the ${englishOrdinal(posFromRight)} lane from the right"
+            } else {
+                if (language == AppLanguage.PERSIAN) "خط ${persianLaneOrdinal(posFromLeft)} از سمت چپ"
+                else "the ${englishOrdinal(posFromLeft)} lane from the left"
+            }
+        }
 
         return if (language == AppLanguage.PERSIAN) {
             val countWord = when (count) {
@@ -344,6 +417,15 @@ internal object VoicePhraseBuilder {
                 else -> "the middle $countWord"
             }
         }
+    }
+
+    private fun persianLaneOrdinal(n: Int): String = when (n) {
+        1 -> "اول"
+        2 -> "دوم"
+        3 -> "سوم"
+        4 -> "چهارم"
+        5 -> "پنجم"
+        else -> "${n}م"
     }
 
     fun formatSpokenDistance(meters: Double, unit: DistanceUnit, language: AppLanguage): String =

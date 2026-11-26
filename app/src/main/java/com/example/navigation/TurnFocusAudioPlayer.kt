@@ -9,73 +9,108 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * F2: Plays the exact Turn Focus 3-beep cue (3 short beeps: 150 ms tone, 150 ms gap, ~750 ms total)
  * using [ToneGenerator.TONE_PROP_BEEP] with navigation guidance audio attributes and transient
  * audio ducking. If voice guidance is currently speaking, waits up to [MAX_VOICE_WAIT_MS] (4 s)
  * for speech to finish before playing the 3 beeps.
+ *
+ * Every delayed step checks both a monotonic cancellation generation and a caller-supplied
+ * [isStillValid] predicate so a reroute or maneuver change during the wait or beeps immediately
+ * aborts remaining tones and suppresses stale post-beep speech.
  */
 class TurnFocusAudioPlayer(
-    context: Context?
+    context: Context?,
+    private val clockMs: () -> Long = { SystemClock.elapsedRealtime() }
 ) {
     private val audioManager = context?.applicationContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val generation = AtomicLong(0L)
+    private var activeToneGenerator: ToneGenerator? = null
     private var activeFocusRequest: AudioFocusRequest? = null
     private val focusListener = AudioManager.OnAudioFocusChangeListener { }
 
     fun playTurnFocusBeeps(
         isVoiceSpeaking: () -> Boolean,
+        isStillValid: () -> Boolean = { true },
         onAllBeepsFinished: () -> Unit
     ) {
         cancelPending()
-        val deadlineMs = SystemClock.elapsedRealtime() + MAX_VOICE_WAIT_MS
-        waitForSpeechThenPlay(isVoiceSpeaking, deadlineMs, onAllBeepsFinished)
+        val gen = generation.incrementAndGet()
+        if (!isStillValid()) return
+        val deadlineMs = clockMs() + MAX_VOICE_WAIT_MS
+        waitForSpeechThenPlay(gen, isVoiceSpeaking, isStillValid, deadlineMs, onAllBeepsFinished)
     }
 
     private fun waitForSpeechThenPlay(
+        gen: Long,
         isVoiceSpeaking: () -> Boolean,
+        isStillValid: () -> Boolean,
         deadlineMs: Long,
         onAllBeepsFinished: () -> Unit
     ) {
-        if (isVoiceSpeaking() && SystemClock.elapsedRealtime() < deadlineMs) {
+        if (generation.get() != gen || !isStillValid()) return
+        if (isVoiceSpeaking() && clockMs() < deadlineMs) {
             mainHandler.postDelayed({
-                waitForSpeechThenPlay(isVoiceSpeaking, deadlineMs, onAllBeepsFinished)
+                waitForSpeechThenPlay(gen, isVoiceSpeaking, isStillValid, deadlineMs, onAllBeepsFinished)
             }, SPEECH_POLL_MS)
             return
         }
-        startThreeBeepsNow(onAllBeepsFinished)
+        startThreeBeepsNow(gen, isStillValid, onAllBeepsFinished)
     }
 
-    private fun startThreeBeepsNow(onAllBeepsFinished: () -> Unit) {
+    private fun startThreeBeepsNow(
+        gen: Long,
+        isStillValid: () -> Boolean,
+        onAllBeepsFinished: () -> Unit
+    ) {
+        if (generation.get() != gen || !isStillValid()) return
         requestDuckingFocus()
         val tone = runCatching { ToneGenerator(AudioManager.STREAM_NOTIFICATION, BEEP_VOLUME) }.getOrNull()
         if (tone == null) {
             abandonDuckingFocus()
-            onAllBeepsFinished()
+            if (generation.get() == gen && isStillValid()) {
+                onAllBeepsFinished()
+            }
             return
         }
+        activeToneGenerator = tone
         val offsets = beepStartOffsetsMs()
         for (offsetMs in offsets) {
             if (offsetMs == 0L) {
                 mainHandler.post {
-                    runCatching { tone.startTone(ToneGenerator.TONE_PROP_BEEP, BEEP_DURATION_MS) }
+                    if (generation.get() == gen && isStillValid()) {
+                        runCatching { tone.startTone(ToneGenerator.TONE_PROP_BEEP, BEEP_DURATION_MS) }
+                    }
                 }
             } else {
                 mainHandler.postDelayed({
-                    runCatching { tone.startTone(ToneGenerator.TONE_PROP_BEEP, BEEP_DURATION_MS) }
+                    if (generation.get() == gen && isStillValid()) {
+                        runCatching { tone.startTone(ToneGenerator.TONE_PROP_BEEP, BEEP_DURATION_MS) }
+                    }
                 }, offsetMs)
             }
         }
         mainHandler.postDelayed({
+            if (activeToneGenerator === tone) activeToneGenerator = null
             runCatching { tone.release() }
             abandonDuckingFocus()
-            onAllBeepsFinished()
+            if (generation.get() == gen && isStillValid()) {
+                onAllBeepsFinished()
+            }
         }, TOTAL_DURATION_MS)
     }
 
     fun cancelPending() {
+        generation.incrementAndGet()
         mainHandler.removeCallbacksAndMessages(null)
+        activeToneGenerator?.let { tone ->
+            runCatching { tone.stopTone() }
+            runCatching { tone.release() }
+        }
+        activeToneGenerator = null
         abandonDuckingFocus()
     }
 

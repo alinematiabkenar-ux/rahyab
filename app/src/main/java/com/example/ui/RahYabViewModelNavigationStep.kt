@@ -80,6 +80,15 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
     )
     val validatedState = evaluateLaneConfidenceImpl(baseState)
     val effectiveState = evaluateTurnFocusImpl(validatedState, speedMps)
+    if (prevNav.route?.id != effectiveState.route?.id ||
+        prevNav.currentManeuverIndex != effectiveState.currentManeuverIndex ||
+        (effectiveState.isOffRoute && !prevNav.isOffRoute)
+    ) {
+        voiceManager.cancelStaleForManeuverOrReroute(
+            activeRouteId = effectiveState.route?.id,
+            activeManeuverIndex = effectiveState.currentManeuver?.index
+        )
+    }
 
     // Refresh nearby traffic lights & check visual-only ahead indicator (~300 ft, no voice)
     val navPos = state.snappedLocation ?: fallbackLoc
@@ -155,19 +164,28 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
         }
     } else {
         val mergedWithLaneCue = if (isDriveMode) {
-            evaluateLaneChangeCueImpl(state, speedMps, maneuverToSpeak)
+            evaluateLaneChangeCueImpl(effectiveState, speedMps, maneuverToSpeak)
         } else {
             false
         }
         if (!mergedWithLaneCue) {
             maneuverToSpeak?.let { (maneuver, stage) ->
+                val activeDecision = effectiveState.laneDecision?.takeIf { it.maneuverIndex == maneuver.index }
+                val backToBackNext = com.example.navigation.ManeuverTimingPlanner.findBackToBackFollowUp(
+                    route = effectiveState.route,
+                    upcomingManeuverIdx = effectiveState.currentManeuverIndex,
+                    speedMps = speedMps
+                )
                 val spoken = voiceManager.speakManeuver(
                     maneuver = maneuver,
-                    distanceMeters = state.distanceToNextManeuverMeters,
+                    distanceMeters = effectiveState.distanceToNextManeuverMeters,
                     unit = s.distanceUnit,
                     language = s.language,
                     announcementStage = stage,
-                    includeLaneGuidance = isDriveMode && maneuver.lanes.isNotEmpty()
+                    includeLaneGuidance = isDriveMode && (activeDecision?.hasActionableLaneGuidance == true),
+                    nextManeuver = backToBackNext,
+                    laneDecision = activeDecision,
+                    routeId = effectiveState.route?.id
                 )
                 _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
             }
@@ -191,12 +209,21 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 val phrase = com.example.navigation.SpeedLimitDropVoiceTracker.formatVoicePhrase(
                     triggered.newLimitMph, s.distanceUnit, s.language
                 )
-                voiceManager.speakAfterCurrentSpeech(phrase, s.language)
+                val routeId = effectiveState.route?.id
+                voiceManager.speakAfterCurrentSpeech(
+                    text = phrase,
+                    language = s.language,
+                    context = com.example.navigation.SpeechContextTag(routeId = routeId, stage = "speed_drop"),
+                    isStillValid = {
+                        val cur = _navigationState.value
+                        cur.isNavigating && !cur.isRerouting && cur.route?.id == routeId
+                    }
+                )
             }
-            evaluateSpeedBumpForNavigationImpl(state, fallbackLoc, speedMps)
-            maybeSearchParkingNearActiveDestinationImpl(state)
+            evaluateSpeedBumpForNavigationImpl(effectiveState, fallbackLoc, speedMps)
+            maybeSearchParkingNearActiveDestinationImpl(effectiveState)
             if (navPos != null && maneuverToSpeak == null && alertToSpeak == null) {
-                evaluateTrafficLightVoiceImpl(navPos.lat, navPos.lon, state.snappedBearing, isDriveMode = true)
+                evaluateTrafficLightVoiceImpl(navPos.lat, navPos.lon, effectiveState.snappedBearing, isDriveMode = true)
             }
         }
     }
@@ -279,6 +306,14 @@ internal fun RahYabViewModel.triggerAutomaticRerouteImpl(fix: GpsFix) {
     } else {
         null
     }
+    resetTurnFocusImpl()
+    _navigationState.value = _navigationState.value.copy(
+        isRerouting = true,
+        showLaneStrip = false,
+        showJunctionPreview = false,
+        laneDecision = null,
+        laneSideHint = null
+    )
     voiceManager.speakRerouting(s.language)
     viewModelScope.launch {
         val res = routingEngine.calculateRoutes(

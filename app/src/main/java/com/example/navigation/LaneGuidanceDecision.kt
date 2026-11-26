@@ -331,31 +331,36 @@ data class LaneGuidanceDecision(
 
         private fun buildFallbackManeuverCue(maneuver: RouteManeuver, language: AppLanguage): String {
             val exitNum = maneuver.signpost?.primaryExitNumber?.takeIf { it.isNotBlank() }
+            val road = maneuver.streetNames.firstOrNull()?.takeIf { it.isNotBlank() }
             return if (language == AppLanguage.PERSIAN) {
                 when (maneuver.type) {
                     ManeuverType.EXIT_RIGHT -> if (exitNum != null) "از خروجی $exitNum در سمت راست خارج شوید." else "از خروجی سمت راست خارج شوید."
                     ManeuverType.EXIT_LEFT -> if (exitNum != null) "از خروجی $exitNum در سمت چپ خارج شوید." else "از خروجی سمت چپ خارج شوید."
-                    ManeuverType.RAMP_RIGHT -> "وارد رمپ سمت راست شوید."
-                    ManeuverType.RAMP_LEFT -> "وارد رمپ سمت چپ شوید."
-                    ManeuverType.STAY_RIGHT -> "در سمت راست بمانید."
-                    ManeuverType.STAY_LEFT -> "در سمت چپ بمانید."
-                    ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT, ManeuverType.SLIGHT_RIGHT -> "به راست بپیچید."
-                    ManeuverType.LEFT, ManeuverType.SHARP_LEFT, ManeuverType.SLIGHT_LEFT -> "به چپ بپیچید."
+                    ManeuverType.RAMP_RIGHT -> if (road != null) "از رمپ سمت راست وارد $road شوید." else "وارد رمپ سمت راست شوید."
+                    ManeuverType.RAMP_LEFT -> if (road != null) "از رمپ سمت چپ وارد $road شوید." else "وارد رمپ سمت چپ شوید."
+                    ManeuverType.STAY_RIGHT -> if (road != null) "در سمت راست به سمت $road بمانید." else "در سمت راست بمانید."
+                    ManeuverType.STAY_LEFT -> if (road != null) "در سمت چپ به سمت $road بمانید." else "در سمت چپ بمانید."
+                    ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT, ManeuverType.SLIGHT_RIGHT ->
+                        if (road != null) "به راست بپیچید و وارد $road شوید." else "به راست بپیچید."
+                    ManeuverType.LEFT, ManeuverType.SHARP_LEFT, ManeuverType.SLIGHT_LEFT ->
+                        if (road != null) "به چپ بپیچید و وارد $road شوید." else "به چپ بپیچید."
                     ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT -> "دور بزنید."
-                    else -> "مسیر را ادامه دهید."
+                    else -> if (road != null) "در $road ادامه دهید." else "مسیر را ادامه دهید."
                 }
             } else {
                 when (maneuver.type) {
                     ManeuverType.EXIT_RIGHT -> if (exitNum != null) "Take exit $exitNum on the right." else "Take the right exit."
                     ManeuverType.EXIT_LEFT -> if (exitNum != null) "Take exit $exitNum on the left." else "Take the left exit."
-                    ManeuverType.RAMP_RIGHT -> "Take the right ramp."
-                    ManeuverType.RAMP_LEFT -> "Take the left ramp."
-                    ManeuverType.STAY_RIGHT -> "Keep right."
-                    ManeuverType.STAY_LEFT -> "Keep left."
-                    ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT, ManeuverType.SLIGHT_RIGHT -> "Turn right."
-                    ManeuverType.LEFT, ManeuverType.SHARP_LEFT, ManeuverType.SLIGHT_LEFT -> "Turn left."
+                    ManeuverType.RAMP_RIGHT -> if (road != null) "Take the right ramp onto $road." else "Take the right ramp."
+                    ManeuverType.RAMP_LEFT -> if (road != null) "Take the left ramp onto $road." else "Take the left ramp."
+                    ManeuverType.STAY_RIGHT -> if (road != null) "Keep right onto $road." else "Keep right."
+                    ManeuverType.STAY_LEFT -> if (road != null) "Keep left onto $road." else "Keep left."
+                    ManeuverType.RIGHT, ManeuverType.SHARP_RIGHT, ManeuverType.SLIGHT_RIGHT ->
+                        if (road != null) "Turn right on $road." else "Turn right."
+                    ManeuverType.LEFT, ManeuverType.SHARP_LEFT, ManeuverType.SLIGHT_LEFT ->
+                        if (road != null) "Turn left on $road." else "Turn left."
                     ManeuverType.U_TURN_LEFT, ManeuverType.U_TURN_RIGHT -> "Make a U-turn."
-                    else -> "Continue ahead."
+                    else -> if (road != null) "Continue on $road." else "Continue ahead."
                 }
             }
         }

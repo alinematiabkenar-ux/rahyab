@@ -55,7 +55,8 @@ fun JunctionViewCard(
     modifier: Modifier = Modifier,
     laneChangeCuePulseKey: Long = 0L,
     laneConfidence: LaneConfidence = LaneConfidence.HIGH,
-    laneSideHint: LaneTargetSide? = null
+    laneSideHint: LaneTargetSide? = null,
+    compactWithLanePanel: Boolean = false
 ) {
     val strings = LocalAppStrings.current
     val language = LocalAppLanguage.current
@@ -108,7 +109,7 @@ fun JunctionViewCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(2.0f)
+                        .aspectRatio(if (compactWithLanePanel) 2.55f else 2.0f)
                 )
                 if (cuePulse.value > 0.05f) {
                     Box(
@@ -122,7 +123,7 @@ fun JunctionViewCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(CockpitMidnight)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(horizontal = 14.dp, vertical = if (compactWithLanePanel) 6.dp else 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {

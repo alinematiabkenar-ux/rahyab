@@ -38,7 +38,14 @@ internal object NavigationVoiceTriggerPolicy {
         val earlyMidRange = if (isMetric) 720.0..880.0 else 720.0..920.0
         val hwQuarterRange = if (isMetric) 340.0..470.0 else 340.0..490.0
         val cityNearRange = if (isMetric) 250.0..350.0 else 260.0..365.0
-        val speedLeadMeters = max(0.0, speedMps * 4.5)
+        val dynamicPrepDist = ManeuverTimingPlanner.computePreparationDistanceMeters(
+            maneuver = upcomingManeuver,
+            approachManeuver = approachManeuver,
+            speedMps = speedMps,
+            isHighway = isHighway
+        )
+        val hwFinalDist = ManeuverTimingPlanner.computeFinalTurnDistanceMeters(speedMps, isHighway = true)
+        val cityFinalDist = ManeuverTimingPlanner.computeFinalTurnDistanceMeters(speedMps, isHighway = false)
 
         return when {
             hasArrived -> NavigationSessionController.STAGE_ARRIVED
@@ -54,7 +61,7 @@ internal object NavigationVoiceTriggerPolicy {
             }
             speedMps < NavigationSessionController.MIN_VOICE_SPEED_MPS -> null
             isHighway -> when {
-                distToNextManeuver <= max(110.0, speedLeadMeters) -> NavigationSessionController.STAGE_HW_NOW
+                distToNextManeuver <= hwFinalDist -> NavigationSessionController.STAGE_HW_NOW
                 distToNextManeuver in hwQuarterRange -> NavigationSessionController.STAGE_HW_QUARTER_MI
                 distToNextManeuver in earlyMidRange -> NavigationSessionController.STAGE_HW_HALF_MI
                 distToNextManeuver in earlyFarRange -> NavigationSessionController.STAGE_HW_1MI
@@ -69,10 +76,14 @@ internal object NavigationVoiceTriggerPolicy {
                 distToNextManeuver > hwQuarterRange.endInclusive + NEAR_CATCHUP_BUFFER_METERS &&
                     distToNextManeuver < earlyMidRange.start &&
                     NavigationSessionController.STAGE_HW_HALF_MI !in spokenForManeuver -> NavigationSessionController.STAGE_HW_HALF_MI
+                distToNextManeuver > hwFinalDist + 30.0 &&
+                    distToNextManeuver < hwQuarterRange.start &&
+                    NavigationSessionController.STAGE_HW_QUARTER_MI !in spokenForManeuver ->
+                    NavigationSessionController.STAGE_HW_QUARTER_MI
                 else -> null
             }
             isEligibleForEarlyCityWarning -> when {
-                distToNextManeuver <= max(55.0, speedMps * 4.0) -> NavigationSessionController.STAGE_CITY_NOW
+                distToNextManeuver <= cityFinalDist -> NavigationSessionController.STAGE_CITY_NOW
                 distToNextManeuver in cityNearRange -> NavigationSessionController.STAGE_CITY_1000FT
                 distToNextManeuver in earlyMidRange -> NavigationSessionController.STAGE_CITY_HALF_MI
                 distToNextManeuver in earlyFarRange -> NavigationSessionController.STAGE_CITY_1MI
@@ -86,11 +97,22 @@ internal object NavigationVoiceTriggerPolicy {
                 distToNextManeuver > cityNearRange.endInclusive + NEAR_CATCHUP_BUFFER_METERS &&
                     distToNextManeuver < earlyMidRange.start &&
                     NavigationSessionController.STAGE_CITY_HALF_MI !in spokenForManeuver -> NavigationSessionController.STAGE_CITY_HALF_MI
+                // Short-block catchup below 1000ft window so short multilane blocks always get a preparation cue
+                distToNextManeuver > cityFinalDist + 25.0 &&
+                    distToNextManeuver < cityNearRange.start &&
+                    NavigationSessionController.STAGE_CITY_1000FT !in spokenForManeuver ->
+                    NavigationSessionController.STAGE_CITY_1000FT
                 else -> null
             }
             else -> when {
-                distToNextManeuver <= max(55.0, speedMps * 4.0) -> NavigationSessionController.STAGE_CITY_NOW
+                distToNextManeuver <= cityFinalDist -> NavigationSessionController.STAGE_CITY_NOW
                 distToNextManeuver in cityNearRange -> NavigationSessionController.STAGE_CITY_1000FT
+                // Short-block & low-speed fallback: ensure urban preparation cue never falls into dead zone
+                distToNextManeuver > cityFinalDist + 20.0 &&
+                    distToNextManeuver < cityNearRange.start &&
+                    distToNextManeuver <= max(cityNearRange.start, dynamicPrepDist) &&
+                    NavigationSessionController.STAGE_CITY_1000FT !in spokenForManeuver ->
+                    NavigationSessionController.STAGE_CITY_1000FT
                 else -> null
             }
         }
@@ -166,11 +188,20 @@ internal object NavigationVoiceTriggerPolicy {
         )
         val isDifferentManeuver = lastSpokenManeuverIndex != -1 && lastSpokenManeuverIndex != upcomingManeuver.index
         val elapsedSinceLastSpokenMs = eventTimeMs - lastSpokenManeuverTimeMs
-        val requiredCooldownMs = when (rawStageKey) {
-            NavigationSessionController.STAGE_ARRIVED -> 0L
-            NavigationSessionController.STAGE_CITY_NOW,
-            NavigationSessionController.STAGE_HW_NOW,
-            NavigationSessionController.STAGE_BIKE_30M -> NavigationSessionController.IMMEDIATE_INTER_MANEUVER_COOLDOWN_MS
+        val bypassCooldown = rawStageKey != null && ManeuverTimingPlanner.shouldBypassInterManeuverCooldown(
+            stage = rawStageKey,
+            distToNextManeuver = distToNextManeuver,
+            speedMps = speedMps,
+            isHighway = isHighway,
+            approachManeuver = approachManeuver
+        )
+        val requiredCooldownMs = when {
+            rawStageKey == null || bypassCooldown -> 0L
+            rawStageKey == NavigationSessionController.STAGE_ARRIVED -> 0L
+            rawStageKey == NavigationSessionController.STAGE_CITY_NOW ||
+                rawStageKey == NavigationSessionController.STAGE_HW_NOW ||
+                rawStageKey == NavigationSessionController.STAGE_BIKE_30M ->
+                NavigationSessionController.IMMEDIATE_INTER_MANEUVER_COOLDOWN_MS
             else -> NavigationSessionController.INTER_MANEUVER_COOLDOWN_MS
         }
         val isBlockedByOverlapGuard = rawStageKey != null &&
