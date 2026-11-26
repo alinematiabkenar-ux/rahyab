@@ -9,7 +9,7 @@
 - [x] L3 Add `edge.lane_count` (and `edge.way_id` for L5) to offline `trace_attributes`, store per route edge, draw lane overlay only on final approach matching maneuver lane count (within 1 for turn bay); fallback max 300 m city / 600 m highway when missing
 - [x] L4 Apply lane confidence everywhere (lane banner, map overlay, junction view, Turn Focus, Android Auto lanes image): `HIGH` bright blue, `MEDIUM` lighter blue 50% / subtle banner, `LOW` no colored lanes + side hint ("Use the right/left/middle lanes" EN & FA), Turn Focus still beeps & zooms
 - [x] L5 "Wrong lane" flag button when lane advice is visible -> save to new Room table (additive migration) with time, location, map version, maneuver details, raw lane JSON, computed targets, edge lane count, approach OSM way id; suppress intersection within 30 m & 30° bearing until map version changes; confirmation toast EN & FA
-- [ ] L6 Diagnostics "Lane reports" section: list with date, road names, reason, "Copy all" including raw lane JSON, OSM way id link-style text, and "Clear" button
+- [x] L6 Diagnostics "Lane reports" section: list with date, road names, reason, "Copy all" including raw lane JSON, OSM way id link-style text, and "Clear" button
 
 ## D. More Open US Data (Pipeline & App)
 - [ ] D1 Pipeline: TIGER/Line `ADDRFEAT` address ranges (`tiger_ranges` table + indexes, try 2026/2025/2024, state + neighboring bbox counties, DuckDB spatial `/vsizip/`, `address_utils.py` normalizer, schema_version 2)
