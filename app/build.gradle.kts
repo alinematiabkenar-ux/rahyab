@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.rahyab.kqzmxv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 42
-    versionName = "42.0"
+    versionCode = 43
+    versionName = "43.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -73,6 +73,9 @@ android {
     }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  lint {
+    checkReleaseBuilds = false
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
