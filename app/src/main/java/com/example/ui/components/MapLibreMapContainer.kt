@@ -37,7 +37,11 @@ import com.example.map.RouteGeoJsonCache
 import com.example.navigation.CompassTracker
 import com.example.navigation.GpsFix
 import com.example.navigation.LatLon
+import com.example.navigation.MapViewportMetrics
+import com.example.navigation.NavigationViewportFraming
 import com.example.navigation.OfflineRoute
+import com.example.navigation.SynchronizedFollowAnimator
+import com.example.navigation.SynchronizedMapPose
 import com.example.ui.CameraTargetCommand
 import com.example.ui.RahYabViewModel
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +115,9 @@ fun MapLibreMapContainer(
     isGpsPoor: Boolean = false,
     cameraCommand: CameraTargetCommand?,
     cameraGeneration: Long = 0L,
+    viewportTopInsetPx: Int = 0,
+    viewportBottomInsetPx: Int = 0,
+    navVehicleBearing: Float? = null,
     onMapLongClick: (Double, Double) -> Unit,
     onRouteTapped: (Int) -> Unit,
     onUserMovedMap: () -> Unit,
@@ -122,6 +129,9 @@ fun MapLibreMapContainer(
 
     val currentCandidates by rememberUpdatedState(candidateRoutes)
     val currentActiveRoute by rememberUpdatedState(activeNavRoute)
+    val currentIsCameraFollowing by rememberUpdatedState(isCameraFollowing)
+    val currentPositionMarkerStyle by rememberUpdatedState(positionMarkerStyle)
+    val currentIsGpsPoor by rememberUpdatedState(isGpsPoor)
     val currentOnMapLongClick by rememberUpdatedState(onMapLongClick)
     val currentOnRouteTapped by rememberUpdatedState(onRouteTapped)
     val currentOnUserMovedMap by rememberUpdatedState(onUserMovedMap)
@@ -493,30 +503,102 @@ fun MapLibreMapContainer(
         }
     }
 
-    LaunchedEffect(loadedStyle, displayLoc, throttledHeadingDegrees, positionMarkerStyle, isGpsPoor) {
-        val style = loadedStyle ?: return@LaunchedEffect
-        if (!style.isFullyLoaded) return@LaunchedEffect
+    val syncAnimator = remember { SynchronizedFollowAnimator() }
+    val choreographer = remember { Choreographer.getInstance() }
+    var isFrameLoopPosted by remember { mutableStateOf(false) }
 
+    fun applyPuckPose(style: Style?, lat: Double, lon: Double, bearingDeg: Float) {
+        if (style == null || !style.isFullyLoaded) return
         val iconId = when {
-            positionMarkerStyle == "car" && isGpsPoor -> MapStyleBuilder.IMAGE_USER_CAR_GRAY
-            positionMarkerStyle == "car" -> MapStyleBuilder.IMAGE_USER_CAR
-            isGpsPoor -> MapStyleBuilder.IMAGE_USER_ARROW_GRAY
+            currentPositionMarkerStyle == "car" && currentIsGpsPoor -> MapStyleBuilder.IMAGE_USER_CAR_GRAY
+            currentPositionMarkerStyle == "car" -> MapStyleBuilder.IMAGE_USER_CAR
+            currentIsGpsPoor -> MapStyleBuilder.IMAGE_USER_ARROW_GRAY
             else -> MapStyleBuilder.IMAGE_USER_ARROW
         }
-        val haloHex = if (isGpsPoor) "#94A3B8" else "#38BDF8"
-
-        val puckFc = if (displayLoc != null) {
-            val feat = Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat)).apply {
-                addNumberProperty("bearing", throttledHeadingDegrees)
-                addStringProperty("icon", iconId)
-                addStringProperty("haloColor", haloHex)
-            }
-            FeatureCollection.fromFeature(feat)
-        } else {
-            RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION
+        val haloHex = if (currentIsGpsPoor) "#94A3B8" else "#38BDF8"
+        val feat = Feature.fromGeometry(Point.fromLngLat(lon, lat)).apply {
+            addNumberProperty("bearing", bearingDeg)
+            addStringProperty("icon", iconId)
+            addStringProperty("haloColor", haloHex)
         }
         runCatching {
-            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(puckFc)
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)
+                ?.setGeoJson(FeatureCollection.fromFeature(feat))
+        }
+    }
+
+    fun applySynchronizedPose(pose: SynchronizedMapPose) {
+        applyPuckPose(loadedStyle, pose.markerLat, pose.markerLon, pose.markerBearing)
+        if (pose.updateCamera && currentIsCameraFollowing) {
+            val map = mapLibreMap ?: return
+            val camPos = CameraPosition.Builder()
+                .target(LatLng(pose.camLat, pose.camLon))
+                .zoom(pose.camZoom)
+                .tilt(pose.camTilt)
+                .bearing(pose.camBearing)
+                .padding(pose.paddingArray())
+                .build()
+            runCatching { map.moveCamera(CameraUpdateFactory.newCameraPosition(camPos)) }
+        }
+    }
+
+    val frameCallback = remember {
+        object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                isFrameLoopPosted = false
+                val nowMs = SystemClock.uptimeMillis()
+                val pose = syncAnimator.sample(nowMs) ?: return
+                applySynchronizedPose(pose)
+                if (!syncAnimator.isAnimationFinishedAt(nowMs)) {
+                    isFrameLoopPosted = true
+                    choreographer.postFrameCallback(this)
+                }
+            }
+        }
+    }
+
+    fun ensureSyncFrameLoopRunning() {
+        val nowMs = SystemClock.uptimeMillis()
+        syncAnimator.sample(nowMs)?.let { applySynchronizedPose(it) }
+        if (!syncAnimator.isAnimationFinishedAt(nowMs) && !isFrameLoopPosted) {
+            isFrameLoopPosted = true
+            choreographer.postFrameCallback(frameCallback)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            choreographer.removeFrameCallback(frameCallback)
+            isFrameLoopPosted = false
+            syncAnimator.reset()
+        }
+    }
+
+    val effectiveMarkerBearing = navVehicleBearing ?: throttledHeadingDegrees
+    LaunchedEffect(loadedStyle, displayLoc, effectiveMarkerBearing, positionMarkerStyle, isGpsPoor, isCameraFollowing, activeNavRoute) {
+        val style = loadedStyle ?: return@LaunchedEffect
+        if (!style.isFullyLoaded) return@LaunchedEffect
+        if (displayLoc == null) {
+            runCatching {
+                style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)
+                    ?.setGeoJson(RouteGeoJsonCache.EMPTY_FEATURE_COLLECTION)
+            }
+            return@LaunchedEffect
+        }
+        // When actively following a navigation route, cameraCommand drives marker + camera from the shared clock.
+        // When panning freely, stationary, or outside active follow, keep the marker smoothly synced to true GPS.
+        if (activeNavRoute == null || !isCameraFollowing || !syncAnimator.hasPose()) {
+            val fixTs = gpsFix?.timestampMs ?: 0L
+            syncAnimator.onMarkerOnlyUpdate(
+                nowMs = SystemClock.uptimeMillis(),
+                fixTimestampMs = fixTs,
+                markerLat = displayLoc.lat,
+                markerLon = displayLoc.lon,
+                markerBearing = effectiveMarkerBearing,
+                durationMs = if (activeNavRoute != null) 180 else 0,
+                forceSnap = activeNavRoute == null
+            )
+            ensureSyncFrameLoopRunning()
         }
     }
 
@@ -524,6 +606,7 @@ fun MapLibreMapContainer(
     LaunchedEffect(mapLibreMap, isCameraFollowing) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!isCameraFollowing) {
+            syncAnimator.pauseCameraFollow()
             runCatching { map.cancelTransitions() }
         }
     }
@@ -531,14 +614,16 @@ fun MapLibreMapContainer(
         val map = mapLibreMap ?: return@LaunchedEffect
         if (cameraGeneration > lastCanceledGeneration) {
             lastCanceledGeneration = cameraGeneration
+            syncAnimator.pauseCameraFollow()
             runCatching { map.cancelTransitions() }
         }
     }
 
-    LaunchedEffect(mapLibreMap, cameraCommand) {
+    LaunchedEffect(mapLibreMap, cameraCommand, viewportTopInsetPx, viewportBottomInsetPx) {
         val map = mapLibreMap ?: return@LaunchedEffect
         val cmd = cameraCommand ?: return@LaunchedEffect
         if (cmd.cancelPendingAnimation) {
+            syncAnimator.pauseCameraFollow()
             runCatching { map.cancelTransitions() }
             return@LaunchedEffect
         }
@@ -550,26 +635,83 @@ fun MapLibreMapContainer(
         ) {
             return@LaunchedEffect
         }
+        runCatching { map.cancelTransitions() }
         lastAppliedHeadingBearing = cmd.bearing.toFloat()
-        val topPadding = when {
-            cmd.anchorLowerQuarter && mapView.height > 0 -> mapView.height * 0.42
-            cmd.anchorLowerThird && mapView.height > 0 -> mapView.height * 0.34
-            else -> 0.0
-        }
-        val pos = CameraPosition.Builder()
-            .target(LatLng(cmd.lat, cmd.lon))
-            .zoom(cmd.zoom)
-            .tilt(cmd.tilt)
-            .bearing(cmd.bearing)
-            .padding(doubleArrayOf(0.0, topPadding, 0.0, 0.0))
-            .build()
-        runCatching {
-            if (cmd.animationDurationMs <= 0) {
-                map.moveCamera(CameraUpdateFactory.newCameraPosition(pos))
-            } else {
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(pos), cmd.animationDurationMs)
+
+        val density = context.resources.displayMetrics.density.coerceAtLeast(1f)
+        val viewport = MapViewportMetrics(
+            widthPx = mapView.width,
+            heightPx = mapView.height,
+            insetTopPx = viewportTopInsetPx,
+            insetBottomPx = viewportBottomInsetPx,
+            density = density
+        )
+        val vehicleLoc = LatLon(cmd.vehicleLat, cmd.vehicleLon)
+        val desiredTarget = LatLon(cmd.lat, cmd.lon)
+        val junctionPivot = if (cmd.junctionPivotLat != null && cmd.junctionPivotLon != null) {
+            LatLon(cmd.junctionPivotLat, cmd.junctionPivotLon)
+        } else null
+
+        val finalTarget: LatLon
+        val finalZoom: Double
+        val finalPadding: DoubleArray
+        if (cmd.isFocusCommand && viewport.isValid) {
+            val framed = NavigationViewportFraming.computeBoundedFocusFraming(
+                vehicleLoc = vehicleLoc,
+                desiredCameraTarget = desiredTarget,
+                baseZoom = cmd.zoom,
+                tiltDeg = cmd.tilt,
+                bearingDeg = cmd.bearing,
+                viewport = viewport,
+                junctionPivot = junctionPivot,
+                anchorLowerQuarter = cmd.anchorLowerQuarter
+            )
+            finalTarget = framed.cameraTarget
+            finalZoom = framed.zoom
+            finalPadding = framed.padding
+        } else if (viewport.isValid) {
+            finalTarget = desiredTarget
+            finalZoom = cmd.zoom
+            finalPadding = NavigationViewportFraming.computeSafeCameraPadding(
+                viewport = viewport,
+                anchorLowerThird = cmd.anchorLowerThird,
+                anchorLowerQuarter = cmd.anchorLowerQuarter
+            )
+        } else {
+            val fallbackTop = when {
+                cmd.anchorLowerQuarter && mapView.height > 0 -> mapView.height * 0.36
+                cmd.anchorLowerThird && mapView.height > 0 -> mapView.height * 0.28
+                else -> 0.0
             }
+            finalTarget = desiredTarget
+            finalZoom = cmd.zoom
+            finalPadding = doubleArrayOf(0.0, fallbackTop, 0.0, 0.0)
         }
+
+        val currentCam = map.cameraPosition
+        val snapFar = cmd.isRecenterOrSnap && currentCam.target != null &&
+            SynchronizedFollowAnimator.needsCameraSnapOnRecenter(
+                currentCam.target!!.latitude, currentCam.target!!.longitude, finalTarget.lat, finalTarget.lon
+            )
+        syncAnimator.resumeCameraFollow()
+        syncAnimator.onNavigationTargetUpdate(
+            nowMs = SystemClock.uptimeMillis(),
+            fixTimestampMs = cmd.fixTimestampMs,
+            markerLat = vehicleLoc.lat,
+            markerLon = vehicleLoc.lon,
+            markerBearing = cmd.vehicleBearing.toFloat(),
+            camLat = finalTarget.lat,
+            camLon = finalTarget.lon,
+            camZoom = finalZoom,
+            camTilt = cmd.tilt,
+            camBearing = cmd.bearing,
+            padding = finalPadding,
+            durationMs = if (snapFar) 0 else cmd.animationDurationMs,
+            isFollowingCamera = true,
+            forceSnap = cmd.animationDurationMs <= 0 || snapFar,
+            useEaseOut = cmd.isTransitionAnim
+        )
+        ensureSyncFrameLoopRunning()
     }
 
     // Smoothly rotate map camera bearing in heading-up mode ONLY when stationary (< 3 mph),
@@ -657,12 +799,14 @@ fun MapLibreMapContainer(
                     // Detect ANY user finger pan, pinch-zoom, rotate, or tilt in any mode -> cancel transition & pause follow
                     map.addOnCameraMoveStartedListener { reason ->
                         if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                            syncAnimator.pauseCameraFollow()
                             runCatching { map.cancelTransitions() }
                             currentOnUserMovedMap()
                         }
                     }
                     map.addOnMoveListener(object : MapLibreMap.OnMoveListener {
                         override fun onMoveBegin(detector: MoveGestureDetector) {
+                            syncAnimator.pauseCameraFollow()
                             runCatching { map.cancelTransitions() }
                             currentOnUserMovedMap()
                         }

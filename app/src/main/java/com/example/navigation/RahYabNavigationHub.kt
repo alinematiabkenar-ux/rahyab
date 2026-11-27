@@ -309,6 +309,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
     private fun startHeadlessDriverIfNeeded() {
         if (phoneDelegate != null || !navigationState.value.isNavigating) return
         stopHeadlessLoops()
+        app.voiceGuidanceManager.onStageNotConsumed = { rId, mIdx, st -> headlessController.releaseUnspokenStage(rId, mIdx, st) }
         if (navigationState.value.isSimulatingDrive) {
             headlessSimJob = hubScope.launch {
                 var simClockMs = System.currentTimeMillis()
@@ -407,10 +408,12 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
         } else {
             maneuverToSpeak?.let { (m, stage) ->
                 val nextFollowUp = ManeuverTimingPlanner.findBackToBackFollowUp(enriched.route, enriched.currentManeuverIndex, enriched.currentSpeedMps)
+                val rId = enriched.route?.id
                 app.voiceGuidanceManager.speakManeuver(
                     maneuver = m, distanceMeters = enriched.distanceToNextManeuverMeters, unit = s.distanceUnit,
                     language = s.language, announcementStage = stage, includeLaneGuidance = decision?.hasActionableLaneGuidance == true,
-                    nextManeuver = nextFollowUp, laneDecision = decision, routeId = enriched.route?.id
+                    nextManeuver = nextFollowUp, laneDecision = decision, routeId = rId,
+                    isStillValid = { val cur = navigationState.value; cur.isNavigating && !cur.isRerouting && cur.route?.id == rId && cur.currentManeuver?.index == m.index }
                 )
             }
             alertToSpeak?.let { alert ->

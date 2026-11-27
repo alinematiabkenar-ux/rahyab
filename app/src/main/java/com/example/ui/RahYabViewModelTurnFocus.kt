@@ -218,7 +218,8 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
     heading: Float,
     simMultiplier: Int,
     cameraAnimMs: Int,
-    forceRecenterNow: Boolean
+    forceRecenterNow: Boolean,
+    fixTimestampMs: Long = 0L
 ): CameraTargetCommand? {
     val s = settings.value
     val mode = state.effectiveTravelMode
@@ -249,13 +250,19 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
             )
         }
         val focusTilt = if (s.is3DView) TurnFocusPlanner.FOCUS_TILT_3D else 0.0
+        val displayedManeuver = state.displayedManeuver
         val framedTarget = TurnFocusStageHelper.computeApproachCameraTarget(
             route = state.route,
-            maneuver = state.displayedManeuver,
+            maneuver = displayedManeuver,
             vehicleLoc = targetLoc,
             remainingMeters = state.displayedManeuverDistanceMeters,
             stage = effectiveStage
         )
+        val junctionPivot = state.route?.let { r ->
+            displayedManeuver?.let { m ->
+                r.shape.getOrNull(m.beginShapeIndex.coerceIn(0, r.shape.lastIndex.coerceAtLeast(0)))
+            }
+        }
 
         // Stationary red-light guard: keep camera rock-steady without re-triggering animations
         val prevFocus = lastFocusCameraTarget
@@ -291,7 +298,15 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
             routeId = activeRouteId,
             maneuverIndex = state.turnFocusManeuverIndex,
             generation = currentGeneration,
-            isFocusCommand = true
+            isFocusCommand = true,
+            vehicleLat = targetLoc.lat,
+            vehicleLon = targetLoc.lon,
+            vehicleBearing = heading.toDouble(),
+            fixTimestampMs = fixTimestampMs,
+            isRecenterOrSnap = forceRecenterNow,
+            isTransitionAnim = enterAnim || tightenAnim || forceRecenterNow,
+            junctionPivotLat = junctionPivot?.lat,
+            junctionPivotLon = junctionPivot?.lon
         )
         lastFocusCameraTarget = cmd
         return cmd
@@ -347,6 +362,12 @@ internal fun RahYabViewModel.computeFocusOrFollowCameraCommandImpl(
         routeId = activeRouteId,
         maneuverIndex = state.currentManeuver?.index ?: -1,
         generation = currentGeneration,
-        isFocusCommand = false
+        isFocusCommand = false,
+        vehicleLat = targetLoc.lat,
+        vehicleLon = targetLoc.lon,
+        vehicleBearing = heading.toDouble(),
+        fixTimestampMs = fixTimestampMs,
+        isRecenterOrSnap = forceRecenterNow,
+        isTransitionAnim = exitAnim || forceRecenterNow
     )
 }

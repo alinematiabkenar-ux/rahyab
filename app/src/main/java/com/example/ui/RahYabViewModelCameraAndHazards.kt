@@ -25,6 +25,9 @@ internal fun RahYabViewModel.invalidatePendingCameraCommandsImpl() {
 
 internal fun RahYabViewModel.initializeViewModel() {
     packManager.isNavigationActiveProvider = { _navigationState.value.isNavigating }
+    voiceManager.onStageNotConsumed = { routeId, maneuverIdx, stage ->
+        navController.releaseUnspokenStage(routeId, maneuverIdx, stage)
+    }
     packManager.onUpdatePostponed = {
         _snackbarMessage.value = com.example.i18n.stringsFor(settings.value.language).mapUpdatePostponedNotice
     }
@@ -383,6 +386,7 @@ internal fun RahYabViewModel.emitImmediateFollowCameraImpl(is3DViewOverride: Boo
     if (nav.isNavigating && nav.turnFocusCameraActive && !turnFocusUserPannedDuringActive &&
         nav.effectiveTravelMode == com.example.navigation.TravelMode.DRIVE
     ) {
+        val effectiveStage = if (nav.turnFocusStage != com.example.navigation.TurnFocusStage.NONE) nav.turnFocusStage else com.example.navigation.TurnFocusStage.LANE_LEVEL
         val focusZoom = if (nav.turnFocusTargetZoom > 0.0) {
             nav.turnFocusTargetZoom
         } else when {
@@ -390,44 +394,32 @@ internal fun RahYabViewModel.emitImmediateFollowCameraImpl(is3DViewOverride: Boo
             nav.turnFocusClosePair -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CLOSE_PAIR
             else -> com.example.navigation.TurnFocusPlanner.FOCUS_ZOOM_CITY
         }
+        val framedTarget = com.example.navigation.TurnFocusStageHelper.computeApproachCameraTarget(
+            route = nav.route, maneuver = nav.displayedManeuver, vehicleLoc = ref,
+            remainingMeters = nav.displayedManeuverDistanceMeters, stage = effectiveStage
+        )
+        val pivot = nav.route?.let { r -> nav.displayedManeuver?.let { m -> r.shape.getOrNull(m.beginShapeIndex.coerceIn(0, r.shape.lastIndex.coerceAtLeast(0))) } }
         _cameraCommand.value = CameraTargetCommand(
-            lat = ref.lat,
-            lon = ref.lon,
-            zoom = focusZoom,
+            lat = framedTarget.lat, lon = framedTarget.lon, zoom = focusZoom,
             tilt = if (effective3D) com.example.navigation.TurnFocusPlanner.FOCUS_TILT_3D else 0.0,
-            bearing = heading.toDouble(),
-            animationDurationMs = 450,
-            anchorLowerThird = false,
-            anchorLowerQuarter = true,
-            routeId = nav.route?.id,
-            maneuverIndex = nav.turnFocusManeuverIndex,
-            generation = _cameraGeneration.value,
-            isFocusCommand = true
+            bearing = heading.toDouble(), animationDurationMs = 420, anchorLowerThird = false, anchorLowerQuarter = true,
+            routeId = nav.route?.id, maneuverIndex = nav.turnFocusManeuverIndex, generation = _cameraGeneration.value,
+            isFocusCommand = true, vehicleLat = ref.lat, vehicleLon = ref.lon, vehicleBearing = heading.toDouble(),
+            fixTimestampMs = fix?.timestampMs ?: System.currentTimeMillis(), isRecenterOrSnap = true, isTransitionAnim = true,
+            junctionPivotLat = pivot?.lat, junctionPivotLon = pivot?.lon
         )
         return
     }
     val update = cameraFollowController.computeFollowCameraUpdate(
-        lat = ref.lat,
-        lon = ref.lon,
-        speedMps = speedMps,
-        headingDegrees = heading,
-        isHeadingUpMode = _isHeadingUpMode.value,
-        is3DView = effective3D,
-        isNavigating = nav.isNavigating,
-        simulationSpeedMultiplier = if (nav.isSimulatingDrive) _simulationSpeedMultiplier.value else 1,
-        forceImmediate = true
+        lat = ref.lat, lon = ref.lon, speedMps = speedMps, headingDegrees = heading,
+        isHeadingUpMode = _isHeadingUpMode.value, is3DView = effective3D, isNavigating = nav.isNavigating,
+        simulationSpeedMultiplier = if (nav.isSimulatingDrive) _simulationSpeedMultiplier.value else 1, forceImmediate = true
     ) ?: return
     _cameraCommand.value = CameraTargetCommand(
-        lat = update.lat,
-        lon = update.lon,
-        zoom = update.zoom,
-        tilt = update.tilt,
-        bearing = update.bearing,
-        animationDurationMs = update.animationDurationMs,
-        anchorLowerThird = update.anchorLowerThird,
-        routeId = nav.route?.id,
-        maneuverIndex = nav.currentManeuver?.index ?: -1,
-        generation = _cameraGeneration.value,
-        isFocusCommand = false
+        lat = update.lat, lon = update.lon, zoom = update.zoom, tilt = update.tilt, bearing = update.bearing,
+        animationDurationMs = update.animationDurationMs, anchorLowerThird = update.anchorLowerThird,
+        routeId = nav.route?.id, maneuverIndex = nav.currentManeuver?.index ?: -1, generation = _cameraGeneration.value,
+        isFocusCommand = false, vehicleLat = ref.lat, vehicleLon = ref.lon, vehicleBearing = heading.toDouble(),
+        fixTimestampMs = fix?.timestampMs ?: System.currentTimeMillis(), isRecenterOrSnap = true, isTransitionAnim = true
     )
 }

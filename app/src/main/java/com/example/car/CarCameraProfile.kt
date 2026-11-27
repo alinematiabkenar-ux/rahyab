@@ -136,32 +136,54 @@ object CarCameraProfile {
     }
 
     /**
+     * Converts Android Auto surface dimensions + visible/stable Rect into [com.example.navigation.MapViewportMetrics].
+     */
+    fun toViewportMetrics(
+        surfaceWidth: Int,
+        surfaceHeight: Int,
+        area: Rect,
+        pixelRatio: Float = 1f
+    ): com.example.navigation.MapViewportMetrics {
+        val hasArea = area.width() > 0 && area.height() > 0
+        val left = if (hasArea) area.left.coerceIn(0, surfaceWidth) else 0
+        val top = if (hasArea) area.top.coerceIn(0, surfaceHeight) else 0
+        val rightInset = if (hasArea) (surfaceWidth - area.right).coerceIn(0, surfaceWidth) else 0
+        val bottomInset = if (hasArea) (surfaceHeight - area.bottom).coerceIn(0, surfaceHeight) else 0
+        return com.example.navigation.MapViewportMetrics(
+            widthPx = surfaceWidth,
+            heightPx = surfaceHeight,
+            insetLeftPx = left,
+            insetTopPx = top,
+            insetRightPx = rightInset,
+            insetBottomPx = bottomInset,
+            density = pixelRatio.coerceAtLeast(1f)
+        )
+    }
+
+    /**
      * Computes MapLibre camera padding [left, top, right, bottom] to keep the car puck
-     * in the lower third normally, or lower quarter during Turn Focus mode.
+     * safely inside the unobstructed Android Auto visible/stable area in the lower third
+     * normally, or lower quarter during Turn Focus mode.
      */
     fun computeCameraPadding(
         surfaceWidth: Int,
         surfaceHeight: Int,
         area: Rect,
         anchorLowerThird: Boolean,
-        anchorLowerQuarter: Boolean
+        anchorLowerQuarter: Boolean,
+        pixelRatio: Float = 1f
     ): DoubleArray {
-        val leftPad = area.left.toDouble().coerceAtLeast(0.0)
-        val rightPad = (surfaceWidth - area.right).toDouble().coerceAtLeast(0.0)
-        val bottomPad = (surfaceHeight - area.bottom).toDouble().coerceAtLeast(0.0)
-        val extraTop = when {
-            area.height() <= 0 -> 0.0
-            anchorLowerQuarter -> area.height() * 0.38
-            anchorLowerThird -> area.height() * 0.28
-            else -> 0.0
-        }
-        val topPad = (area.top.toDouble() + extraTop).coerceAtLeast(0.0)
-        return doubleArrayOf(leftPad, topPad, rightPad, bottomPad)
+        val viewport = toViewportMetrics(surfaceWidth, surfaceHeight, area, pixelRatio)
+        return com.example.navigation.NavigationViewportFraming.computeSafeCameraPadding(
+            viewport = viewport,
+            anchorLowerThird = anchorLowerThird,
+            anchorLowerQuarter = anchorLowerQuarter
+        )
     }
 
     /**
-     * Computes Android Auto Turn Focus camera framing directly (bypassing normal follow deadzones
-     * so the first update inside 1,000 m / 500 m immediately frames vehicle + junction + outgoing road).
+     * Computes Android Auto Turn Focus camera framing bounded to the unobstructed car surface so
+     * the entire vehicle marker stays visible while framing the upcoming turn/exit and outgoing road.
      */
     fun computeFocusCameraUpdate(
         nav: ActiveNavigationState,
@@ -169,14 +191,15 @@ object CarCameraProfile {
         bearing: Float,
         is3DView: Boolean,
         enteringFocus: Boolean,
-        tightening: Boolean
+        tightening: Boolean,
+        viewport: com.example.navigation.MapViewportMetrics? = null
     ): CarFocusCameraUpdate {
         val effectiveStage = if (nav.turnFocusStage != TurnFocusStage.NONE) {
             nav.turnFocusStage
         } else {
             TurnFocusStage.LANE_LEVEL
         }
-        val target = TurnFocusStageHelper.computeApproachCameraTarget(
+        val desiredTarget = TurnFocusStageHelper.computeApproachCameraTarget(
             route = nav.route,
             maneuver = nav.displayedManeuver,
             vehicleLoc = loc,
@@ -194,6 +217,26 @@ object CarCameraProfile {
             focusTargetZoom = nav.turnFocusTargetZoom,
             focusStage = effectiveStage
         )
+        val pivot = nav.route?.let { r ->
+            nav.displayedManeuver?.let { m ->
+                r.shape.getOrNull(m.beginShapeIndex.coerceIn(0, r.shape.lastIndex.coerceAtLeast(0)))
+            }
+        }
+        val (boundedTarget, boundedZoom) = if (viewport != null && viewport.isValid) {
+            val framed = com.example.navigation.NavigationViewportFraming.computeBoundedFocusFraming(
+                vehicleLoc = loc,
+                desiredCameraTarget = desiredTarget,
+                baseZoom = carTarget.zoom,
+                tiltDeg = carTarget.tilt,
+                bearingDeg = bearing.toDouble(),
+                viewport = viewport,
+                junctionPivot = pivot,
+                anchorLowerQuarter = true
+            )
+            framed.cameraTarget to framed.zoom
+        } else {
+            desiredTarget to carTarget.zoom
+        }
         val animMs = resolveCarCameraAnimMs(
             enteringFocus = enteringFocus,
             tighteningToLaneLevel = tightening,
@@ -202,8 +245,8 @@ object CarCameraProfile {
             defaultFollowAnimMs = 350
         )
         return CarFocusCameraUpdate(
-            target = target,
-            zoom = carTarget.zoom,
+            target = boundedTarget,
+            zoom = boundedZoom,
             tilt = carTarget.tilt,
             bearing = bearing.toDouble(),
             animMs = animMs

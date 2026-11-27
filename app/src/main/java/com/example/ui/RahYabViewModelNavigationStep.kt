@@ -195,6 +195,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                     upcomingManeuverIdx = effectiveState.currentManeuverIndex,
                     speedMps = speedMps
                 )
+                val expectedRouteId = effectiveState.route?.id
                 val spoken = voiceManager.speakManeuver(
                     maneuver = maneuver,
                     distanceMeters = effectiveState.distanceToNextManeuverMeters,
@@ -204,7 +205,13 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                     includeLaneGuidance = isDriveMode && (activeDecision?.hasActionableLaneGuidance == true),
                     nextManeuver = backToBackNext,
                     laneDecision = activeDecision,
-                    routeId = effectiveState.route?.id
+                    routeId = expectedRouteId,
+                    isStillValid = {
+                        val cur = _navigationState.value
+                        cur.isNavigating && !cur.isRerouting && !cur.hasArrived &&
+                            cur.route?.id == expectedRouteId &&
+                            cur.currentManeuver?.index == maneuver.index
+                    }
                 )
                 _navigationState.value = _navigationState.value.copy(lastSpokenInstruction = spoken)
             }
@@ -287,6 +294,7 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 _userHeadingDegrees.value
             }
             val simMultiplier = if (effectiveState.isSimulatingDrive) _simulationSpeedMultiplier.value else 1
+            val fixTs = rerouteSourceFix?.timestampMs?.takeIf { it > 0L } ?: System.currentTimeMillis()
             computeFocusOrFollowCameraCommandImpl(
                 state = effectiveState,
                 targetLoc = targetLoc,
@@ -294,7 +302,8 @@ internal fun RahYabViewModel.applyNavigationStepResultImpl(
                 heading = heading,
                 simMultiplier = simMultiplier,
                 cameraAnimMs = cameraAnimMs,
-                forceRecenterNow = forceRecenterNow
+                forceRecenterNow = forceRecenterNow,
+                fixTimestampMs = fixTs
             )?.let { cmd -> _cameraCommand.value = cmd }
         }
     }

@@ -46,6 +46,15 @@ class NavigationSessionController {
         lastSpokenManeuverTimeMs = timestampMs
     }
 
+    /**
+     * Releases a maneuver stage if TTS failed or was not ready before playback actually started,
+     * allowing a timely retry on a subsequent navigation update without permanently consuming it.
+     */
+    fun releaseUnspokenStage(routeId: String?, maneuverIndex: Int, stage: String) {
+        if (routeId != null && trackedRouteId != null && routeId != trackedRouteId) return
+        spokenStagesByManeuver[maneuverIndex]?.remove(stage)
+    }
+
     data class UpdateResult(
         val state: ActiveNavigationState,
         val shouldReroute: Boolean,

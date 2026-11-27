@@ -20,12 +20,17 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -103,6 +108,9 @@ fun DriveScreen(
     var showCloudStatusDialog by remember { mutableStateOf(false) }
     var mapCameraBearingDegrees by remember { mutableFloatStateOf(0f) }
     var compassCalibDismissed by remember { mutableStateOf(false) }
+    var topOverlayBottomPx by remember { mutableIntStateOf(0) }
+    var bottomNavBarHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
 
     val onStartVoiceCommand = rememberVoiceCommandTrigger(viewModel)
     val openSearchResultsTick by viewModel.openSearchResultsEvent.collectAsStateWithLifecycle()
@@ -187,6 +195,9 @@ fun DriveScreen(
             isGpsPoor = !navState.isSimulatingDrive && (navState.isGpsSignalLost || (gpsFix?.accuracyMeters ?: 0f) > 35f || gpsFix == null),
             cameraCommand = cameraCmd,
             cameraGeneration = cameraGeneration,
+            viewportTopInsetPx = if (navState.isNavigating) topOverlayBottomPx else 0,
+            viewportBottomInsetPx = if (navState.isNavigating) bottomNavBarHeightPx + with(density) { 24.dp.roundToPx() } else 0,
+            navVehicleBearing = if (navState.isNavigating) navState.snappedBearing else null,
             onMapLongClick = { lat, lon -> viewModel.dropPinOnMap(lat, lon) },
             onRouteTapped = { idx -> viewModel.selectCandidateRoute(idx) },
             onUserMovedMap = { viewModel.pauseCameraFollow() },
@@ -230,7 +241,14 @@ fun DriveScreen(
             onEnableDevOregon = { viewModel.setDevOnlineOregonMode(true) },
             onStartVoiceCommand = onStartVoiceCommand,
             onReportWrongLane = { viewModel.reportWrongLane() },
-            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 10.dp)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .onGloballyPositioned { coords ->
+                    topOverlayBottomPx = (coords.positionInRoot().y + coords.size.height).toInt()
+                }
         )
 
         // 3. Left / Start side: Speed Limit & Live Speedometer Cluster + S1 Simulator Speed Buttons
@@ -368,6 +386,7 @@ fun DriveScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(12.dp)
+                    .onSizeChanged { bottomNavBarHeightPx = it.height }
             )
         } else if (selectedPlace != null) {
             PlaceAndRoutePreviewCard(

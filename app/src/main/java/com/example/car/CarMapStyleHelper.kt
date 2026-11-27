@@ -52,7 +52,8 @@ internal object CarMapStyleHelper {
         app: RahYabApplication,
         style: Style?,
         laneHighlightEnabled: Boolean = true,
-        laneHighlightColorHex: String = com.example.map.LaneHighlightColor.BLUE.hex
+        laneHighlightColorHex: String = com.example.map.LaneHighlightColor.BLUE.hex,
+        updatePuck: Boolean = true
     ) {
         if (style == null || !style.isFullyLoaded) return
         val hub = app.navigationHub
@@ -103,16 +104,15 @@ internal object CarMapStyleHelper {
             } else emptyFc
             style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_DESTINATION)?.setGeoJson(destFc)
 
-            val displayLoc = nav.snappedLocation ?: fix?.let { LatLon(it.lat, it.lon) }
-            val bearing = if (nav.isNavigating) nav.snappedBearing else hub.userHeadingDegrees.value
-            val puckFc = if (displayLoc != null) {
-                FeatureCollection.fromFeature(Feature.fromGeometry(Point.fromLngLat(displayLoc.lon, displayLoc.lat)).apply {
-                    addNumberProperty("bearing", bearing)
-                    addStringProperty("icon", MapStyleBuilder.IMAGE_USER_ARROW)
-                    addStringProperty("haloColor", "#38BDF8")
-                })
-            } else emptyFc
-            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(puckFc)
+            if (updatePuck) {
+                val displayLoc = nav.snappedLocation ?: fix?.let { LatLon(it.lat, it.lon) }
+                val bearing = if (nav.isNavigating) nav.snappedBearing else hub.userHeadingDegrees.value
+                if (displayLoc != null) {
+                    updatePuckPose(style, displayLoc.lat, displayLoc.lon, bearing)
+                } else {
+                    style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)?.setGeoJson(emptyFc)
+                }
+            }
             val focusIdx = if (nav.turnFocusActive) nav.turnFocusManeuverIndex else -1
             val arrow = if (nav.isNavigating && !nav.hasArrived) {
                 com.example.map.ManeuverArrowGeometry.build(
@@ -158,6 +158,19 @@ internal object CarMapStyleHelper {
                 highlightColorHex = laneHighlightColorHex,
                 laneConfidence = nav.laneConfidence
             )
+        }
+    }
+
+    fun updatePuckPose(style: Style?, lat: Double, lon: Double, bearingDeg: Float) {
+        if (style == null || !style.isFullyLoaded) return
+        runCatching {
+            val feat = Feature.fromGeometry(Point.fromLngLat(lon, lat)).apply {
+                addNumberProperty("bearing", bearingDeg)
+                addStringProperty("icon", MapStyleBuilder.IMAGE_USER_ARROW)
+                addStringProperty("haloColor", "#38BDF8")
+            }
+            style.getSourceAs<GeoJsonSource>(MapStyleBuilder.SOURCE_GPS_PUCK)
+                ?.setGeoJson(FeatureCollection.fromFeature(feat))
         }
     }
 

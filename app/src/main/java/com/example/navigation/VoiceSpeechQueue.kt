@@ -1,357 +1,426 @@
 package com.example.navigation
 
 import android.content.Context
+import android.os.Build
 import android.speech.tts.TextToSpeech
 import com.example.i18n.AppLanguage
 import com.example.util.CrashLogManager
 import java.util.ArrayDeque
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Priority-aware bilingual Persian/English speech queue with route/maneuver generation guards
- * and actual playback-start telemetry.
- *
- * Key guarantees:
- * - Higher-priority utterances ([SpeechPriority.IMMINENT_MANEUVER], [SpeechPriority.REROUTE])
- *   immediately preempt lower-priority alerts and flush stale queued speech.
- * - Lower-priority alerts ([SpeechPriority.LOW_PRIORITY_ALERT]) never interrupt an active
- *   maneuver or lane guidance instruction.
- * - [stopAllSpeech] and [cancelStaleForContext] discard pending segments, pending post-speech
- *   actions, AND queued low-priority alerts so stale phrases never speak after rerouting or
- *   passing a turn.
+ * Priority-aware bilingual Persian/English speech queue with deterministic instruction IDs,
+ * full TTS lifecycle tracking (`onStart`, `onDone`, `onStop`, `onError`), non-interrupting
+ * queueing for equal/lower-priority cues, retry while timely, and stale-generation protection.
  */
 internal class VoiceSpeechQueue(
     private val appContext: Context,
     private val engineSelector: VoiceTtsEngineSelector,
     private val isVoiceEnabledProvider: () -> Boolean,
-    private val clockMsProvider: () -> Long = { System.currentTimeMillis() }
+    private val clockMsProvider: () -> Long = { System.currentTimeMillis() },
+    private val onInstructionStarted: (SpeechContextTag) -> Unit = {},
+    private val onInstructionCompleted: (SpeechContextTag) -> Unit = {},
+    private val onInstructionNotConsumed: (SpeechContextTag, String) -> Unit = { _, _ -> }
 ) {
-    private data class QueuedPostAction(
-        val context: SpeechContextTag,
-        val isStillValid: () -> Boolean,
-        val action: () -> Unit
+    private data class QueuedInstruction(
+        val instructionId: String, val text: String, val language: AppLanguage,
+        val priority: SpeechPriority, val context: SpeechContextTag,
+        val isStillValid: () -> Boolean, val selectedAtMs: Long, val maxWaitMs: Long
     )
+    private data class QueuedPostAction(val context: SpeechContextTag, val isStillValid: () -> Boolean, val action: () -> Unit)
+    private class ActiveInstruction(
+        val generation: Long, val instructionId: String, val text: String, val language: AppLanguage,
+        val priority: SpeechPriority, val context: SpeechContextTag, val isStillValid: () -> Boolean,
+        val selectedAtMs: Long, val queuedAtMs: Long, val totalSegments: Int
+    ) {
+        var startedAtMs: Long = 0L; var completedSegments: Int = 0
+        var currentSegment: VoiceGuidanceManager.SpeechSegment? = null
+        var currentUtteranceId: String? = null; var currentSegmentRetried: Boolean = false
+        var retryCount: Int = 0; var playbackStartReported: Boolean = false; var hasNotifiedStarted: Boolean = false
+    }
 
+    val traceLog = VoiceSpeechTraceLog()
     private val speechGeneration = AtomicLong(0L)
+    private val utteranceSeq = AtomicLong(0L)
     private val sequenceLock = Any()
     private val pendingSegments = ArrayDeque<VoiceGuidanceManager.SpeechSegment>()
+    private val pendingInstructions = ArrayDeque<QueuedInstruction>()
     private val pendingLowPriorityAlerts = PendingLowPriorityAlertQueue()
     private val pendingPostSpeechActions = ArrayDeque<QueuedPostAction>()
+    @Volatile private var activeInstruction: ActiveInstruction? = null
+    @Volatile var playbackSink: SpeechPlaybackSink? = null
 
-    @Volatile
-    private var activeSequenceGeneration: Long = 0L
-    @Volatile
-    private var activePriority: SpeechPriority = SpeechPriority.LOW_PRIORITY_ALERT
-    @Volatile
-    private var activeContext: SpeechContextTag = SpeechContextTag()
-    @Volatile
-    private var activeFullText: String = ""
-    @Volatile
-    private var activeLanguage: AppLanguage = AppLanguage.ENGLISH
-    @Volatile
-    private var activeQueuedAtMs: Long = 0L
-    @Volatile
-    private var activePlaybackStartReported: Boolean = false
-    @Volatile
-    private var isSequenceActive: Boolean = false
+    fun getRecentTraces(): List<SpeechTraceRecord> = traceLog.snapshot()
+    fun setTraceSink(sink: SpeechTraceSink?) { traceLog.traceSink = sink }
 
-    @Volatile
-    var playbackSink: SpeechPlaybackSink? = null
+    fun isSpeakingOrQueued(): Boolean {
+        recoverStuckUtteranceIfNeeded()
+        return synchronized(sequenceLock) {
+            activeInstruction != null || pendingSegments.isNotEmpty() || pendingInstructions.isNotEmpty()
+        } || engineSelector.isAnyEngineSpeaking()
+    }
 
-    fun isSpeakingOrQueued(): Boolean =
-        isSequenceActive || engineSelector.isAnyEngineSpeaking() || hasPendingSegments()
+    fun currentActivePriority(): SpeechPriority? { recoverStuckUtteranceIfNeeded(); return activeInstruction?.priority }
+    fun hasPendingSegments(): Boolean = synchronized(sequenceLock) { pendingSegments.isNotEmpty() }
+    fun updateUserMotionForAlerts(lat: Double, lon: Double, headingDegrees: Float) =
+        pendingLowPriorityAlerts.updateUserMotion(lat, lon, headingDegrees)
 
-    fun currentActivePriority(): SpeechPriority? =
-        if (isSpeakingOrQueued()) activePriority else null
-
-    fun enqueueAfterCurrentSpeech(
-        context: SpeechContextTag = SpeechContextTag(),
-        isStillValid: () -> Boolean = { true },
-        action: () -> Unit
-    ) {
+    fun enqueueAfterCurrentSpeech(context: SpeechContextTag = SpeechContextTag(), isStillValid: () -> Boolean = { true }, action: () -> Unit) {
         synchronized(sequenceLock) {
             if (pendingPostSpeechActions.size >= 4) pendingPostSpeechActions.removeFirst()
             pendingPostSpeechActions.addLast(QueuedPostAction(context, isStillValid, action))
         }
     }
 
-    fun updateUserMotionForAlerts(lat: Double, lon: Double, headingDegrees: Float) {
-        pendingLowPriorityAlerts.updateUserMotion(lat, lon, headingDegrees)
+    fun offerLowPriorityAlert(text: String, effectiveLanguage: AppLanguage, targetLat: Double, targetLon: Double) {
+        val active = activeInstruction
+        if (active != null && active.priority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank) return
+        pendingLowPriorityAlerts.offer(text, effectiveLanguage, targetLat, targetLon, clockMsProvider())
     }
 
-    fun hasPendingSegments(): Boolean = synchronized(sequenceLock) { pendingSegments.isNotEmpty() }
-
-    fun offerLowPriorityAlert(
-        text: String,
-        effectiveLanguage: AppLanguage,
-        targetLat: Double,
-        targetLon: Double
-    ) {
-        // Never queue a low-priority alert while an imminent maneuver or reroute is active.
-        if (isSpeakingOrQueued() && activePriority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank) {
-            return
-        }
-        pendingLowPriorityAlerts.offer(
-            text = text,
-            effectiveLanguage = effectiveLanguage,
-            targetLat = targetLat,
-            targetLon = targetLon,
-            nowMs = clockMsProvider()
-        )
-    }
-
-    fun stopAllSpeech(clearPendingActions: Boolean = true) {
-        speechGeneration.incrementAndGet()
+    fun stopAllSpeech(clearPendingActions: Boolean = true, reason: String = "explicit_stop") {
+        val now = clockMsProvider()
+        val canceledActive: ActiveInstruction?
+        val canceledQueued = mutableListOf<QueuedInstruction>()
         synchronized(sequenceLock) {
-            pendingSegments.clear()
+            speechGeneration.incrementAndGet()
+            canceledActive = activeInstruction; activeInstruction = null; pendingSegments.clear()
             if (clearPendingActions) {
-                pendingPostSpeechActions.clear()
-                pendingLowPriorityAlerts.clear()
+                canceledQueued.addAll(pendingInstructions); pendingInstructions.clear()
+                pendingPostSpeechActions.clear(); pendingLowPriorityAlerts.clear()
             }
         }
-        isSequenceActive = false
-        activePriority = SpeechPriority.LOW_PRIORITY_ALERT
-        activeContext = SpeechContextTag()
+        canceledActive?.let { recordTerminal(it, SpeechLifecycleState.CANCELED, now, reason) }
+        canceledQueued.forEach { recordQueuedCanceled(it, now, reason) }
         engineSelector.stopEngines()
+        engineSelector.abandonDuckingFocus()
     }
 
-    /**
-     * Cancels any currently playing or queued speech / post-speech callbacks belonging to a
-     * different route or an older/passed maneuver.
-     */
-    fun cancelStaleForContext(activeRouteId: String?, activeManeuverIndex: Int?) {
+    fun cancelStaleForContext(activeRouteId: String?, activeManeuverIndex: Int?, reason: String = "stale_maneuver_or_route") {
+        val now = clockMsProvider()
         var shouldStopActive = false
+        val droppedQueued = mutableListOf<QueuedInstruction>()
         synchronized(sequenceLock) {
-            val iter = pendingPostSpeechActions.iterator()
-            while (iter.hasNext()) {
-                val item = iter.next()
+            val postIter = pendingPostSpeechActions.iterator()
+            while (postIter.hasNext()) {
+                val item = postIter.next()
+                if (item.context.isStaleFor(activeRouteId, activeManeuverIndex) || !item.isStillValid()) postIter.remove()
+            }
+            val instIter = pendingInstructions.iterator()
+            while (instIter.hasNext()) {
+                val item = instIter.next()
                 if (item.context.isStaleFor(activeRouteId, activeManeuverIndex) || !item.isStillValid()) {
-                    iter.remove()
+                    droppedQueued.add(item); instIter.remove()
                 }
             }
-            if (isSequenceActive && activeContext.isStaleFor(activeRouteId, activeManeuverIndex)) {
-                shouldStopActive = true
-            }
+            if (activeInstruction?.context?.isStaleFor(activeRouteId, activeManeuverIndex) == true) shouldStopActive = true
             pendingLowPriorityAlerts.clear()
         }
-        if (shouldStopActive) {
-            stopAllSpeech(clearPendingActions = false)
-        }
+        droppedQueued.forEach { recordQueuedCanceled(it, now, reason) }
+        if (shouldStopActive) stopAllSpeech(clearPendingActions = false, reason = reason)
     }
 
     fun speakRaw(
-        text: String,
-        effectiveLanguage: AppLanguage,
-        priority: SpeechPriority = SpeechPriority.PREPARATION_MANEUVER,
-        context: SpeechContextTag = SpeechContextTag()
+        text: String, effectiveLanguage: AppLanguage, priority: SpeechPriority = SpeechPriority.PREPARATION_MANEUVER,
+        context: SpeechContextTag = SpeechContextTag(), isStillValid: () -> Boolean = { true }, forcePreempt: Boolean = false
     ): Boolean {
         if (text.isBlank()) return false
-
-        // Lower-priority alerts must NEVER interrupt an active higher-priority maneuver instruction.
-        if (isSpeakingOrQueued() && priority.rank < activePriority.rank) {
-            if (priority == SpeechPriority.LOW_PRIORITY_ALERT) {
-                pendingLowPriorityAlerts.offer(
-                    text = text,
-                    effectiveLanguage = effectiveLanguage,
-                    nowMs = clockMsProvider()
-                )
-            }
+        recoverStuckUtteranceIfNeeded()
+        val now = clockMsProvider()
+        val instructionId = traceLog.nextInstructionId(context)
+        val incomingStageKey = stageKeyOf(context)
+        if (!engineSelector.isInitialized) {
+            traceLog.record(traceLog.createInitialRecord(instructionId, text, effectiveLanguage, priority, context, 1, now, 0L, SpeechLifecycleState.CANCELED, "tts_not_initialized"))
+            onInstructionNotConsumed(context, "tts_not_initialized")
             return false
         }
 
-        val queuedAt = clockMsProvider()
-        runCatching {
-            val clearPending = priority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank
-            stopAllSpeech(clearPendingActions = clearPending)
-            val gen = speechGeneration.incrementAndGet()
-            activeSequenceGeneration = gen
-            activePriority = priority
-            activeContext = context
-            activeFullText = text
-            activeLanguage = effectiveLanguage
-            activeQueuedAtMs = queuedAt
-            activePlaybackStartReported = false
-            isSequenceActive = true
-
-            val segments = if (effectiveLanguage == AppLanguage.PERSIAN) {
-                splitPersianAndEnglishSegments(text)
-            } else {
-                listOf(VoiceGuidanceManager.SpeechSegment(text = text, isEnglish = true))
-            }
-
-            if (segments.isEmpty()) {
-                isSequenceActive = false
-                return false
-            }
-            synchronized(sequenceLock) {
-                pendingSegments.clear()
-                segments.forEach { pendingSegments.addLast(it) }
-            }
-            engineSelector.requestDuckingFocus()
-            dispatchNextSegment(gen)
-        }.onFailure { err ->
-            CrashLogManager.logError(appContext, "TTS", "speakRaw failed, falling back to default engine", err)
-            runCatching {
-                engineSelector.tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rahyab_fb_${clockMsProvider()}")
-                reportPlaybackStartedOnce()
+        var preemptReason: String? = null
+        var queuedInstead = false
+        var duplicateReason: String? = null
+        synchronized(sequenceLock) {
+            val active = activeInstruction
+            if (active != null) {
+                val isDupActive = active.text == text || (incomingStageKey != null && incomingStageKey == stageKeyOf(active.context))
+                val isDupQueued = pendingInstructions.any { it.text == text || (incomingStageKey != null && incomingStageKey == stageKeyOf(it.context)) }
+                if (isDupActive) {
+                    duplicateReason = "duplicate_active"
+                } else if (isDupQueued) {
+                    duplicateReason = "duplicate_queued"
+                } else {
+                    val activeStale = active.context.isStaleFor(context.routeId, context.maneuverIndex)
+                    val isReroute = priority == SpeechPriority.REROUTE
+                    val isImminentOverLower = priority == SpeechPriority.IMMINENT_MANEUVER && active.priority.rank < SpeechPriority.IMMINENT_MANEUVER.rank
+                    if (forcePreempt || isReroute || isImminentOverLower || activeStale) {
+                        preemptReason = when {
+                            forcePreempt -> "manual_repeat_or_test"
+                            isReroute -> "preempted_by_reroute"
+                            isImminentOverLower -> "preempted_by_imminent_maneuver"
+                            else -> "superseded_by_newer_maneuver_or_route"
+                        }
+                    } else {
+                        queuedInstead = true
+                        if (priority == SpeechPriority.LOW_PRIORITY_ALERT) {
+                            pendingLowPriorityAlerts.offer(text, effectiveLanguage, nowMs = now)
+                        } else {
+                            val maxWait = if (priority.rank >= SpeechPriority.LANE_CUE.rank) MANEUVER_QUEUE_MAX_WAIT_MS else ALERT_QUEUE_MAX_WAIT_MS
+                            enqueuePendingLocked(QueuedInstruction(instructionId, text, effectiveLanguage, priority, context, isStillValid, now, maxWait))
+                        }
+                    }
+                }
             }
         }
+        duplicateReason?.let {
+            traceLog.record(traceLog.createInitialRecord(instructionId, text, effectiveLanguage, priority, context, 1, now, 0L, SpeechLifecycleState.CANCELED, it))
+            return false
+        }
+        if (queuedInstead) {
+            traceLog.record(traceLog.createInitialRecord(instructionId, text, effectiveLanguage, priority, context, segmentCountOf(text, effectiveLanguage), now, now, SpeechLifecycleState.QUEUED))
+            return true
+        }
+        preemptReason?.let { reason ->
+            stopAllSpeech(clearPendingActions = priority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank, reason = reason)
+        }
+        return startInstructionNow(instructionId, text, effectiveLanguage, priority, context, isStillValid, now)
+    }
+
+    private fun startInstructionNow(
+        instructionId: String, text: String, effectiveLanguage: AppLanguage, priority: SpeechPriority,
+        context: SpeechContextTag, isStillValid: () -> Boolean, selectedAtMs: Long
+    ): Boolean {
+        val segments = buildSegments(text, effectiveLanguage)
+        if (segments.isEmpty()) return false
+        val now = clockMsProvider()
+        val gen = speechGeneration.incrementAndGet()
+        val inst = ActiveInstruction(gen, instructionId, text, effectiveLanguage, priority, context, isStillValid, selectedAtMs, now, segments.size)
+        synchronized(sequenceLock) {
+            activeInstruction = inst; pendingSegments.clear(); segments.forEach { pendingSegments.addLast(it) }
+        }
+        traceLog.record(traceLog.createInitialRecord(instructionId, text, effectiveLanguage, priority, context, segments.size, selectedAtMs, now, SpeechLifecycleState.QUEUED))
+        engineSelector.requestDuckingFocus()
+        dispatchNextSegment(gen)
         return true
     }
 
-    fun handleUtteranceStarted() {
-        reportPlaybackStartedOnce()
+    fun handleUtteranceStarted(utteranceId: String) {
+        val now = clockMsProvider()
+        val inst = synchronized(sequenceLock) {
+            val cur = activeInstruction
+            if (cur == null || !matchesActiveUtterance(cur, utteranceId)) null else cur.also { if (it.startedAtMs == 0L) it.startedAtMs = now }
+        } ?: return
+        engineSelector.requestDuckingFocus()
+        reportPlaybackStartedOnce(inst, now)
     }
 
-    fun handleUtteranceFinished(utteranceId: String?) {
-        val gen = utteranceId
-            ?.substringAfter("gen_", missingDelimiterValue = "")
-            ?.substringBefore("_")
-            ?.toLongOrNull()
-        if (gen == null || gen != activeSequenceGeneration) {
-            val isStillPending = synchronized(sequenceLock) { pendingSegments.isNotEmpty() }
-            if (!isStillPending) {
-                isSequenceActive = false
-                speakPendingLowPriorityAlertIfReady()
+    fun handleUtteranceDone(utteranceId: String) {
+        val now = clockMsProvider()
+        val finished: ActiveInstruction?
+        var shouldDispatchNext = false; var activeGen = 0L
+        synchronized(sequenceLock) {
+            val cur = activeInstruction
+            // Ignore stale-generation callbacks so flushed utterances never kill active speech.
+            if (cur == null || !matchesActiveUtterance(cur, utteranceId)) return
+            cur.completedSegments += 1; cur.currentUtteranceId = null; cur.currentSegment = null; cur.currentSegmentRetried = false
+            if (pendingSegments.isNotEmpty()) {
+                finished = null; shouldDispatchNext = true; activeGen = cur.generation
+            } else {
+                finished = cur; activeInstruction = null
+            }
+        }
+        if (shouldDispatchNext) { dispatchNextSegment(activeGen); return }
+        if (finished != null) {
+            recordTerminal(finished, SpeechLifecycleState.COMPLETED, now, cancelReason = null)
+            onInstructionCompleted(finished.context)
+            advanceQueueOrReleaseFocus()
+        }
+    }
+
+    fun handleUtteranceStopped(utteranceId: String, interrupted: Boolean) {
+        val now = clockMsProvider()
+        val stopped = synchronized(sequenceLock) {
+            val cur = activeInstruction
+            if (cur == null || !matchesActiveUtterance(cur, utteranceId)) return
+            activeInstruction = null; pendingSegments.clear(); cur
+        }
+        val reason = if (interrupted) "engine_stopped_interrupted" else "engine_stopped"
+        recordTerminal(stopped, SpeechLifecycleState.STOPPED, now, cancelReason = reason)
+        if (!stopped.hasNotifiedStarted) onInstructionNotConsumed(stopped.context, reason)
+        advanceQueueOrReleaseFocus()
+    }
+
+    fun handleUtteranceError(utteranceId: String, errorCode: Int) {
+        val now = clockMsProvider()
+        var retrySeg: VoiceGuidanceManager.SpeechSegment? = null; var retryGen = 0L; var useFb = false
+        var failedInst: ActiveInstruction? = null
+        synchronized(sequenceLock) {
+            val cur = activeInstruction
+            if (cur == null || !matchesActiveUtterance(cur, utteranceId)) return
+            val seg = cur.currentSegment
+            if (seg != null && !cur.currentSegmentRetried && (now - cur.selectedAtMs) <= RETRY_MAX_AGE_MS && cur.isStillValid()) {
+                cur.currentSegmentRetried = true; cur.retryCount += 1
+                retrySeg = seg; retryGen = cur.generation; useFb = engineSelector.hasDistinctFallbackEngine(seg.isEnglish)
+            } else {
+                failedInst = cur; activeInstruction = null; pendingSegments.clear()
+            }
+        }
+        retrySeg?.let { dispatchSegmentNow(retryGen, it, useFallbackEngine = useFb); return }
+        val failed = failedInst ?: return
+        val reason = "tts_error_$errorCode"
+        recordTerminal(failed, SpeechLifecycleState.FAILED, now, cancelReason = reason, errorCode = errorCode)
+        onInstructionNotConsumed(failed.context, reason)
+        advanceQueueOrReleaseFocus()
+    }
+
+    private fun dispatchNextSegment(gen: Long) {
+        val next = synchronized(sequenceLock) {
+            val cur = activeInstruction
+            if (cur == null || cur.generation != gen || pendingSegments.isEmpty()) null
+            else pendingSegments.removeFirst().also { cur.currentSegment = it; cur.currentSegmentRetried = false }
+        }
+        if (next == null) { advanceQueueOrReleaseFocus(); return }
+        dispatchSegmentNow(gen, next, useFallbackEngine = false)
+    }
+
+    private fun dispatchSegmentNow(gen: Long, seg: VoiceGuidanceManager.SpeechSegment, useFallbackEngine: Boolean) {
+        val utteranceId = "rahyab_gen_${gen}_seg_${utteranceSeq.incrementAndGet()}"
+        val inst = synchronized(sequenceLock) {
+            val cur = activeInstruction
+            if (cur == null || cur.generation != gen) return
+            cur.currentUtteranceId = utteranceId; cur
+        }
+        if (engineSelector.speakSegment(seg.text, seg.isEnglish, utteranceId, useFallbackEngine)) {
+            if (engineSelector.testEngineDriver == null && "robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) {
+                val now = clockMsProvider(); inst.startedAtMs = now; reportPlaybackStartedOnce(inst, now)
             }
             return
         }
-        dispatchNextSegment(gen)
+        if (!useFallbackEngine && engineSelector.hasDistinctFallbackEngine(seg.isEnglish) &&
+            (clockMsProvider() - inst.selectedAtMs) <= RETRY_MAX_AGE_MS && inst.isStillValid()
+        ) {
+            synchronized(sequenceLock) { if (activeInstruction?.generation == gen) { inst.currentSegmentRetried = true; inst.retryCount += 1 } }
+            dispatchSegmentNow(gen, seg, useFallbackEngine = true)
+            return
+        }
+        val now = clockMsProvider()
+        val failed = synchronized(sequenceLock) {
+            val cur = activeInstruction
+            if (cur == null || cur.generation != gen) null else { activeInstruction = null; pendingSegments.clear(); cur }
+        } ?: return
+        recordTerminal(failed, SpeechLifecycleState.FAILED, now, "speak_call_failed", TextToSpeech.ERROR)
+        onInstructionNotConsumed(failed.context, "speak_call_failed")
+        advanceQueueOrReleaseFocus()
     }
 
-    private fun reportPlaybackStartedOnce() {
-        if (activePlaybackStartReported) return
-        activePlaybackStartReported = true
-        val sink = playbackSink ?: return
-        sink.onSpeakStarted(
-            SpeechPlaybackEvent(
-                text = activeFullText,
-                language = activeLanguage,
-                priority = activePriority,
-                context = activeContext,
-                queuedAtMs = activeQueuedAtMs,
-                playbackStartedAtMs = clockMsProvider()
+    private fun advanceQueueOrReleaseFocus() {
+        val now = clockMsProvider()
+        if (!isVoiceEnabledProvider() || !engineSelector.isInitialized) { engineSelector.abandonDuckingFocus(); return }
+        var nextInst: QueuedInstruction? = null; var nextPost: QueuedPostAction? = null
+        val expired = mutableListOf<Pair<QueuedInstruction, String>>()
+        synchronized(sequenceLock) {
+            if (activeInstruction != null) return
+            while (pendingInstructions.isNotEmpty() && nextInst == null) {
+                val cand = pendingInstructions.removeFirst()
+                when {
+                    !cand.isStillValid() -> expired.add(cand to "stale_before_dispatch")
+                    now - cand.selectedAtMs > cand.maxWaitMs -> expired.add(cand to "expired_in_queue")
+                    else -> nextInst = cand
+                }
+            }
+            if (nextInst == null) {
+                while (pendingPostSpeechActions.isNotEmpty() && nextPost == null) {
+                    val cand = pendingPostSpeechActions.removeFirst()
+                    if (cand.isStillValid()) nextPost = cand
+                }
+            }
+        }
+        expired.forEach { (q, reason) -> recordQueuedCanceled(q, now, reason); onInstructionNotConsumed(q.context, reason) }
+        nextInst?.let { startInstructionNow(it.instructionId, it.text, it.language, it.priority, it.context, it.isStillValid, it.selectedAtMs); return }
+        nextPost?.let { it.action.invoke(); return }
+        val nextAlert = pendingLowPriorityAlerts.pollIfStillValid(clockMsProvider())
+        if (nextAlert != null && isVoiceEnabledProvider() && engineSelector.isInitialized) {
+            speakRaw(nextAlert.text, nextAlert.effectiveLanguage, SpeechPriority.LOW_PRIORITY_ALERT)
+        } else {
+            engineSelector.abandonDuckingFocus()
+        }
+    }
+
+    private fun reportPlaybackStartedOnce(inst: ActiveInstruction, startedAtMs: Long) {
+        val first = synchronized(sequenceLock) {
+            if (inst.playbackStartReported) false else { inst.playbackStartReported = true; inst.hasNotifiedStarted = true; true }
+        }
+        if (!first) return
+        traceLog.record(
+            SpeechTraceRecord(
+                inst.instructionId, inst.context.routeId, inst.context.maneuverIndex, inst.context.stage, inst.text,
+                inst.language, inst.priority, inst.totalSegments, inst.completedSegments, inst.selectedAtMs, inst.queuedAtMs,
+                startedAtMs, 0L, SpeechLifecycleState.STARTED, retryCount = inst.retryCount
+            )
+        )
+        onInstructionStarted(inst.context)
+        playbackSink?.onSpeakStarted(
+            SpeechPlaybackEvent(inst.text, inst.language, inst.priority, inst.context, inst.queuedAtMs, startedAtMs, inst.instructionId, inst.totalSegments)
+        )
+    }
+
+    private fun recordTerminal(inst: ActiveInstruction, state: SpeechLifecycleState, finishedAtMs: Long, cancelReason: String?, errorCode: Int? = null) {
+        traceLog.record(
+            SpeechTraceRecord(
+                inst.instructionId, inst.context.routeId, inst.context.maneuverIndex, inst.context.stage, inst.text,
+                inst.language, inst.priority, inst.totalSegments, inst.completedSegments, inst.selectedAtMs, inst.queuedAtMs,
+                inst.startedAtMs, finishedAtMs, state, cancelReason, errorCode, inst.retryCount
             )
         )
     }
 
-    private fun speakPendingLowPriorityAlertIfReady(): Boolean {
-        val nextAlert = pendingLowPriorityAlerts.pollIfStillValid(clockMsProvider()) ?: return false
-        if (!isVoiceEnabledProvider() || !engineSelector.isInitialized) return false
-        return speakRaw(
-            text = nextAlert.text,
-            effectiveLanguage = nextAlert.effectiveLanguage,
-            priority = SpeechPriority.LOW_PRIORITY_ALERT
+    private fun recordQueuedCanceled(q: QueuedInstruction, nowMs: Long, reason: String) {
+        traceLog.record(
+            traceLog.createInitialRecord(q.instructionId, q.text, q.language, q.priority, q.context, 1, q.selectedAtMs, q.selectedAtMs, SpeechLifecycleState.CANCELED, reason)
+                .copy(finishedAtMs = nowMs)
         )
     }
 
-    private fun dispatchNextSegment(gen: Long) {
-        if (gen != activeSequenceGeneration) return
-        val next = synchronized(sequenceLock) {
-            if (gen != activeSequenceGeneration || pendingSegments.isEmpty()) null
-            else pendingSegments.removeFirst()
+    private fun enqueuePendingLocked(item: QueuedInstruction) {
+        if (pendingInstructions.size >= MAX_PENDING_INSTRUCTIONS) {
+            val dropped = pendingInstructions.removeFirst()
+            recordQueuedCanceled(dropped, clockMsProvider(), "queue_overflow")
         }
-        if (next == null) {
-            isSequenceActive = false
-            activePriority = SpeechPriority.LOW_PRIORITY_ALERT
-            val queuedAction = synchronized(sequenceLock) {
-                var valid: QueuedPostAction? = null
-                while (pendingPostSpeechActions.isNotEmpty() && valid == null) {
-                    val candidate = pendingPostSpeechActions.removeFirst()
-                    if (candidate.isStillValid()) valid = candidate
-                }
-                valid
-            }
-            if (queuedAction != null) {
-                queuedAction.action.invoke()
-                return
-            }
-            if (!speakPendingLowPriorityAlertIfReady()) {
-                engineSelector.abandonDuckingFocus()
-            }
-            return
-        }
-
-        val engine = if (next.isEnglish) {
-            engineSelector.activeEnglishEngine() ?: engineSelector.tts
-        } else {
-            engineSelector.activePersianEngine() ?: engineSelector.tts
-        }
-        if (engine == null) {
-            isSequenceActive = false
-            engineSelector.abandonDuckingFocus()
-            return
-        }
-
-        val utteranceId = "rahyab_gen_${gen}_${System.nanoTime()}"
-        val spokenOk = runCatching {
-            if (next.isEnglish) {
-                engine.language = Locale.US
-            } else {
-                engineSelector.selectPersianLocale(engine)
-            }
-            val res = engine.speak(next.text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-            res == TextToSpeech.SUCCESS
-        }.onFailure { err ->
-            CrashLogManager.logError(appContext, "TTS", "Segment speak failed (${next.isEnglish})", err)
-        }.getOrDefault(false)
-
-        if (spokenOk) {
-            reportPlaybackStartedOnce()
-        } else {
-            val fallbackEngine = engineSelector.tts
-            val fbOk = if (fallbackEngine != null && fallbackEngine !== engine) {
-                runCatching {
-                    fallbackEngine.language = if (next.isEnglish) Locale.US else Locale.forLanguageTag("fa-IR")
-                    fallbackEngine.speak(next.text, TextToSpeech.QUEUE_FLUSH, null, utteranceId) == TextToSpeech.SUCCESS
-                }.getOrDefault(false)
-            } else false
-            if (fbOk) {
-                reportPlaybackStartedOnce()
-            } else {
-                dispatchNextSegment(gen)
-            }
-        }
+        val sorted = (pendingInstructions.toList() + item).sortedByDescending { it.priority.rank }
+        pendingInstructions.clear(); sorted.forEach { pendingInstructions.addLast(it) }
     }
+
+    private fun recoverStuckUtteranceIfNeeded() {
+        val now = clockMsProvider()
+        val stuck = synchronized(sequenceLock) {
+            val cur = activeInstruction ?: return
+            if (engineSelector.isAnyEngineSpeaking() || now - cur.queuedAtMs < STUCK_UTTERANCE_RECOVERY_MS) return
+            activeInstruction = null; pendingSegments.clear(); cur
+        }
+        CrashLogManager.logError(appContext, "TTS", "Recovered dropped onDone for ${stuck.instructionId}", null)
+        recordTerminal(stuck, SpeechLifecycleState.COMPLETED, now, cancelReason = "watchdog_recovered")
+    }
+
+    private fun matchesActiveUtterance(cur: ActiveInstruction, utteranceId: String): Boolean {
+        val gen = utteranceId.substringAfter("gen_", "").substringBefore("_").toLongOrNull()
+        return gen != null && gen == cur.generation && cur.currentUtteranceId == utteranceId
+    }
+
+    private fun stageKeyOf(ctx: SpeechContextTag): String? =
+        if (!ctx.routeId.isNullOrBlank() && ctx.stage.isNotBlank()) "${ctx.routeId}_${ctx.maneuverIndex}_${ctx.stage}" else null
+
+    private fun buildSegments(text: String, effectiveLanguage: AppLanguage): List<VoiceGuidanceManager.SpeechSegment> =
+        if (effectiveLanguage == AppLanguage.PERSIAN) VoiceSpeechTraceLog.splitPersianAndEnglishSegments(text)
+        else listOf(VoiceGuidanceManager.SpeechSegment(text = text, isEnglish = true))
+
+    private fun segmentCountOf(text: String, effectiveLanguage: AppLanguage): Int = buildSegments(text, effectiveLanguage).size.coerceAtLeast(1)
 
     companion object {
-        private val ENGLISH_TOKEN_REGEX = Regex(
-            """(?:[A-Za-z][A-Za-z0-9'\-./]*|\d+[A-Za-z]+(?:-[A-Za-z0-9]+)*)(?:\s+(?:[A-Za-z0-9][A-Za-z0-9'\-./]*|&))*"""
-        )
+        private const val RETRY_MAX_AGE_MS = 6_000L
+        private const val MANEUVER_QUEUE_MAX_WAIT_MS = 8_000L
+        private const val ALERT_QUEUE_MAX_WAIT_MS = 5_000L
+        private const val MAX_PENDING_INSTRUCTIONS = 4
+        private const val STUCK_UTTERANCE_RECOVERY_MS = 15_000L
 
-        fun splitPersianAndEnglishSegments(text: String): List<VoiceGuidanceManager.SpeechSegment> {
-            val trimmed = text.trim()
-            if (trimmed.isEmpty()) return emptyList()
-
-            val segments = mutableListOf<VoiceGuidanceManager.SpeechSegment>()
-            var cursor = 0
-            for (match in ENGLISH_TOKEN_REGEX.findAll(trimmed)) {
-                val start = match.range.first
-                val end = match.range.last + 1
-                if (start > cursor) {
-                    val faPart = trimmed.substring(cursor, start).trim()
-                    if (faPart.isNotEmpty() && faPart.any { it.isLetterOrDigit() }) {
-                        segments.add(VoiceGuidanceManager.SpeechSegment(faPart, isEnglish = false))
-                    }
-                }
-                val enPart = match.value.trim().trimEnd('.', ',', '،', ';', ':')
-                if (enPart.isNotEmpty()) {
-                    segments.add(VoiceGuidanceManager.SpeechSegment(enPart, isEnglish = true))
-                }
-                cursor = end
-            }
-            if (cursor < trimmed.length) {
-                val tail = trimmed.substring(cursor).trim()
-                if (tail.isNotEmpty() && tail.any { it.isLetterOrDigit() }) {
-                    segments.add(VoiceGuidanceManager.SpeechSegment(tail, isEnglish = false))
-                }
-            }
-            return if (segments.isEmpty()) {
-                listOf(VoiceGuidanceManager.SpeechSegment(trimmed, isEnglish = false))
-            } else {
-                segments
-            }
-        }
+        fun splitPersianAndEnglishSegments(text: String): List<VoiceGuidanceManager.SpeechSegment> =
+            VoiceSpeechTraceLog.splitPersianAndEnglishSegments(text)
     }
 }
