@@ -75,6 +75,7 @@ data class UserSettings(
     val onlineFeaturesEnabled: Boolean = true,
     val onlineWeatherAlertsEnabled: Boolean = true,
     val onlineSearchFallbackEnabled: Boolean = true,
+    val googleMapsOnlineSearchEnabled: Boolean = true,
     val autoCheckMapUpdatesEnabled: Boolean = true,
     val wifiOnlyLargeDownloads: Boolean = true,
     val autoUpdateMapsOnWifi: Boolean = false,

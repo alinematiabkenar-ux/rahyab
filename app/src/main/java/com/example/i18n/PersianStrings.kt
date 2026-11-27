@@ -497,4 +497,20 @@ object PersianStrings : AppStrings {
     override val diagLaneReportsCleared = "گزارش‌های خط پاک شدند"
     // D5: GNIS landmarks
     override val gnisLandmarkBadge = "عارضه جغرافیایی"
+    // Offline readiness & explicit Google Maps Platform online search
+    override val packOfflineReadyBadge = "آماده آفلاین"
+    override val packIncompleteBadge = "ناقص"
+    override val packComponentMap = "نقشه (PMTiles)"
+    override val packComponentRouting = "مسیریابی (Valhalla)"
+    override val packComponentSearch = "جستجو (مکان/آدرس)"
+    override val packComponentRoutingTilesMissing = "فایل‌های مسیریابی نیاز به استخراج مجدد یا دانلود دارند"
+    override val searchGoogleMapsOnlineAction = "جستجو در گوگل مپ (آنلاین)"
+    override val searchGoogleMapsSearching = "در حال جستجو در گوگل مپ…"
+    override val googleMapsPoweredByAttribution = "ارائه‌شده توسط Google"
+    override val googleMapsOnlineSectionHeader = "گوگل مپ (آنلاین)"
+    override val googleMapsOfflineUnavailable = "آفلاین — فقط نتایج محلی دانلودشده نمایش داده می‌شوند"
+    override val googleMapsKeyNotConfigured = "کلید API گوگل مپ تنظیم نشده است"
+    override val googleMapsOnlineSearchToggle = "امکان جستجوی آنلاین دستی در گوگل مپ"
+    override val googleMapsOnlineSearchHint = "جستجو همیشه ابتدا از داده‌های آفلاین دانلودشده انجام می‌شود. گوگل مپ فقط زمانی فراخوانی می‌شود که دکمه جستجوی آنلاین را لمس کنید."
+    override val openInGoogleMapsAction = "گوگل مپ"
 }

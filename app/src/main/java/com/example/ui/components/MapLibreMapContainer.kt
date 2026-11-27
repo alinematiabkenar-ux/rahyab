@@ -575,7 +575,7 @@ fun MapLibreMapContainer(
     }
 
     val effectiveMarkerBearing = navVehicleBearing ?: throttledHeadingDegrees
-    LaunchedEffect(loadedStyle, displayLoc, effectiveMarkerBearing, positionMarkerStyle, isGpsPoor, isCameraFollowing, activeNavRoute) {
+    LaunchedEffect(loadedStyle, displayLoc, effectiveMarkerBearing, positionMarkerStyle, isGpsPoor, isCameraFollowing, activeNavRoute, cameraCommand) {
         val style = loadedStyle ?: return@LaunchedEffect
         if (!style.isFullyLoaded) return@LaunchedEffect
         if (displayLoc == null) {
@@ -585,9 +585,14 @@ fun MapLibreMapContainer(
             }
             return@LaunchedEffect
         }
-        // When actively following a navigation route, cameraCommand drives marker + camera from the shared clock.
-        // When panning freely, stationary, or outside active follow, keep the marker smoothly synced to true GPS.
-        if (activeNavRoute == null || !isCameraFollowing || !syncAnimator.hasPose()) {
+        // When a navigation cameraCommand matches this GPS location, cameraCommand drives marker + camera
+        // together on the shared clock. When panning freely, outside follow, or when the camera holds steady
+        // (e.g., red-light guard or deadband throttle), keep the vehicle marker smoothly synced to true GPS.
+        val cmdMatchesMarker = cameraCommand != null &&
+            kotlin.math.abs(cameraCommand.vehicleLat - displayLoc.lat) < 1e-6 &&
+            kotlin.math.abs(cameraCommand.vehicleLon - displayLoc.lon) < 1e-6 &&
+            abs(CompassTracker.shortestAngleDelta(cameraCommand.vehicleBearing.toFloat(), effectiveMarkerBearing)) < 1.5f
+        if (activeNavRoute == null || !isCameraFollowing || !syncAnimator.hasPose() || !cmdMatchesMarker) {
             val fixTs = gpsFix?.timestampMs ?: 0L
             syncAnimator.onMarkerOnlyUpdate(
                 nowMs = SystemClock.uptimeMillis(),

@@ -107,6 +107,8 @@ internal fun RahYabViewModel.buildStatePacksFlow(): StateFlow<List<StatePackUiIt
             hasPmtiles = inst?.hasPmtiles ?: false,
             hasValhalla = inst?.hasValhalla ?: false,
             hasPlacesDb = inst?.hasPlacesDb ?: false,
+            hasUsableRoutingTiles = (inst?.hasValhalla == true) && packManager.hasUsableRoutingForState(state.code),
+            hasAddressIndex = (inst?.hasPlacesDb == true) && packManager.hasUsableAddressIndex(state.code),
             hasManifestEntry = remote != null,
             isCurrentLocationState = (state.code == locStateCode),
             isQueued = (status == PackInstallStatus.QUEUED),

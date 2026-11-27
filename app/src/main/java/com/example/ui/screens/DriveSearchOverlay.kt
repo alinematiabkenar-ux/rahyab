@@ -62,6 +62,8 @@ internal fun SearchResultsOverlayCard(
     onSelectPlace: (PlaceSearchResult) -> Unit,
     onSelectSaved: (SavedPlaceEntity) -> Unit,
     onGoToMaps: () -> Unit,
+    googleMapsState: GoogleMapsSearchUiState = GoogleMapsSearchUiState(),
+    onSearchGoogleMapsOnline: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -136,11 +138,11 @@ internal fun SearchResultsOverlayCard(
                     }
                 }
             }
-        } else if (results.isEmpty()) {
+        } else if (results.isEmpty() && googleMapsState.results.isEmpty()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
+                    .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -158,6 +160,11 @@ internal fun SearchResultsOverlayCard(
                         Text(strings.downloadOrImportAction)
                     }
                 }
+                GoogleMapsOnlineSearchActionRow(
+                    query = query,
+                    state = googleMapsState,
+                    onSearchGoogleMapsOnline = onSearchGoogleMapsOnline
+                )
             }
         } else {
             val offlineItems = results.filter { it.source != PhotonSearchClient.SOURCE_ONLINE_PHOTON }
@@ -209,6 +216,27 @@ internal fun SearchResultsOverlayCard(
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     }
+                }
+                if (googleMapsState.results.isNotEmpty()) {
+                    item(key = "google_maps_results_header") { GoogleMapsResultsHeader() }
+                    items(googleMapsState.results, key = { it.id }) { place ->
+                        SearchResultPlaceRow(
+                            place = place,
+                            isOnlineResult = true,
+                            onlineBadgeLabel = strings.onlineSearchResultBadge,
+                            distanceUnit = distanceUnit,
+                            language = language,
+                            onSelectPlace = onSelectPlace
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    }
+                }
+                item(key = "google_maps_explicit_action") {
+                    GoogleMapsOnlineSearchActionRow(
+                        query = query,
+                        state = googleMapsState,
+                        onSearchGoogleMapsOnline = onSearchGoogleMapsOnline
+                    )
                 }
             }
         }

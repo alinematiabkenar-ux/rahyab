@@ -66,6 +66,9 @@ fun DriveScreen(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val gmapsResults by viewModel.googleMapsSearchResults.collectAsStateWithLifecycle()
+    val isSearchingGmaps by viewModel.isSearchingGoogleMaps.collectAsStateWithLifecycle()
+    val gmapsStatus by viewModel.googleMapsSearchStatus.collectAsStateWithLifecycle()
     val selectedPlace by viewModel.selectedPlace.collectAsStateWithLifecycle()
     val savedPlaces by viewModel.savedPlaces.collectAsStateWithLifecycle()
     val candidateRoutes by viewModel.candidateRoutes.collectAsStateWithLifecycle()
@@ -241,14 +244,16 @@ fun DriveScreen(
             onEnableDevOregon = { viewModel.setDevOnlineOregonMode(true) },
             onStartVoiceCommand = onStartVoiceCommand,
             onReportWrongLane = { viewModel.reportWrongLane() },
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .statusBarsPadding()
+            googleMapsSearchState = GoogleMapsSearchUiState(
+                results = gmapsResults, isSearching = isSearchingGmaps, statusMessage = gmapsStatus,
+                isOnline = networkState.isOnline,
+                isEnabledInSettings = settings.onlineFeaturesEnabled && settings.googleMapsOnlineSearchEnabled,
+                isApiKeyConfigured = viewModel.isGoogleMapsKeyConfigured()
+            ),
+            onSearchGoogleMapsOnline = { viewModel.searchGoogleMapsOnline(searchQuery) },
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
-                .onGloballyPositioned { coords ->
-                    topOverlayBottomPx = (coords.positionInRoot().y + coords.size.height).toInt()
-                }
+                .onGloballyPositioned { topOverlayBottomPx = (it.positionInRoot().y + it.size.height).toInt() }
         )
 
         // 3. Left / Start side: Speed Limit & Live Speedometer Cluster + S1 Simulator Speed Buttons
@@ -333,19 +338,10 @@ fun DriveScreen(
         // 5. Required OpenStreetMap + Overture Maps attribution badge & Manual "I parked here" chip
         val parkedCarDistanceMeters = remember(parkedCar, gpsFix) {
             val spot = parkedCar ?: return@remember null
-            val ref = gpsFix?.let { com.example.navigation.LatLon(it.lat, it.lon) }
-                ?: viewModel.getEffectiveReferenceLocation()
-            com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(
-                ref.lat,
-                ref.lon,
-                spot.lat,
-                spot.lon
-            )
+            val ref = gpsFix?.let { com.example.navigation.LatLon(it.lat, it.lon) } ?: viewModel.getEffectiveReferenceLocation()
+            com.example.data.search.OfflinePlaceSearchEngine.haversineMeters(ref.lat, ref.lon, spot.lat, spot.lon)
         }
-        val showParkedCarCard = !navState.isNavigating &&
-            selectedPlace == null &&
-            parkedCar != null &&
-            (parkedCarDistanceMeters ?: 0.0) > 50.0
+        val showParkedCarCard = !navState.isNavigating && selectedPlace == null && parkedCar != null && (parkedCarDistanceMeters ?: 0.0) > 50.0
 
         if (!navState.isNavigating && selectedPlace == null && !showParkedCarCard) {
             ManualParkHereChip(

@@ -104,6 +104,8 @@ internal fun DriveTopOverlay(
     onEnableDevOregon: () -> Unit,
     onStartVoiceCommand: () -> Unit,
     onReportWrongLane: () -> Unit = {},
+    googleMapsSearchState: GoogleMapsSearchUiState = GoogleMapsSearchUiState(),
+    onSearchGoogleMapsOnline: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalAppStrings.current
@@ -382,6 +384,8 @@ internal fun DriveTopOverlay(
                         onSetSearchExpanded(false)
                         onNavigateToMaps()
                     },
+                    googleMapsState = googleMapsSearchState,
+                    onSearchGoogleMapsOnline = onSearchGoogleMapsOnline,
                     modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).imePadding()
                 )
             }

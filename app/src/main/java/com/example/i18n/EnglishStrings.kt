@@ -497,4 +497,20 @@ object EnglishStrings : AppStrings {
     override val diagLaneReportsCleared = "Lane reports cleared"
     // D5: GNIS landmarks
     override val gnisLandmarkBadge = "Landmark"
+    // Offline readiness & explicit Google Maps Platform online search
+    override val packOfflineReadyBadge = "Offline Ready"
+    override val packIncompleteBadge = "Incomplete"
+    override val packComponentMap = "Map (PMTiles)"
+    override val packComponentRouting = "Routing (Valhalla)"
+    override val packComponentSearch = "Search (Places/Addr)"
+    override val packComponentRoutingTilesMissing = "Routing tiles need re-extraction or redownload"
+    override val searchGoogleMapsOnlineAction = "Search Google Maps (Online)"
+    override val searchGoogleMapsSearching = "Searching Google Maps…"
+    override val googleMapsPoweredByAttribution = "Powered by Google"
+    override val googleMapsOnlineSectionHeader = "Google Maps (Online)"
+    override val googleMapsOfflineUnavailable = "Offline — showing local downloaded results only"
+    override val googleMapsKeyNotConfigured = "Google Maps API key not configured"
+    override val googleMapsOnlineSearchToggle = "Allow explicit Google Maps online search"
+    override val googleMapsOnlineSearchHint = "Local downloaded places are always searched first. Google Maps is only queried when you tap the online search button."
+    override val openInGoogleMapsAction = "Google Maps"
 }

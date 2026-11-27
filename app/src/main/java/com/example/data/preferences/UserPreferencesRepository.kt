@@ -67,6 +67,7 @@ class UserPreferencesRepository(private val context: Context) {
         val ONLINE_FEATURES_ENABLED = booleanPreferencesKey("online_features_enabled")
         val ONLINE_WEATHER_ALERTS_ENABLED = booleanPreferencesKey("online_weather_alerts_enabled")
         val ONLINE_SEARCH_FALLBACK_ENABLED = booleanPreferencesKey("online_search_fallback_enabled")
+        val GOOGLE_MAPS_ONLINE_SEARCH_ENABLED = booleanPreferencesKey("google_maps_online_search_enabled")
         val AUTO_CHECK_MAP_UPDATES_ENABLED = booleanPreferencesKey("auto_check_map_updates_enabled")
         val WIFI_ONLY_LARGE_DOWNLOADS = booleanPreferencesKey("wifi_only_large_downloads")
         val AUTO_UPDATE_MAPS_ON_WIFI = booleanPreferencesKey("auto_update_maps_on_wifi")
@@ -199,6 +200,7 @@ class UserPreferencesRepository(private val context: Context) {
                 onlineFeaturesEnabled = prefs[Keys.ONLINE_FEATURES_ENABLED] ?: true,
                 onlineWeatherAlertsEnabled = prefs[Keys.ONLINE_WEATHER_ALERTS_ENABLED] ?: true,
                 onlineSearchFallbackEnabled = prefs[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] ?: true,
+                googleMapsOnlineSearchEnabled = prefs[Keys.GOOGLE_MAPS_ONLINE_SEARCH_ENABLED] ?: true,
                 autoCheckMapUpdatesEnabled = prefs[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] ?: true,
                 wifiOnlyLargeDownloads = prefs[Keys.WIFI_ONLY_LARGE_DOWNLOADS] ?: true,
                 autoUpdateMapsOnWifi = prefs[Keys.AUTO_UPDATE_MAPS_ON_WIFI] ?: false,
@@ -313,6 +315,7 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setOnlineFeaturesEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_FEATURES_ENABLED] = enabled } }
     suspend fun setOnlineWeatherAlertsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_WEATHER_ALERTS_ENABLED] = enabled } }
     suspend fun setOnlineSearchFallbackEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] = enabled } }
+    suspend fun setGoogleMapsOnlineSearchEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.GOOGLE_MAPS_ONLINE_SEARCH_ENABLED] = enabled } }
     suspend fun setAutoCheckMapUpdatesEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.AUTO_CHECK_MAP_UPDATES_ENABLED] = enabled } }
     suspend fun setWifiOnlyLargeDownloads(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.WIFI_ONLY_LARGE_DOWNLOADS] = enabled } }
     suspend fun setAutoUpdateMapsOnWifi(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.AUTO_UPDATE_MAPS_ON_WIFI] = enabled } }

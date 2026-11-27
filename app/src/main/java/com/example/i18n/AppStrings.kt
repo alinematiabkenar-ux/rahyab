@@ -546,6 +546,22 @@ interface AppStrings {
     val diagLaneReportsCleared: String
     // D5: GNIS landmarks
     val gnisLandmarkBadge: String
+    // Offline readiness & explicit Google Maps Platform online search
+    val packOfflineReadyBadge: String
+    val packIncompleteBadge: String
+    val packComponentMap: String
+    val packComponentRouting: String
+    val packComponentSearch: String
+    val packComponentRoutingTilesMissing: String
+    val searchGoogleMapsOnlineAction: String
+    val searchGoogleMapsSearching: String
+    val googleMapsPoweredByAttribution: String
+    val googleMapsOnlineSectionHeader: String
+    val googleMapsOfflineUnavailable: String
+    val googleMapsKeyNotConfigured: String
+    val googleMapsOnlineSearchToggle: String
+    val googleMapsOnlineSearchHint: String
+    val openInGoogleMapsAction: String
 }
 
 val LocalAppStrings = compositionLocalOf<AppStrings> { EnglishStrings }

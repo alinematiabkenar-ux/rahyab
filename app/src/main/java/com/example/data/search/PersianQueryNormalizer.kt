@@ -13,13 +13,18 @@ object PersianQueryNormalizer {
         val original: String,
         val normalizedLatinQueries: List<String>,
         val matchedCategoryTags: List<String>,
-        val isPersianInput: Boolean
+        val isPersianInput: Boolean,
+        val isProximityQuery: Boolean = false,
+        val isPureCategoryQuery: Boolean = false
     )
 
     private val persianCategoryMap: Map<String, List<String>> = mapOf(
         "پمپ بنزین" to listOf("gas_station", "fuel", "gas station", "charging_station"),
+        "پمپبنزین" to listOf("gas_station", "fuel", "gas station", "charging_station"),
+        "پمپ" to listOf("gas_station", "fuel", "gas station"),
         "بنزین" to listOf("gas_station", "fuel", "gas station"),
         "جایگاه سوخت" to listOf("gas_station", "fuel"),
+        "جایگاهسوخت" to listOf("gas_station", "fuel"),
         "داروخانه" to listOf("pharmacy", "drugstore"),
         "داروخونه" to listOf("pharmacy", "drugstore"),
         "سوپرمارکت" to listOf("supermarket", "grocery", "grocery_store"),
@@ -29,9 +34,11 @@ object PersianQueryNormalizer {
         "رستوران" to listOf("restaurant", "dining", "fast_food"),
         "غذاخوری" to listOf("restaurant", "fast_food"),
         "فست فود" to listOf("fast_food", "burger", "pizza"),
+        "فستفود" to listOf("fast_food", "burger", "pizza"),
         "کافه" to listOf("cafe", "coffee", "coffee_shop"),
         "قهوه" to listOf("coffee", "cafe", "coffee_shop"),
         "کافی شاپ" to listOf("coffee", "cafe", "coffee_shop"),
+        "کافیشاپ" to listOf("coffee", "cafe", "coffee_shop"),
         "بیمارستان" to listOf("hospital", "emergency", "medical_center"),
         "درمانگاه" to listOf("clinic", "urgent_care", "hospital"),
         "اورژانس" to listOf("hospital", "emergency", "urgent_care"),
@@ -46,6 +53,7 @@ object PersianQueryNormalizer {
         "فرودگاه" to listOf("airport"),
         "پلیس" to listOf("police"),
         "اداره پست" to listOf("post_office"),
+        "ادارهپست" to listOf("post_office"),
         "پست" to listOf("post_office", "shipping"),
         "پارک" to listOf("park"),
         "مدرسه" to listOf("school"),
@@ -53,15 +61,34 @@ object PersianQueryNormalizer {
         "کتابخانه" to listOf("library"),
         "نانوایی" to listOf("bakery"),
         "شیرینی فروشی" to listOf("bakery", "dessert"),
+        "شیرینیفروشی" to listOf("bakery", "dessert"),
         "باشگاه" to listOf("gym", "fitness"),
         "سینما" to listOf("cinema", "movie_theater"),
         "لوازم الکترونیکی" to listOf("electronics", "electronics_store"),
         "فروشگاه" to listOf("store", "retail", "shopping"),
         "مرکز خرید" to listOf("shopping_mall", "mall", "department_store"),
+        "مرکزخرید" to listOf("shopping_mall", "mall", "department_store"),
         "مسجد" to listOf("mosque"),
         "کلیسا" to listOf("church"),
         "خشکشویی" to listOf("laundry", "dry_cleaning"),
         "آرایشگاه" to listOf("hair_salon", "barber")
+    )
+
+    private val persianProximityPhrases: List<String> = listOf(
+        "نزدیکترین",
+        "نزدیک ترین",
+        "در اطراف من",
+        "اطراف من",
+        "نزدیک من",
+        "به من",
+        "در نزدیکی من",
+        "نزدیکی من",
+        "نزدیک"
+    )
+
+    private val englishProximityRegex = Regex(
+        """\b(near\s+me|close\s+to\s+me|around\s+me|around\s+here|in\s+my\s+area|nearby|nearest|closest)\b""",
+        RegexOption.IGNORE_CASE
     )
 
     private val persianBrandTransliterations: Map<String, String> = mapOf(
@@ -137,17 +164,54 @@ object PersianQueryNormalizer {
     private val englishCategorySynonyms: Map<String, List<String>> = mapOf(
         "gas" to listOf("gas_station", "fuel"),
         "gas station" to listOf("gas_station", "fuel"),
+        "gas stations" to listOf("gas_station", "fuel"),
         "fuel" to listOf("gas_station", "fuel"),
+        "fuel station" to listOf("gas_station", "fuel"),
+        "fuel stations" to listOf("gas_station", "fuel"),
+        "petrol" to listOf("gas_station", "fuel"),
+        "petrol station" to listOf("gas_station", "fuel"),
+        "ev charger" to listOf("charging_station", "ev_charging"),
+        "ev chargers" to listOf("charging_station", "ev_charging"),
+        "charging station" to listOf("charging_station", "ev_charging"),
         "pharmacy" to listOf("pharmacy", "drugstore"),
+        "pharmacies" to listOf("pharmacy", "drugstore"),
         "drugstore" to listOf("pharmacy", "drugstore"),
+        "drugstores" to listOf("pharmacy", "drugstore"),
         "grocery" to listOf("supermarket", "grocery", "grocery_store"),
+        "groceries" to listOf("supermarket", "grocery", "grocery_store"),
+        "grocery store" to listOf("supermarket", "grocery", "grocery_store"),
+        "grocery stores" to listOf("supermarket", "grocery", "grocery_store"),
         "supermarket" to listOf("supermarket", "grocery", "grocery_store"),
+        "supermarkets" to listOf("supermarket", "grocery", "grocery_store"),
         "coffee" to listOf("cafe", "coffee", "coffee_shop"),
+        "coffee shop" to listOf("cafe", "coffee", "coffee_shop"),
+        "coffee shops" to listOf("cafe", "coffee", "coffee_shop"),
         "cafe" to listOf("cafe", "coffee", "coffee_shop"),
+        "cafes" to listOf("cafe", "coffee", "coffee_shop"),
         "restaurant" to listOf("restaurant", "fast_food"),
+        "restaurants" to listOf("restaurant", "fast_food"),
+        "fast food" to listOf("fast_food", "restaurant"),
         "food" to listOf("restaurant", "fast_food", "cafe"),
         "hospital" to listOf("hospital", "emergency", "urgent_care"),
+        "hospitals" to listOf("hospital", "emergency", "urgent_care"),
+        "urgent care" to listOf("urgent_care", "clinic", "hospital"),
+        "clinic" to listOf("clinic", "urgent_care", "hospital"),
+        "clinics" to listOf("clinic", "urgent_care", "hospital"),
         "hotel" to listOf("hotel", "motel"),
+        "hotels" to listOf("hotel", "motel"),
+        "motel" to listOf("motel", "hotel"),
+        "motels" to listOf("motel", "hotel"),
+        "bank" to listOf("bank", "atm"),
+        "banks" to listOf("bank", "atm"),
+        "atm" to listOf("atm", "bank"),
+        "atms" to listOf("atm", "bank"),
+        "park" to listOf("park"),
+        "parks" to listOf("park"),
+        "parking" to listOf("parking"),
+        "parking lot" to listOf("parking"),
+        "parking lots" to listOf("parking"),
+        "mechanic" to listOf("auto_repair", "car_repair", "mechanic"),
+        "auto repair" to listOf("auto_repair", "car_repair", "mechanic"),
         "electronics" to listOf("electronics", "electronics_store")
     )
 
@@ -180,44 +244,82 @@ object PersianQueryNormalizer {
         val isPersian = containsPersianScript(cleaned)
         val latinCandidates = linkedSetOf<String>()
         val categoryTags = linkedSetOf<String>()
+        var isProximityQuery = false
+        var isPureCategoryQuery = false
 
         if (isPersian) {
+            var core = cleaned
+            for (phrase in persianProximityPhrases) {
+                if (core.contains(phrase)) {
+                    isProximityQuery = true
+                    core = core.replace(phrase, " ")
+                }
+            }
+            core = core.replace(Regex("\\s+"), " ").trim()
+            val effectiveFa = core.ifBlank { cleaned }
+
             // 1. Exact or substring brand transliteration match
-            persianBrandTransliterations[cleaned]?.let { latinCandidates.add(it) }
+            persianBrandTransliterations[effectiveFa]?.let { latinCandidates.add(it) }
             for ((faBrand, enBrand) in persianBrandTransliterations) {
-                if (cleaned.contains(faBrand)) {
+                if (effectiveFa.contains(faBrand)) {
                     latinCandidates.add(enBrand)
-                    val remainder = cleaned.replace(faBrand, "").trim()
+                    val remainder = effectiveFa.replace(faBrand, "").trim()
                     if (remainder.isNotEmpty()) {
                         latinCandidates.add("$enBrand ${transliteratePersianToLatin(remainder)}")
                     }
                 }
             }
 
-            // 2. Persian category matching
-            persianCategoryMap[cleaned]?.let { categoryTags.addAll(it) }
+            // 2. Persian category matching (check both spaced & no-space forms)
+            val compactFa = effectiveFa.replace(" ", "")
+            persianCategoryMap[effectiveFa]?.let { categoryTags.addAll(it) }
+            persianCategoryMap[compactFa]?.let { categoryTags.addAll(it) }
+            var remainderAfterCategory = effectiveFa
             for ((faCat, tags) in persianCategoryMap) {
-                if (cleaned.contains(faCat)) {
+                if (effectiveFa.contains(faCat)) {
                     categoryTags.addAll(tags)
+                    remainderAfterCategory = remainderAfterCategory.replace(faCat, " ").trim()
                 }
+            }
+            if (categoryTags.isNotEmpty() && latinCandidates.isEmpty() && remainderAfterCategory.isBlank()) {
+                isPureCategoryQuery = true
             }
 
             // 3. Algorithmic phonetic transliteration fallback for arbitrary Persian input
-            val transliterated = transliteratePersianToLatin(cleaned)
-            if (transliterated.isNotBlank()) {
-                latinCandidates.add(transliterated)
+            if (!isPureCategoryQuery) {
+                val transliterated = transliteratePersianToLatin(effectiveFa)
+                if (transliterated.isNotBlank()) {
+                    latinCandidates.add(transliterated)
+                }
             }
         } else {
-            val lower = cleaned.lowercase()
-            latinCandidates.add(cleaned)
-            englishCategorySynonyms[lower]?.let { categoryTags.addAll(it) }
+            val lowerRaw = cleaned.lowercase()
+            val stripped = englishProximityRegex.replace(lowerRaw, " ")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (stripped != lowerRaw) {
+                isProximityQuery = true
+            }
+            val effectiveEn = stripped.ifBlank { lowerRaw }
+            val matchedTags = englishCategorySynonyms[effectiveEn] ?: englishCategorySynonyms[lowerRaw]
+            if (matchedTags != null) {
+                categoryTags.addAll(matchedTags)
+                isPureCategoryQuery = true
+            }
+            if (!isPureCategoryQuery) {
+                latinCandidates.add(effectiveEn)
+            } else if (!isProximityQuery) {
+                latinCandidates.add(effectiveEn)
+            }
         }
 
         return ExpandedQuery(
             original = rawQuery,
             normalizedLatinQueries = latinCandidates.toList(),
             matchedCategoryTags = categoryTags.toList(),
-            isPersianInput = isPersian
+            isPersianInput = isPersian,
+            isProximityQuery = isProximityQuery,
+            isPureCategoryQuery = isPureCategoryQuery
         )
     }
 

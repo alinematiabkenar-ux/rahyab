@@ -609,11 +609,13 @@ class OfflinePlaceSearchEngine(
                 }
             }
 
-            // B. Category FTS5 match (Persian categories like پمپ بنزین / داروخانه / سوپرمارکت)
+            // B. Category FTS5 match (e.g., "gas stations near me", "نزدیکترین پمپبنزین به من", "داروخانه")
+            // Ordered by distance from user BEFORE LIMIT so the nearest POIs are never dropped in dense states.
             if (expanded.matchedCategoryTags.isNotEmpty()) {
                 val matchExpr = expanded.matchedCategoryTags
                     .map { sanitizeFtsToken(it) }
                     .filter { it.isNotBlank() }
+                    .distinct()
                     .joinToString(" OR ") { "category:$it*" }
 
                 if (matchExpr.isNotBlank()) {
@@ -629,6 +631,7 @@ class OfflinePlaceSearchEngine(
                         WHERE places_fts MATCH ?
                           AND p.lat BETWEEN ? AND ?
                           AND p.lon BETWEEN ? AND ?
+                        ORDER BY ((p.lat - ?) * (p.lat - ?) + (p.lon - ?) * (p.lon - ?) * ?) ASC
                         LIMIT ?
                     """.trimIndent()
                     var foundNear = 0
@@ -640,7 +643,12 @@ class OfflinePlaceSearchEngine(
                         nearStmt.bindDouble(4, userLat + latDelta)
                         nearStmt.bindDouble(5, userLon - lonDelta)
                         nearStmt.bindDouble(6, userLon + lonDelta)
-                        nearStmt.bindLong(7, maxPerDb.toLong())
+                        nearStmt.bindDouble(7, userLat)
+                        nearStmt.bindDouble(8, userLat)
+                        nearStmt.bindDouble(9, userLon)
+                        nearStmt.bindDouble(10, userLon)
+                        nearStmt.bindDouble(11, cosLatSq)
+                        nearStmt.bindLong(12, maxPerDb.toLong())
                         while (nearStmt.step()) {
                             foundNear++
                             val rowId = nearStmt.getLong(0)
@@ -662,7 +670,8 @@ class OfflinePlaceSearchEngine(
                                 query = expanded.normalizedLatinQueries.firstOrNull() ?: expanded.original,
                                 categoryTags = expanded.matchedCategoryTags,
                                 userLat = userLat,
-                                userLon = userLon
+                                userLon = userLon,
+                                isProximityQuery = expanded.isProximityQuery || expanded.isPureCategoryQuery
                             )
                             val existing = results[rowId]
                             if (existing == null || place.relevanceScore > existing.relevanceScore) {
@@ -682,13 +691,19 @@ class OfflinePlaceSearchEngine(
                             FROM places_fts
                             JOIN places p ON p.id = places_fts.rowid
                             WHERE places_fts MATCH ?
+                            ORDER BY ((p.lat - ?) * (p.lat - ?) + (p.lon - ?) * (p.lon - ?) * ?) ASC
                             LIMIT ?
                         """.trimIndent()
                         val stStmt = conn.prepare(stateSql)
                         try {
                             stStmt.bindText(1, stateCode.uppercase())
                             stStmt.bindText(2, matchExpr)
-                            stStmt.bindLong(3, maxPerDb.toLong())
+                            stStmt.bindDouble(3, userLat)
+                            stStmt.bindDouble(4, userLat)
+                            stStmt.bindDouble(5, userLon)
+                            stStmt.bindDouble(6, userLon)
+                            stStmt.bindDouble(7, cosLatSq)
+                            stStmt.bindLong(8, maxPerDb.toLong())
                             while (stStmt.step()) {
                                 val rowId = stStmt.getLong(0)
                                 val place = readRowAndScore(
@@ -709,7 +724,8 @@ class OfflinePlaceSearchEngine(
                                     query = expanded.normalizedLatinQueries.firstOrNull() ?: expanded.original,
                                     categoryTags = expanded.matchedCategoryTags,
                                     userLat = userLat,
-                                    userLon = userLon
+                                    userLon = userLon,
+                                    isProximityQuery = expanded.isProximityQuery || expanded.isPureCategoryQuery
                                 )
                                 val existing = results[rowId]
                                 if (existing == null || place.relevanceScore > existing.relevanceScore) {
@@ -724,7 +740,7 @@ class OfflinePlaceSearchEngine(
             }
 
             // C. Typo-tolerant Levenshtein fuzzy fallback (e.g., "Bset Buy" -> "Best Buy")
-            if (results.size < 5) {
+            if (results.size < 5 && !expanded.isPureCategoryQuery) {
                 for (latinQuery in expanded.normalizedLatinQueries) {
                     val tokens = tokenize(latinQuery)
                     if (tokens.isEmpty()) continue
@@ -807,7 +823,8 @@ class OfflinePlaceSearchEngine(
         query: String,
         categoryTags: List<String>,
         userLat: Double,
-        userLon: Double
+        userLon: Double,
+        isProximityQuery: Boolean = false
     ): PlaceSearchResult {
         val dist = haversineMeters(userLat, userLon, lat, lon)
         val qLower = query.trim().lowercase()
@@ -816,15 +833,24 @@ class OfflinePlaceSearchEngine(
         val catLower = category.lowercase()
 
         var textScore = (-bm25).coerceIn(0.0, 35.0) * 1.5
-        if (nameLower == qLower || brandLower == qLower) textScore += 75.0
-        else if (nameLower.startsWith(qLower) || brandLower.startsWith(qLower)) textScore += 50.0
-        else if (nameLower.contains(qLower) || brandLower.contains(qLower)) textScore += 32.0
+        if (qLower.isNotBlank() && !isProximityQuery) {
+            if (nameLower == qLower || brandLower == qLower) textScore += 75.0
+            else if (nameLower.startsWith(qLower) || brandLower.startsWith(qLower)) textScore += 50.0
+            else if (nameLower.contains(qLower) || brandLower.contains(qLower)) textScore += 32.0
+        }
 
         if (categoryTags.any { tag -> catLower.contains(tag.lowercase()) }) {
             textScore += 45.0
         }
 
-        val totalScore = textScore + distanceBoost(dist) + (popularity.coerceIn(0.0, 10.0) * 2.0)
+        val totalScore = if (isProximityQuery) {
+            val km = dist / 1000.0
+            // Proximity queries ("gas stations near me", "نزدیکترین پمپبنزین به من") rank strictly nearest first.
+            val proximityScore = 240.0 / (1.0 + km / 2.5)
+            textScore + proximityScore + (popularity.coerceIn(0.0, 10.0) * 0.15)
+        } else {
+            textScore + distanceBoost(dist) + (popularity.coerceIn(0.0, 10.0) * 2.0)
+        }
 
         return PlaceSearchResult(
             id = "${stateCode}_$id",

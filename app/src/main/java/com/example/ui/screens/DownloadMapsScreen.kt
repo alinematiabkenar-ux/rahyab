@@ -629,11 +629,35 @@ private fun StatePackCard(
                 }
             }
 
-            // 3-File Component Indicators (PMTiles, Valhalla, Places FTS5)
+            // Clear per-region offline readiness & 3-component usability (Map, Routing, Search)
+            if (pack.status != PackInstallStatus.NOT_DOWNLOADED) {
+                val readinessLabel = if (pack.isOfflineReady) strings.packOfflineReadyBadge else strings.packIncompleteBadge
+                val readinessColor = if (pack.isOfflineReady) AlertSafeGreen else AlertAmber
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = readinessColor.copy(alpha = 0.16f),
+                    modifier = Modifier.testTag("pack_readiness_${pack.stateCode}")
+                ) {
+                    Text(
+                        text = readinessLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = readinessColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilePillBadge("PMTiles", pack.hasPmtiles)
-                FilePillBadge("Valhalla", pack.hasValhalla)
-                FilePillBadge("Places FTS5", pack.hasPlacesDb)
+                FilePillBadge(strings.packComponentMap, pack.hasPmtiles)
+                FilePillBadge(strings.packComponentRouting, pack.hasValhalla && pack.hasUsableRoutingTiles)
+                FilePillBadge(strings.packComponentSearch, pack.hasPlacesDb)
+            }
+            if (pack.hasValhalla && !pack.hasUsableRoutingTiles) {
+                Text(
+                    text = strings.packComponentRoutingTilesMissing,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = AlertAmber
+                )
             }
 
             if (pack.isOsmOnlyPlaces) {

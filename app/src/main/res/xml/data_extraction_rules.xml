@@ -5,15 +5,14 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Exclude large downloaded state packs & Valhalla tiles from 25 MB cloud backup quota
+             so Room DB and DataStore settings back up reliably while device storage preserves packs across upgrades. -->
+        <exclude domain="file" path="packs" />
+        <exclude domain="file" path="valhalla_tiles" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <include domain="database" path="." />
+        <include domain="file" path="datastore" />
     </device-transfer>
-    -->
 </data-extraction-rules>
+

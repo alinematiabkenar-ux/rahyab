@@ -142,10 +142,47 @@ internal object PackArchiveAndValidation {
             } finally {
                 conn.close()
             }
-        } catch (_: UnsatisfiedLinkError) {
+        } catch (_: LinkageError) {
             hasSqliteHeader(file)
         } catch (t: Throwable) {
             CrashLogManager.logError(context, "PackAudit", "Failed to validate places DB ${file.name}", t)
+            false
+        }
+    }
+
+    fun hasAddressSearchTables(file: File): Boolean {
+        if (!file.exists() || file.length() < 4096L) return false
+        return try {
+            val driver = androidx.sqlite.driver.bundled.BundledSQLiteDriver()
+            val conn = driver.open(file.absolutePath)
+            try {
+                val stmt = conn.prepare(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('addresses', 'addresses_fts')"
+                )
+                try {
+                    stmt.step() && stmt.getLong(0) >= 2L
+                } finally {
+                    stmt.close()
+                }
+            } finally {
+                conn.close()
+            }
+        } catch (_: LinkageError) {
+            runCatching {
+                android.database.sqlite.SQLiteDatabase.openDatabase(
+                    file.absolutePath,
+                    null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+                ).use { db ->
+                    db.rawQuery(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('addresses', 'addresses_fts')",
+                        null
+                    ).use { cursor ->
+                        cursor.moveToFirst() && cursor.getLong(0) >= 2L
+                    }
+                }
+            }.getOrDefault(false)
+        } catch (_: Throwable) {
             false
         }
     }

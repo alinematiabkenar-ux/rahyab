@@ -33,6 +33,9 @@ internal object PackAuditAndImportHelper {
 
             val pmValid = pm.exists() && manager.isValidPmtilesFile(pm)
             val vhValid = vh.exists() && vh.length() > 512L
+            if (vhValid && !manager.hasAnyValidValhallaTiles()) {
+                runCatching { manager.extractTarIntoDirectory(vh, manager.unifiedValhallaTileDir) }
+            }
             val dbValid = db.exists() && manager.isValidPlacesDb(db)
 
             val currentStatus = record?.status?.let {

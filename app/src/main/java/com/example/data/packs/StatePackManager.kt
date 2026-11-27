@@ -141,6 +141,17 @@ class StatePackManager(
         return dir.walkTopDown().any { it.isFile && it.name.endsWith(".gph") && it.length() > 0L }
     }
 
+    fun hasUsableRoutingForState(stateCode: String): Boolean {
+        val tar = valhallaTarFile(stateCode)
+        return tar.exists() && tar.length() > 512L && hasAnyValidValhallaTiles()
+    }
+
+    fun hasUsableAddressIndex(stateCode: String): Boolean {
+        val places = placesDbFile(stateCode)
+        val extras = extrasDbFile(stateCode)
+        return PackArchiveAndValidation.hasAddressSearchTables(places) || (extras.exists() && extras.length() > 1024L)
+    }
+
     fun getInstalledValhallaTarFiles(): List<File> =
         UsStatesCatalog.allPackEntries.mapNotNull { state ->
             val tar = valhallaTarFile(state.code)

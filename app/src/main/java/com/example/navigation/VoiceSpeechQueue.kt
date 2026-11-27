@@ -82,6 +82,7 @@ internal class VoiceSpeechQueue(
         val now = clockMsProvider()
         val canceledActive: ActiveInstruction?
         val canceledQueued = mutableListOf<QueuedInstruction>()
+        val hasRemainingQueued: Boolean
         synchronized(sequenceLock) {
             speechGeneration.incrementAndGet()
             canceledActive = activeInstruction; activeInstruction = null; pendingSegments.clear()
@@ -89,11 +90,14 @@ internal class VoiceSpeechQueue(
                 canceledQueued.addAll(pendingInstructions); pendingInstructions.clear()
                 pendingPostSpeechActions.clear(); pendingLowPriorityAlerts.clear()
             }
+            hasRemainingQueued = pendingInstructions.isNotEmpty()
         }
         canceledActive?.let { recordTerminal(it, SpeechLifecycleState.CANCELED, now, reason) }
         canceledQueued.forEach { recordQueuedCanceled(it, now, reason) }
         engineSelector.stopEngines()
-        engineSelector.abandonDuckingFocus()
+        if (clearPendingActions || !hasRemainingQueued) {
+            engineSelector.abandonDuckingFocus()
+        }
     }
 
     fun cancelStaleForContext(activeRouteId: String?, activeManeuverIndex: Int?, reason: String = "stale_maneuver_or_route") {
@@ -117,7 +121,10 @@ internal class VoiceSpeechQueue(
             pendingLowPriorityAlerts.clear()
         }
         droppedQueued.forEach { recordQueuedCanceled(it, now, reason) }
-        if (shouldStopActive) stopAllSpeech(clearPendingActions = false, reason = reason)
+        if (shouldStopActive) {
+            stopAllSpeech(clearPendingActions = false, reason = reason)
+            advanceQueueOrReleaseFocus()
+        }
     }
 
     fun speakRaw(

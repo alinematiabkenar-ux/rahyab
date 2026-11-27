@@ -21,6 +21,10 @@ internal fun RahYabViewModel.onSearchQueryChangedImpl(query: String) {
     _searchQuery.value = query
     searchJob?.cancel()
     photonFallbackJob?.cancel()
+    googleMapsSearchJob?.cancel()
+    _googleMapsSearchResults.value = emptyList()
+    _isSearchingGoogleMaps.value = false
+    _googleMapsSearchStatus.value = null
     if (query.isBlank()) {
         _searchResults.value = emptyList()
         _isSearching.value = false
@@ -28,7 +32,7 @@ internal fun RahYabViewModel.onSearchQueryChangedImpl(query: String) {
     }
     searchJob = viewModelScope.launch {
         delay(180L)
-        executeSearchImpl(query, immediateOnlineFallback = false)
+        executeSearchImpl(query)
     }
 }
 
@@ -36,75 +40,91 @@ internal fun RahYabViewModel.executeSearchNowImpl(query: String) {
     _searchQuery.value = query
     searchJob?.cancel()
     photonFallbackJob?.cancel()
+    googleMapsSearchJob?.cancel()
+    _googleMapsSearchResults.value = emptyList()
+    _isSearchingGoogleMaps.value = false
+    _googleMapsSearchStatus.value = null
     searchJob = viewModelScope.launch {
-        executeSearchImpl(query, immediateOnlineFallback = true)
+        executeSearchImpl(query)
     }
 }
 
-private suspend fun RahYabViewModel.executeSearchImpl(query: String, immediateOnlineFallback: Boolean = false) {
+/**
+ * Local-first destination search: ALWAYS queries installed offline packs first (even when online)
+ * without calling Google Maps or Gemini. Online Google Maps search is strictly explicit via
+ * [searchGoogleMapsOnlineImpl].
+ */
+private suspend fun RahYabViewModel.executeSearchImpl(query: String) {
     _isSearching.value = true
     val ref = getEffectiveReferenceLocation()
-    var offlineResults: List<PlaceSearchResult> = emptyList()
     try {
-        offlineResults = offlineSearch.search(query, ref.lat, ref.lon, limit = 30)
-        val useDevOnline = settings.value.devOnlineOregonMode && packManager.getInstalledPlacesDatabases().isEmpty()
+        val offlineResults = offlineSearch.search(query, ref.lat, ref.lon, limit = 30)
+        val useDevOnline = settings.value.devOnlineOregonMode &&
+            packManager.getInstalledPlacesDatabases().isEmpty() &&
+            networkState.value.isOnline
 
         if (offlineResults.isNotEmpty() || !useDevOnline) {
             _searchResults.value = offlineResults
         } else {
             val onlineResults = devOnlineSearch.searchOregonOnline(query, ref.lat, ref.lon, limit = 25)
             _searchResults.value = onlineResults
-            return
         }
     } finally {
         _isSearching.value = false
     }
+}
 
-    // Optional Komoot Photon online fallback when offline search has no good result
+/**
+ * Explicit, user-triggered online Google Maps Places API (New) search.
+ * Never alters or blocks local offline results; degrades cleanly when offline, disabled,
+ * missing an API key, or facing a slow network.
+ */
+internal fun RahYabViewModel.searchGoogleMapsOnlineImpl(rawQuery: String) {
+    val query = rawQuery.trim()
+    if (query.length < 2) return
     val s = settings.value
-    val hasGoodOfflineMatch = offlineResults.isNotEmpty() &&
-        (offlineResults.first().relevanceScore >= 55.0 || offlineResults.size >= 3)
-    if (!hasGoodOfflineMatch &&
-        query.trim().length >= 3 &&
-        s.onlineFeaturesEnabled &&
-        s.onlineSearchFallbackEnabled &&
-        networkState.value.isOnline
-    ) {
-        val capturedQuery = query
-        val capturedOffline = offlineResults
-        photonFallbackJob?.cancel()
-        photonFallbackJob = viewModelScope.launch {
-            if (!immediateOnlineFallback) {
-                delay(1_000L) // Wait 1 second after typing stops
-            }
-            if (_searchQuery.value != capturedQuery) return@launch
-            if (!networkState.value.isOnline) return@launch
-            val res = photonSearchClient.search(
-                query = capturedQuery,
+    val str = stringsFor(s.language)
+    if (!s.onlineFeaturesEnabled || !s.googleMapsOnlineSearchEnabled) {
+        _googleMapsSearchStatus.value = str.onlineSourceStateOff
+        return
+    }
+    if (!networkState.value.isOnline) {
+        _googleMapsSearchStatus.value = str.googleMapsOfflineUnavailable
+        return
+    }
+    val client = googleMapsPlacesClient
+    if (client == null || !client.isConfigured) {
+        _googleMapsSearchStatus.value = str.googleMapsKeyNotConfigured
+        return
+    }
+    googleMapsSearchJob?.cancel()
+    googleMapsSearchJob = viewModelScope.launch {
+        _isSearchingGoogleMaps.value = true
+        _googleMapsSearchStatus.value = null
+        val ref = getEffectiveReferenceLocation()
+        try {
+            val res = client.searchText(
+                query = query,
                 biasLat = ref.lat,
                 biasLon = ref.lon,
-                limit = 10
+                limit = 8
             )
-            if (_searchQuery.value != capturedQuery) return@launch
+            if (_searchQuery.value.trim() != query) return@launch
             res.onSuccess { onlineList ->
+                _googleMapsSearchResults.value = onlineList
                 updateOnlineSearchSourceStatus(
                     OnlineSourceState.ACTIVE,
-                    if (onlineList.isEmpty()) "" else "${onlineList.size} results"
+                    if (onlineList.isEmpty()) "" else "Google Maps (${onlineList.size})"
                 )
-                if (onlineList.isNotEmpty()) {
-                    val offlineNames = capturedOffline.map {
-                        it.name.lowercase(Locale.US)
-                    }.toSet()
-                    val filteredOnline = onlineList.filterNot {
-                        it.name.lowercase(Locale.US) in offlineNames
-                    }
-                    if (filteredOnline.isNotEmpty()) {
-                        _searchResults.value = capturedOffline + filteredOnline
-                    }
+                if (onlineList.isEmpty()) {
+                    _googleMapsSearchStatus.value = str.searchNoResults
                 }
             }.onFailure { err ->
                 updateOnlineSearchSourceStatus(OnlineSourceState.ERROR, err.message.orEmpty().take(60))
+                _googleMapsSearchStatus.value = err.message?.take(80) ?: str.onlineSourceStateUnavailable
             }
+        } finally {
+            _isSearchingGoogleMaps.value = false
         }
     }
 }
@@ -154,18 +174,29 @@ internal fun RahYabViewModel.selectPlaceImpl(place: PlaceSearchResult) {
     _selectedTravelMode.value = settings.value.lastTravelMode
     calculateAllTravelModePreviewsImpl()
     viewModelScope.launch {
-        savedPlaceDao.insert(
-            SavedPlaceEntity(
-                type = SavedPlaceType.RECENT.name,
-                name = place.name,
-                address = place.formattedAddress,
-                category = place.category,
-                lat = place.lat,
-                lon = place.lon,
-                stateCode = place.stateCode
+        val installedCodes = getInstalledStateCodeSet()
+        if (installedCodes.isNotEmpty() &&
+            !UsStatesCatalog.isPointCoveredByInstalledPacks(place.lat, place.lon, installedCodes)
+        ) {
+            findMissingStatePackForPoint(place.lat, place.lon, installedCodes)?.let { missing ->
+                _missingStatesForRoute.value = listOf(missing)
+            }
+        }
+        // ToS compliance: do NOT cache Google Maps Platform place names/addresses into local Room history.
+        if (place.source != com.example.data.online.GoogleMapsPlacesClient.SOURCE_ONLINE_GOOGLE_MAPS) {
+            savedPlaceDao.insert(
+                SavedPlaceEntity(
+                    type = SavedPlaceType.RECENT.name,
+                    name = place.name,
+                    address = place.formattedAddress,
+                    category = place.category,
+                    lat = place.lat,
+                    lon = place.lon,
+                    stateCode = place.stateCode
+                )
             )
-        )
-        savedPlaceDao.trimRecent()
+            savedPlaceDao.trimRecent()
+        }
     }
 }
 

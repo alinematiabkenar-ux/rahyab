@@ -68,6 +68,8 @@ data class StatePackUiItem(
     val hasPmtiles: Boolean,
     val hasValhalla: Boolean,
     val hasPlacesDb: Boolean,
+    val hasUsableRoutingTiles: Boolean = hasValhalla,
+    val hasAddressIndex: Boolean = false,
     val hasManifestEntry: Boolean,
     val isCurrentLocationState: Boolean = false,
     val isQueued: Boolean = false,
@@ -81,4 +83,7 @@ data class StatePackUiItem(
 
     val isOsmOnlyPlaces: Boolean
         get() = placesSource.equals("osm-only", ignoreCase = true)
+
+    val isOfflineReady: Boolean
+        get() = hasPmtiles && hasValhalla && hasUsableRoutingTiles && hasPlacesDb
 }

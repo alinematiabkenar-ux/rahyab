@@ -13,6 +13,7 @@ import com.example.data.local.SavedPlaceType
 import com.example.data.local.UserReportEntity
 import com.example.data.model.UsStateInfo
 import com.example.data.model.UsStatesCatalog
+import com.example.data.online.GoogleMapsPlacesClient
 import com.example.data.online.NetworkState
 import com.example.data.online.OnlineSourceState
 import com.example.data.online.OnlineSourcesSummary
@@ -61,6 +62,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal val networkStatusMonitor = app.networkStatusMonitor
     internal val weatherAlertsClient = WeatherAlertsClient(app)
     internal val photonSearchClient = PhotonSearchClient(app)
+    internal val googleMapsPlacesClient: GoogleMapsPlacesClient? =
+        if (GoogleMapsPlacesClient.isOptionalKeyConfigured()) GoogleMapsPlacesClient(app) else null
     internal val savedPlaceDao = app.database.savedPlaceDao()
     internal val userReportDao = app.database.userReportDao()
     internal val installedPackDao = app.database.installedPackDao()
@@ -135,6 +138,12 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     val searchResults: StateFlow<List<PlaceSearchResult>> = _searchResults.asStateFlow()
     internal val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+    internal val _googleMapsSearchResults = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
+    val googleMapsSearchResults: StateFlow<List<PlaceSearchResult>> = _googleMapsSearchResults.asStateFlow()
+    internal val _isSearchingGoogleMaps = MutableStateFlow(false)
+    val isSearchingGoogleMaps: StateFlow<Boolean> = _isSearchingGoogleMaps.asStateFlow()
+    internal val _googleMapsSearchStatus = MutableStateFlow<String?>(null)
+    val googleMapsSearchStatus: StateFlow<String?> = _googleMapsSearchStatus.asStateFlow()
     internal val _selectedPlace: MutableStateFlow<PlaceSearchResult?> = navStore._selectedPlace
     val selectedPlace: StateFlow<PlaceSearchResult?> = navStore.selectedPlace
 
@@ -216,6 +225,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     internal var externalIntentJob: Job? = null
     internal var searchJob: Job? = null
     internal var photonFallbackJob: Job? = null
+    internal var googleMapsSearchJob: Job? = null
     internal var gpsWatchdogJob: Job? = null
     internal var simulationJob: Job? = null
     internal var arrivalEndJob: Job? = null
@@ -332,6 +342,8 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     // --- SEARCH, SAVED PLACES & EXTERNAL LINKS ---
     fun onSearchQueryChanged(query: String) = onSearchQueryChangedImpl(query)
     fun executeSearchNow(query: String) = executeSearchNowImpl(query)
+    fun searchGoogleMapsOnline(query: String = _searchQuery.value) = searchGoogleMapsOnlineImpl(query)
+    fun isGoogleMapsKeyConfigured(): Boolean = googleMapsPlacesClient?.isConfigured == true
     fun dropPinOnMap(lat: Double, lon: Double) = dropPinOnMapImpl(lat, lon)
     fun selectPlace(place: PlaceSearchResult) = selectPlaceImpl(place)
     fun clearSelectedPlace() { cancelVoiceAutoStartCountdownImpl(); clearSelectedPlaceImpl() }
@@ -456,6 +468,7 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun setOnlineFeaturesEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setOnlineFeaturesEnabled(enabled) } }
     fun setOnlineWeatherAlertsEnabled(enabled: Boolean) = setOnlineWeatherAlertsEnabledImpl(enabled)
     fun setOnlineSearchFallbackEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setOnlineSearchFallbackEnabled(enabled) } }
+    fun setGoogleMapsOnlineSearchEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setGoogleMapsOnlineSearchEnabled(enabled) } }
     fun setAutoCheckMapUpdatesEnabled(enabled: Boolean) { viewModelScope.launch { prefs.setAutoCheckMapUpdatesEnabled(enabled) } }
     fun setWifiOnlyLargeDownloads(enabled: Boolean) { viewModelScope.launch { prefs.setWifiOnlyLargeDownloads(enabled) } }
     fun setAutoUpdateMapsOnWifi(enabled: Boolean) { viewModelScope.launch { prefs.setAutoUpdateMapsOnWifi(enabled) } }

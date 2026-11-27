@@ -575,6 +575,20 @@ fun SettingsScreen(
                         onCheckedChange = { viewModel.setOnlineSearchFallbackEnabled(it) },
                         testTag = "switch_online_search_fallback"
                     )
+                    if (viewModel.isGoogleMapsKeyConfigured()) {
+                        SettingsToggleRow(
+                            label = strings.googleMapsOnlineSearchToggle,
+                            checked = settings.googleMapsOnlineSearchEnabled,
+                            onCheckedChange = { viewModel.setGoogleMapsOnlineSearchEnabled(it) },
+                            testTag = "switch_google_maps_online_search"
+                        )
+                        Text(
+                            text = strings.googleMapsOnlineSearchHint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
                     SettingsToggleRow(
                         label = strings.autoCheckMapUpdatesSwitch,
                         checked = settings.autoCheckMapUpdatesEnabled,

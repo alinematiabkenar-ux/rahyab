@@ -6,8 +6,9 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Exclude large downloaded offline map packs & extracted Valhalla tiles from 25 MB cloud backup
+         so app upgrades preserve Room DB metadata, DataStore preferences, and local files cleanly. -->
+    <exclude domain="file" path="packs" />
+    <exclude domain="file" path="valhalla_tiles" />
 </full-backup-content>
+
