@@ -1,5 +1,6 @@
 package com.example.navigation
 
+import com.example.data.search.OfflinePlaceSearchEngine
 import com.example.i18n.AppLanguage
 import com.example.i18n.BilingualFormatter
 import org.json.JSONObject
@@ -273,7 +274,7 @@ internal object ValhallaTraceAttributesParser {
         var approachMeters = 0.0
         var i = pivotIdx
         while (i > 0 && approachMeters < 10.0) {
-            approachMeters += RouteGeometryMath.haversineMeters(
+            approachMeters += OfflinePlaceSearchEngine.haversineMeters(
                 shape[i].lat, shape[i].lon, shape[i - 1].lat, shape[i - 1].lon
             )
             i--
