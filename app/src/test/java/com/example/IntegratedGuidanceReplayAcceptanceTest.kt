@@ -46,6 +46,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -66,6 +69,8 @@ import kotlin.math.sin
  *   single-cue catchup, passed-exit suppression, jitter anti-duplication, and reroute cleanup.
  * - Replay E: Android Auto camera/maneuver parity & simultaneous 1 km + final-signal combined cue.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36])
 class IntegratedGuidanceReplayAcceptanceTest {
 
     private val baseLat = 44.0500
@@ -355,7 +360,7 @@ class IntegratedGuidanceReplayAcceptanceTest {
         """.trimIndent()
 
         // 1. Centerline-only /route response (no trace_attributes yet)
-        val rawRoute = ValhallaResponseParser.parseRouteResponse(rawRouteJson)
+        val rawRoute = ValhallaResponseParser.parseRoutes(rawRouteJson).firstOrNull()
         assertNotNull(rawRoute)
         val rawTurn = rawRoute!!.maneuvers[1]
         assertFalse("Raw /route must NOT claim verified map road-lane geometry", rawRoute.hasRoadLaneGeometry)
@@ -371,8 +376,8 @@ class IntegratedGuidanceReplayAcceptanceTest {
         val traceJson = """
             {
               "edges": [
-                { "begin_shape_index": 0, "end_shape_index": $pivotIdx, "lane_count": 2, "one_way": false, "speed": 50 },
-                { "begin_shape_index": $pivotIdx, "end_shape_index": ${shape.lastIndex}, "lane_count": 2, "one_way": false, "speed": 45 }
+                { "begin_shape_index": 0, "end_shape_index": $pivotIdx, "lane_count": 2, "traversability": "both", "speed_limit": 50 },
+                { "begin_shape_index": $pivotIdx, "end_shape_index": ${shape.lastIndex}, "lane_count": 2, "traversability": "both", "speed_limit": 45 }
               ]
             }
         """.trimIndent()
@@ -390,8 +395,10 @@ class IntegratedGuidanceReplayAcceptanceTest {
         assertEquals(listOf(false, true), fixedOverlay!!.lanes.map { it.isTarget })
 
         // Verify Android Auto CarManeuverMapper mirrors preferred lane ONLY
-        val carLanes = CarManeuverMapper.toCarLanes(enrichedRoute.maneuvers[1], decisionRaw)
+        val carLanes = CarManeuverMapper.toCarLanes(enrichedRoute.maneuvers[1].lanes, decisionRaw)
         assertEquals(2, carLanes.size)
+        assertFalse("Car lane 0 must not be recommended", carLanes[0].directions.any { it.isRecommended })
+        assertTrue("Car lane 1 must be recommended", carLanes[1].directions.any { it.isRecommended })
 
         // Voice gating: "Get in the blue lane." ONLY on phone with visible blue panel; physical on Android Auto
         val phoneCue = decisionRaw.resolveVoiceCue(
@@ -466,9 +473,9 @@ class IntegratedGuidanceReplayAcceptanceTest {
         val parallelRoadSignal = pointAtEn(42.0, 1_350.0) // 42 m east on parallel road -> MUST be rejected
         val oppositeDirSignal = pointAtEn(-2.0, 1_380.0) // explicit southbound direction=180 -> MUST be rejected
         val signalsC1 = listOf(
-            RoadHazardPoint(1L, "traffic_signals", signalAt210Before.lat, signalAt210Before.lon, directionDegrees = 0f),
-            RoadHazardPoint(2L, "traffic_signals", parallelRoadSignal.lat, parallelRoadSignal.lon, directionDegrees = 0f),
-            RoadHazardPoint(3L, "traffic_signals", oppositeDirSignal.lat, oppositeDirSignal.lon, directionDegrees = 180f)
+            RoadHazardPoint(1L, "traffic_signals", signalAt210Before.lat, signalAt210Before.lon, "Traffic signal", directionDegrees = 0f),
+            RoadHazardPoint(2L, "traffic_signals", parallelRoadSignal.lat, parallelRoadSignal.lon, "Parallel signal", directionDegrees = 0f),
+            RoadHazardPoint(3L, "traffic_signals", oppositeDirSignal.lat, oppositeDirSignal.lon, "Opposite signal", directionDegrees = 180f)
         )
         val matched = RouteTrafficSignalMatcher.findFinalSignalBeforeManeuver(
             baseRoute, baseRoute.maneuvers[1], baseRoute.maneuvers[0], 500.0, 1_650.0, signalsC1
@@ -540,7 +547,7 @@ class IntegratedGuidanceReplayAcceptanceTest {
         assertTrue("Camera is active at post-signal cue", c1Cues[1].focusActiveAtCue)
 
         // Case C2: Signal > 1 km before turn (at 1,180 m before pivot) -> fires BEFORE 1 km in chronological order!
-        val farSignal = listOf(RoadHazardPoint(10L, "traffic_signals", pointAtEn(1.0, 320.0).lat, pointAtEn(1.0, 320.0).lon))
+        val farSignal = listOf(RoadHazardPoint(10L, "traffic_signals", pointAtEn(1.0, 320.0).lat, pointAtEn(1.0, 320.0).lon, "Far signal"))
         val c2Stages = mutableListOf<Pair<String, String>>()
         run {
             val ctrl = NavigationSessionController()
@@ -574,7 +581,7 @@ class IntegratedGuidanceReplayAcceptanceTest {
         assertFalse("Far signal (> 1 km) must NOT say 'next right': ${c2Stages[0].second}", c2Stages[0].second.contains("next right", ignoreCase = true))
 
         // Case C3: Signal at target intersection itself -> pre-stop-line cue with lane guidance + steady red-light hold
-        val targetSignal = listOf(RoadHazardPoint(20L, "traffic_signals", shape[pivotIdx].lat, shape[pivotIdx].lon))
+        val targetSignal = listOf(RoadHazardPoint(20L, "traffic_signals", shape[pivotIdx].lat, shape[pivotIdx].lon, "Target signal"))
         val c3Cues = mutableListOf<Pair<String, String>>()
         run {
             val ctrl = NavigationSessionController()
@@ -656,23 +663,23 @@ class IntegratedGuidanceReplayAcceptanceTest {
 
         // Step 1: 1,800 m away (progress = 700 m) -> no cue yet
         val (_, loc1800, brg1800) = NavigationGeometryHelper.advanceAlongShape(shape, 0, pivotProgress - 1_800.0)
-        val r1 = ctrl.processGpsFix(st, GpsFix(loc1800.lat, loc1800.lon, brg1800, speedMps = 28f, timestampMs = 1_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 1_000L)
+        val r1 = ctrl.processGpsFix(st, GpsFix(loc1800.lat, loc1800.lon, brg1800, speedMps = 28f, accuracyMeters = 4f, timestampMs = 1_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 1_000L)
         assertNull(r1.maneuverToSpeak)
         st = r1.state
 
         // Step 2: GPS gap straight to 450 m away -> MUST play ONLY STAGE_HW_500M (never 1 mi backlog!)
         val (_, loc450, brg450) = NavigationGeometryHelper.advanceAlongShape(shape, 0, pivotProgress - 450.0)
-        val r2 = ctrl.processGpsFix(st, GpsFix(loc450.lat, loc450.lon, brg450, speedMps = 28f, timestampMs = 15_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 15_000L)
+        val r2 = ctrl.processGpsFix(st, GpsFix(loc450.lat, loc450.lon, brg450, speedMps = 28f, accuracyMeters = 4f, timestampMs = 15_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 15_000L)
         assertEquals(NavigationSessionController.STAGE_HW_500M, r2.maneuverToSpeak?.second)
         st = r2.state
 
         // Step 3: GPS jitter back to 510 m then forward to 440 m -> MUST NOT repeat STAGE_HW_500M or play 1 mi!
         val (_, loc510, brg510) = NavigationGeometryHelper.advanceAlongShape(shape, 0, pivotProgress - 510.0)
-        val r3 = ctrl.processGpsFix(st, GpsFix(loc510.lat, loc510.lon, brg510, speedMps = 28f, timestampMs = 17_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 17_000L)
+        val r3 = ctrl.processGpsFix(st, GpsFix(loc510.lat, loc510.lon, brg510, speedMps = 28f, accuracyMeters = 4f, timestampMs = 17_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 17_000L)
         assertNull(r3.maneuverToSpeak)
         st = r3.state
         val (_, loc440, brg440) = NavigationGeometryHelper.advanceAlongShape(shape, 0, pivotProgress - 440.0)
-        val r4 = ctrl.processGpsFix(st, GpsFix(loc440.lat, loc440.lon, brg440, speedMps = 28f, timestampMs = 19_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 19_000L)
+        val r4 = ctrl.processGpsFix(st, GpsFix(loc440.lat, loc440.lon, brg440, speedMps = 28f, accuracyMeters = 4f, timestampMs = 19_000L), emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 19_000L)
         assertNull("Jitter crossing 500 m again must NEVER repeat STAGE_HW_500M", r4.maneuverToSpeak)
 
         // 4. Late start already past exit -> NEVER announces or first-displays the passed exit
@@ -681,7 +688,7 @@ class IntegratedGuidanceReplayAcceptanceTest {
         val (_, locPast, brgPast) = NavigationGeometryHelper.advanceAlongShape(shape, 0, pivotProgress + 40.0)
         val lateRes = lateCtrl.processGpsFix(
             ActiveNavigationState(isNavigating = true, route = route, currentManeuverIndex = 1, snappedLocation = locPast, snappedBearing = brgPast, snappedShapeIndex = pivotIdx + 4),
-            GpsFix(locPast.lat, locPast.lon, brgPast, speedMps = 28f, timestampMs = 1_000L),
+            GpsFix(locPast.lat, locPast.lon, brgPast, speedMps = 28f, accuracyMeters = 4f, timestampMs = 1_000L),
             emptyList(), emptyList(), DistanceUnit.IMPERIAL, AppLanguage.ENGLISH, false, nowMs = 1_000L
         )
         assertNull("Already-passed exit must NEVER announce", lateRes.maneuverToSpeak)
@@ -714,40 +721,50 @@ class IntegratedGuidanceReplayAcceptanceTest {
             )
         )
         // Signal placed right at 1,000 m before pivot (progress = 400 m)
-        val signalAt1Km = listOf(RoadHazardPoint(55L, "traffic_signals", shape[40].lat, shape[40].lon))
+        val signalAt1Km = listOf(RoadHazardPoint(55L, "traffic_signals", shape[40].lat, shape[40].lon, "1km signal"))
         val ctrl = NavigationSessionController()
         var st = ActiveNavigationState(isNavigating = true, route = route, currentManeuverIndex = 1, snappedLocation = shape[37], snappedBearing = 0f, snappedShapeIndex = 37)
 
         // Update 1: 1,030 m before turn (before signal & before 1 km)
-        val r1 = ctrl.processGpsFix(st, GpsFix(shape[37].lat, shape[37].lon, 0f, speedMps = 13.4f, timestampMs = 1_000L), signalAt1Km, emptyList(), DistanceUnit.METRIC, AppLanguage.ENGLISH, false, nowMs = 1_000L)
+        val r1 = ctrl.processGpsFix(st, GpsFix(shape[37].lat, shape[37].lon, 0f, speedMps = 13.4f, accuracyMeters = 4f, timestampMs = 1_000L), signalAt1Km, emptyList(), DistanceUnit.METRIC, AppLanguage.ENGLISH, false, nowMs = 1_000L)
         assertNull(r1.maneuverToSpeak)
         st = r1.state
 
         // Update 2: 990 m before turn (crossed BOTH 1 km and signal on the same update -> ONE combined cue!)
-        val r2 = ctrl.processGpsFix(st, GpsFix(shape[41].lat, shape[41].lon, 0f, speedMps = 13.4f, timestampMs = 4_000L), signalAt1Km, emptyList(), DistanceUnit.METRIC, AppLanguage.ENGLISH, false, nowMs = 4_000L)
+        val r2 = ctrl.processGpsFix(st, GpsFix(shape[41].lat, shape[41].lon, 0f, speedMps = 13.4f, accuracyMeters = 4f, timestampMs = 4_000L), signalAt1Km, emptyList(), DistanceUnit.METRIC, AppLanguage.ENGLISH, false, nowMs = 4_000L)
         assertEquals(NavigationSessionController.STAGE_CITY_1KM_POST_SIGNAL, r2.maneuverToSpeak?.second)
         val combinedEn = VoiceGuidanceManager.formatSpokenInstruction(route.maneuvers[1], r2.state.distanceToNextManeuverMeters, DistanceUnit.METRIC, AppLanguage.ENGLISH, false, NavigationSessionController.STAGE_CITY_1KM_POST_SIGNAL)
         assertTrue("Combined cue must merge signal + 1 km into one utterance: $combinedEn", combinedEn.contains("traffic light", ignoreCase = true) && combinedEn.contains("one kilometer", ignoreCase = true))
 
         // Update 3: 970 m -> MUST NOT double-speak STAGE_CITY_1KM or STAGE_CITY_POST_SIGNAL!
-        val r3 = ctrl.processGpsFix(r2.state, GpsFix(shape[43].lat, shape[43].lon, 0f, speedMps = 13.4f, timestampMs = 6_000L), signalAt1Km, emptyList(), DistanceUnit.METRIC, AppLanguage.ENGLISH, false, nowMs = 6_000L)
+        val r3 = ctrl.processGpsFix(r2.state, GpsFix(shape[43].lat, shape[43].lon, 0f, speedMps = 13.4f, accuracyMeters = 4f, timestampMs = 6_000L), signalAt1Km, emptyList(), DistanceUnit.METRIC, AppLanguage.ENGLISH, false, nowMs = 6_000L)
         assertNull("Combined cue must suppress duplicate 1 km / post-signal speech", r3.maneuverToSpeak)
 
         // Android Auto CarCameraProfile focus target frames ahead toward the turn without deadzone drop
-        val autoStart = CarCameraSnapshot(lat = shape[90].lat, lon = shape[90].lon, zoom = 15.2, bearing = 0.0, tilt = 48.0, turnFocusActive = false)
-        val autoFocus = CarCameraProfile.computeNavigationCamera(
-            location = shape[90],
-            headingDegrees = 0f,
-            speedMps = 13.4f,
-            is3DView = true,
-            carMapView = CarMapView.NORMAL,
+        val autoNav = ActiveNavigationState(
+            isNavigating = true,
+            route = route,
+            currentManeuverIndex = 1,
+            distanceToNextManeuverMeters = 500.0,
+            snappedLocation = shape[90],
+            snappedBearing = 0f,
+            snappedShapeIndex = 90,
             turnFocusActive = true,
+            turnFocusCameraActive = true,
             turnFocusIsHighway = false,
+            turnFocusManeuverIndex = 1,
             turnFocusStage = TurnFocusStage.APPROACH,
-            turnFocusTargetZoom = 16.8,
-            framedFocusLocation = TurnFocusStageHelper.computeApproachCameraTarget(route, route.maneuvers[1], shape[90], 500.0, TurnFocusStage.APPROACH)
+            turnFocusTargetZoom = 16.8
         )
-        assertTrue("Android Auto focus entry must never be dropped by deadzone", CarCameraProfile.shouldApplyUpdate(autoStart, autoFocus))
-        assertTrue("Android Auto focus zoom must increase toward approach zoom", autoFocus.zoom > autoStart.zoom)
+        val autoFocus = CarCameraProfile.computeFocusCameraUpdate(
+            nav = autoNav,
+            loc = shape[90],
+            bearing = 0f,
+            is3DView = true,
+            enteringFocus = true,
+            tightening = false
+        )
+        assertTrue("Android Auto focus target must frame ahead toward the turn", autoFocus.target.lat > shape[90].lat)
+        assertEquals(16.8, autoFocus.zoom, 0.01)
     }
 }

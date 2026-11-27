@@ -1,6 +1,8 @@
 package com.example
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.LayoutDirection
@@ -45,28 +45,58 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /**
  * Robolectric Compose UI screenshot tests rendering the actual TurnByTurnTopHud + dedicated
  * blue-lane panel (with junction preview visible) in English LTR and Persian RTL to PNG files.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [36], qualifiers = "w412dp-h915dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class IntegratedGuidanceScreenshotTest {
 
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun saveRootScreenshot(fileName: String): File {
+    private fun saveRootScreenshot(fileName: String): Bitmap {
+        composeRule.waitForIdle()
+        val bounds = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        val decor = composeRule.activity.window.decorView
+        val fullW = decor.width.coerceAtLeast(1)
+        val fullH = decor.height.coerceAtLeast(1)
+        val fullBmp = Bitmap.createBitmap(fullW, fullH, Bitmap.Config.ARGB_8888)
+        composeRule.runOnUiThread {
+            decor.draw(Canvas(fullBmp))
+        }
+        val left = floor(bounds.left).toInt().coerceIn(0, fullW - 1)
+        val top = floor(bounds.top).toInt().coerceIn(0, fullH - 1)
+        val width = ceil(bounds.width).toInt().coerceIn(1, fullW - left)
+        val height = ceil(bounds.height).toInt().coerceIn(1, fullH - top)
+        val cropped = Bitmap.createBitmap(fullBmp, left, top, width, height)
         val dir = File("build/outputs/regression_screenshots").apply { mkdirs() }
         val file = File(dir, fileName)
-        val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
         FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            cropped.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
         assertTrue("Screenshot $fileName must exist and be non-empty", file.exists() && file.length() > 1000L)
-        return file
+        println("GENERATED_COMPOSE_SCREENSHOT=${file.path} (${cropped.width}x${cropped.height}, ${file.length()} bytes)")
+        return cropped
+    }
+
+    private fun countBrightBluePixels(bmp: Bitmap): Int {
+        var count = 0
+        for (y in 0 until bmp.height step 2) {
+            for (x in 0 until bmp.width step 2) {
+                val px = bmp.getPixel(x, y)
+                val r = (px shr 16) and 0xFF
+                val g = (px shr 8) and 0xFF
+                val b = px and 0xFF
+                if (b > 170 && b > r + 60) count++
+            }
+        }
+        return count
     }
 
     @Test
@@ -139,9 +169,11 @@ class IntegratedGuidanceScreenshotTest {
             }
         }
         composeRule.onNodeWithTag("dedicated_lane_panel").assertExists()
-        composeRule.onNodeWithTag("lane_slot_2").assertExists()
-        composeRule.onNodeWithTag("lane_slot_3").assertExists()
-        saveRootScreenshot("highway_exit_195_500m_en_ltr.png")
+        composeRule.onNodeWithTag("lane_box_2").assertExists()
+        composeRule.onNodeWithTag("lane_box_3").assertExists()
+        val bmp = saveRootScreenshot("highway_exit_195_500m_en_ltr.png")
+        val bluePixels = countBrightBluePixels(bmp)
+        assertTrue("Highway 500m HUD screenshot must render bright blue lane pixels (found $bluePixels)", bluePixels > 500)
     }
 
     @Test
@@ -205,12 +237,14 @@ class IntegratedGuidanceScreenshotTest {
                 }
             }
         }
-        val slot0 = composeRule.onNodeWithTag("lane_slot_0").fetchSemanticsNode().boundsInRoot
-        val slot1 = composeRule.onNodeWithTag("lane_slot_1").fetchSemanticsNode().boundsInRoot
+        val slot0 = composeRule.onNodeWithTag("lane_box_0").fetchSemanticsNode().boundsInRoot
+        val slot1 = composeRule.onNodeWithTag("lane_box_1").fetchSemanticsNode().boundsInRoot
         assertTrue(
             "Physical LTR order must hold in Persian RTL (slot0.left=${slot0.left} < slot1.left=${slot1.left})",
             slot0.left < slot1.left
         )
-        saveRootScreenshot("city_oak_st_blue_lane_fa_rtl.png")
+        val bmp = saveRootScreenshot("city_oak_st_blue_lane_fa_rtl.png")
+        val bluePixels = countBrightBluePixels(bmp)
+        assertTrue("Persian RTL city HUD screenshot must render bright blue lane pixels (found $bluePixels)", bluePixels > 300)
     }
 }

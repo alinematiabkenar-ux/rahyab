@@ -87,6 +87,15 @@ internal object NavigationGeometryHelper {
         var idx = startIndex.coerceIn(0, shape.lastIndex)
         var remaining = distanceMeters
         var curPt = currentLocation ?: shape[idx]
+        if (remaining <= 0.0) {
+            val bearing = if (idx < shape.lastIndex) {
+                ValhallaResponseParser.bearingDegrees(curPt, shape[idx + 1]).toFloat()
+            } else {
+                val prev = shape.getOrElse((idx - 1).coerceAtLeast(0)) { curPt }
+                ValhallaResponseParser.bearingDegrees(prev, curPt).toFloat()
+            }
+            return Triple(idx, curPt, bearing)
+        }
         while (idx < shape.lastIndex && remaining > 0.0) {
             val nextPt = shape[idx + 1]
             val segLen = OfflinePlaceSearchEngine.haversineMeters(curPt.lat, curPt.lon, nextPt.lat, nextPt.lon)

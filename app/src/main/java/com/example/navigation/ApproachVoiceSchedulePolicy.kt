@@ -122,7 +122,7 @@ internal object ApproachVoiceSchedulePolicy {
 
         // 2. 500 m short preparation cue (crossing detection + entry band + late-start catchup)
         val crossed500 = crossedThreshold(previousDistMeters, currentDistMeters, HW_500M_METERS)
-        val in500Band = currentDistMeters in 340.0..540.0
+        val in500Band = currentDistMeters in 340.0..500.0
         val lateBelow500 = currentDistMeters > hwFinalDist + 15.0 &&
             currentDistMeters < 340.0 &&
             NavigationSessionController.STAGE_HW_500M !in spokenForManeuver
@@ -132,8 +132,8 @@ internal object ApproachVoiceSchedulePolicy {
 
         // 3. 1 mile exit + lane recommendation cue
         val crossed1Mi = crossedThreshold(previousDistMeters, currentDistMeters, HW_1MI_METERS)
-        val in1MiBand = currentDistMeters in 1_450.0..1_780.0
-        val lateBelow1Mi = currentDistMeters > 540.0 &&
+        val in1MiBand = currentDistMeters in 1_450.0..1_620.0
+        val lateBelow1Mi = currentDistMeters > 500.0 &&
             currentDistMeters < 1_450.0 &&
             NavigationSessionController.STAGE_HW_1MI !in spokenForManeuver
         if (crossed1Mi || in1MiBand || lateBelow1Mi) {
@@ -142,7 +142,7 @@ internal object ApproachVoiceSchedulePolicy {
 
         // 4. 2 mile early exit + side cue
         val crossed2Mi = crossedThreshold(previousDistMeters, currentDistMeters, HW_2MI_METERS)
-        val in2MiBand = currentDistMeters in 2_950.0..3_450.0
+        val in2MiBand = currentDistMeters in 2_950.0..3_230.0
         if (crossed2Mi || in2MiBand) {
             return ScheduleSelection(stage = NavigationSessionController.STAGE_HW_2MI)
         }
@@ -195,7 +195,7 @@ internal object ApproachVoiceSchedulePolicy {
             NavigationSessionController.STAGE_CITY_1KM_POST_SIGNAL in spokenForManeuver
 
         val crossed1Km = crossedThreshold(previousDistMeters, currentDistMeters, CITY_1KM_METERS)
-        val in1KmBand = currentDistMeters in 920.0..1_040.0
+        val in1KmBand = currentDistMeters in 920.0..1_000.0
         val oneKmDue = !oneKmAlreadySpoken && (crossed1Km || in1KmBand)
 
         // Check signal-triggered cue
@@ -233,11 +233,7 @@ internal object ApproachVoiceSchedulePolicy {
             }
             return ScheduleSelection(
                 stage = stage,
-                matchedSignal = matchedSignal,
-                extraStagesToMarkSpoken = setOf(
-                    NavigationSessionController.STAGE_CITY_POST_SIGNAL,
-                    NavigationSessionController.STAGE_CITY_POST_SIGNAL_DIST
-                )
+                matchedSignal = matchedSignal
             )
         }
 
@@ -262,7 +258,12 @@ internal object ApproachVoiceSchedulePolicy {
             matchedSignal.distanceBeforeManeuverMeters <= 400.0
         val hasTargetSignalAhead = matchedSignal.kind == ApproachSignalKind.AT_TARGET_INTERSECTION
 
-        if (!signalAlreadySpoken && !hasMappedSignalAheadBeforeTarget && !hasTargetSignalAhead) {
+        val signalSpokenNearTurn = NavigationSessionController.STAGE_CITY_POST_SIGNAL in spokenForManeuver ||
+            NavigationSessionController.STAGE_CITY_PRE_STOP_LINE in spokenForManeuver ||
+            (NavigationSessionController.STAGE_CITY_POST_SIGNAL_DIST in spokenForManeuver &&
+                matchedSignal.distanceBeforeManeuverMeters <= 550.0)
+
+        if (!signalSpokenNearTurn && !hasMappedSignalAheadBeforeTarget && !hasTargetSignalAhead) {
             val isMetric = unit == DistanceUnit.METRIC
             val cityNearRange = if (isMetric) 250.0..350.0 else 260.0..365.0
             val dynamicPrepDist = ManeuverTimingPlanner.computePreparationDistanceMeters(
