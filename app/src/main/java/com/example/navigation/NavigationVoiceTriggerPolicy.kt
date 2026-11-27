@@ -118,7 +118,11 @@ internal object NavigationVoiceTriggerPolicy {
         }
     }
 
-    fun markPassedEarlierStages(spokenStages: MutableSet<String>, currentStage: String) {
+    fun markPassedEarlierStages(
+        spokenStages: MutableSet<String>,
+        currentStage: String,
+        currentDistMeters: Double = 0.0
+    ) {
         when (currentStage) {
             NavigationSessionController.STAGE_HW_1MI ->
                 spokenStages.add(NavigationSessionController.STAGE_HW_2MI)
@@ -126,27 +130,68 @@ internal object NavigationVoiceTriggerPolicy {
                 spokenStages.add(NavigationSessionController.STAGE_HW_2MI)
                 spokenStages.add(NavigationSessionController.STAGE_HW_1MI)
             }
-            NavigationSessionController.STAGE_HW_QUARTER_MI -> {
-                spokenStages.add(NavigationSessionController.STAGE_HW_2MI)
-                spokenStages.add(NavigationSessionController.STAGE_HW_1MI)
-                spokenStages.add(NavigationSessionController.STAGE_HW_HALF_MI)
-            }
-            NavigationSessionController.STAGE_HW_NOW -> {
+            NavigationSessionController.STAGE_HW_500M -> {
                 spokenStages.add(NavigationSessionController.STAGE_HW_2MI)
                 spokenStages.add(NavigationSessionController.STAGE_HW_1MI)
                 spokenStages.add(NavigationSessionController.STAGE_HW_HALF_MI)
                 spokenStages.add(NavigationSessionController.STAGE_HW_QUARTER_MI)
             }
+            NavigationSessionController.STAGE_HW_QUARTER_MI -> {
+                spokenStages.add(NavigationSessionController.STAGE_HW_2MI)
+                spokenStages.add(NavigationSessionController.STAGE_HW_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_HW_HALF_MI)
+                spokenStages.add(NavigationSessionController.STAGE_HW_500M)
+            }
+            NavigationSessionController.STAGE_HW_NOW -> {
+                spokenStages.add(NavigationSessionController.STAGE_HW_2MI)
+                spokenStages.add(NavigationSessionController.STAGE_HW_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_HW_HALF_MI)
+                spokenStages.add(NavigationSessionController.STAGE_HW_500M)
+                spokenStages.add(NavigationSessionController.STAGE_HW_QUARTER_MI)
+            }
+            NavigationSessionController.STAGE_CITY_1KM -> {
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_HALF_MI)
+            }
             NavigationSessionController.STAGE_CITY_HALF_MI ->
                 spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+            NavigationSessionController.STAGE_CITY_POST_SIGNAL,
+            NavigationSessionController.STAGE_CITY_PRE_STOP_LINE -> {
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1KM)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_HALF_MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1000FT)
+            }
+            NavigationSessionController.STAGE_CITY_POST_SIGNAL_DIST -> {
+                // Only mark 1 km passed if we are already at or below 1 km; a signal > 1 km away
+                // must still allow the 1 km cue to fire later in chronological order.
+                if (currentDistMeters <= ApproachVoiceSchedulePolicy.CITY_1KM_METERS) {
+                    spokenStages.add(NavigationSessionController.STAGE_CITY_1KM)
+                    spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+                    spokenStages.add(NavigationSessionController.STAGE_CITY_HALF_MI)
+                }
+            }
+            NavigationSessionController.STAGE_CITY_1KM_POST_SIGNAL -> {
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1KM)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_HALF_MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_POST_SIGNAL)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_POST_SIGNAL_DIST)
+            }
             NavigationSessionController.STAGE_CITY_1000FT -> {
                 spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1KM)
                 spokenStages.add(NavigationSessionController.STAGE_CITY_HALF_MI)
             }
             NavigationSessionController.STAGE_CITY_NOW -> {
                 spokenStages.add(NavigationSessionController.STAGE_CITY_1MI)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1KM)
                 spokenStages.add(NavigationSessionController.STAGE_CITY_HALF_MI)
                 spokenStages.add(NavigationSessionController.STAGE_CITY_1000FT)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_POST_SIGNAL)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_POST_SIGNAL_DIST)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_PRE_STOP_LINE)
+                spokenStages.add(NavigationSessionController.STAGE_CITY_1KM_POST_SIGNAL)
             }
             NavigationSessionController.STAGE_BIKE_30M ->
                 spokenStages.add(NavigationSessionController.STAGE_BIKE_100M)
@@ -156,7 +201,8 @@ internal object NavigationVoiceTriggerPolicy {
     data class VoiceTriggerResult(
         val maneuverToSpeak: Pair<RouteManeuver, String>?,
         val lastSpokenManeuverIndex: Int,
-        val lastSpokenManeuverTimeMs: Long
+        val lastSpokenManeuverTimeMs: Long,
+        val matchedSignal: MatchedApproachSignal = MatchedApproachSignal()
     )
 
     fun evaluateVoiceTrigger(
@@ -172,20 +218,51 @@ internal object NavigationVoiceTriggerPolicy {
         eventTimeMs: Long,
         lastSpokenManeuverIndex: Int,
         lastSpokenManeuverTimeMs: Long,
-        travelMode: TravelMode = if (isWalkingMode) TravelMode.WALK else TravelMode.DRIVE
+        travelMode: TravelMode = if (isWalkingMode) TravelMode.WALK else TravelMode.DRIVE,
+        route: OfflineRoute? = null,
+        upcomingManeuverIdx: Int = -1,
+        vehicleProgressMeters: Double = 0.0,
+        isUpcomingAlreadyPassed: Boolean = false,
+        previousDistMeters: Double? = null,
+        previousSignalPassed: Boolean? = null,
+        trafficSignals: List<com.example.data.search.RoadHazardPoint> = emptyList()
     ): VoiceTriggerResult {
-        val rawStageKey = selectVoiceStage(
-            hasArrived = hasArrived,
-            isWalkingMode = isWalkingMode,
-            speedMps = speedMps,
-            isHighway = isHighway,
-            upcomingManeuver = upcomingManeuver,
-            approachManeuver = approachManeuver,
-            distToNextManeuver = distToNextManeuver,
-            unit = unit,
-            spokenForManeuver = spokenForManeuver,
-            travelMode = travelMode
-        )
+        val scheduleSelection = if (!hasArrived && travelMode == TravelMode.DRIVE && route != null) {
+            ApproachVoiceSchedulePolicy.selectScheduleStage(
+                route = route,
+                upcomingManeuverIdx = upcomingManeuverIdx,
+                upcomingManeuver = upcomingManeuver,
+                approachManeuver = approachManeuver,
+                vehicleProgressMeters = vehicleProgressMeters,
+                isUpcomingAlreadyPassed = isUpcomingAlreadyPassed,
+                previousDistMeters = previousDistMeters,
+                currentDistMeters = distToNextManeuver,
+                previousSignalPassed = previousSignalPassed,
+                speedMps = speedMps,
+                isHighway = isHighway,
+                unit = unit,
+                spokenForManeuver = spokenForManeuver,
+                trafficSignals = trafficSignals
+            )
+        } else null
+
+        val rawStageKey = if (scheduleSelection != null) {
+            scheduleSelection.stage
+        } else {
+            selectVoiceStage(
+                hasArrived = hasArrived,
+                isWalkingMode = isWalkingMode,
+                speedMps = speedMps,
+                isHighway = isHighway,
+                upcomingManeuver = upcomingManeuver,
+                approachManeuver = approachManeuver,
+                distToNextManeuver = distToNextManeuver,
+                unit = unit,
+                spokenForManeuver = spokenForManeuver,
+                travelMode = travelMode
+            )
+        }
+        val matchedSignal = scheduleSelection?.matchedSignal ?: MatchedApproachSignal()
         val isDifferentManeuver = lastSpokenManeuverIndex != -1 && lastSpokenManeuverIndex != upcomingManeuver.index
         val elapsedSinceLastSpokenMs = eventTimeMs - lastSpokenManeuverTimeMs
         val bypassCooldown = rawStageKey != null && ManeuverTimingPlanner.shouldBypassInterManeuverCooldown(
@@ -210,17 +287,20 @@ internal object NavigationVoiceTriggerPolicy {
             elapsedSinceLastSpokenMs in 0L until requiredCooldownMs
 
         return if (rawStageKey != null && !isBlockedByOverlapGuard && spokenForManeuver.add(rawStageKey)) {
-            markPassedEarlierStages(spokenForManeuver, rawStageKey)
+            scheduleSelection?.extraStagesToMarkSpoken?.let { spokenForManeuver.addAll(it) }
+            markPassedEarlierStages(spokenForManeuver, rawStageKey, distToNextManeuver)
             VoiceTriggerResult(
                 maneuverToSpeak = upcomingManeuver to rawStageKey,
                 lastSpokenManeuverIndex = upcomingManeuver.index,
-                lastSpokenManeuverTimeMs = eventTimeMs
+                lastSpokenManeuverTimeMs = eventTimeMs,
+                matchedSignal = matchedSignal
             )
         } else {
             VoiceTriggerResult(
                 maneuverToSpeak = null,
                 lastSpokenManeuverIndex = lastSpokenManeuverIndex,
-                lastSpokenManeuverTimeMs = lastSpokenManeuverTimeMs
+                lastSpokenManeuverTimeMs = lastSpokenManeuverTimeMs,
+                matchedSignal = matchedSignal
             )
         }
     }

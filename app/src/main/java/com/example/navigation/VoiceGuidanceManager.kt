@@ -44,6 +44,8 @@ class VoiceGuidanceManager(
     private var voiceEnabled: Boolean = true
     private var lastSpokenKey: String = ""
     private var lastSpokenTimeMs: Long = 0L
+    private var lastSpokenRouteId: String? = null
+    private val spokenRouteStageKeys = mutableSetOf<String>()
     private var lastOverspeedBeepMs: Long = 0L
     private var lastCameraChimeMs: Long = 0L
     private val laneChangeTonePlayer = LaneChangeTonePlayer()
@@ -130,9 +132,15 @@ class VoiceGuidanceManager(
         _lastSpokenText.value = utterance
         if (!voiceEnabled || !engineSelector.isInitialized) return utterance
 
+        if (routeId != null && routeId != lastSpokenRouteId) {
+            spokenRouteStageKeys.clear()
+            lastSpokenRouteId = routeId
+        }
         val key = "${routeId.orEmpty()}_${maneuver.index}_$announcementStage"
         val now = clockMs()
-        if (key == lastSpokenKey && now - lastSpokenTimeMs < 7000L) return utterance
+        if ((routeId != null && key in spokenRouteStageKeys) || (key == lastSpokenKey && now - lastSpokenTimeMs < 7000L)) {
+            return utterance
+        }
 
         val priority = if (VoicePhraseBuilder.isFinalTurnStage(announcementStage) ||
             announcementStage == NavigationSessionController.STAGE_ARRIVED
@@ -147,6 +155,7 @@ class VoiceGuidanceManager(
         if (spoken) {
             lastSpokenKey = key
             lastSpokenTimeMs = now
+            if (routeId != null) spokenRouteStageKeys.add(key)
         }
         return utterance
     }
@@ -393,7 +402,7 @@ class VoiceGuidanceManager(
     }
 
     fun cancelTurnFocusBeeps() = turnFocusAudioPlayer.cancelPending()
-    fun resetDeduplication() { lastSpokenKey = ""; lastSpokenTimeMs = 0L }
+    fun resetDeduplication() { lastSpokenKey = ""; lastSpokenTimeMs = 0L; lastSpokenRouteId = null; spokenRouteStageKeys.clear() }
     fun shutdown() { stopSpeaking(); engineSelector.shutdown() }
 
     companion object {

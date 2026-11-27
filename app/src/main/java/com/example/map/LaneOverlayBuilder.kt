@@ -145,12 +145,9 @@ object LaneOverlayBuilder {
         if (lanes.size < 2) return null
         if (!hasSupportedRoadLaneGeometry(route, maneuver)) return null
 
-        // LN4: If every lane is valid, show no overlay
-        val allValid = lanes.all { it.isValid || it.isRecommended || it.isActive || it.highlightTier != LaneHighlightTier.INACTIVE }
-        if (allValid) return null
-
-        // Match LaneGuidanceDecision.primaryTargetIndices: highlight ONLY preferred (ACTIVE) lanes
-        // when present; never paint merely VALID lanes primary blue alongside an ACTIVE lane.
+        // Match LaneGuidanceDecision.primaryTargetIndices: resolve preferred (ACTIVE) lanes FIRST
+        // so a legally valid neighboring lane never suppresses a strictly preferred blue lane.
+        // Suppress the overlay only when no lane is targeted or EVERY lane is equally targeted.
         val hasPreferredActive = lanes.any { it.isActive || it.highlightTier == LaneHighlightTier.ACTIVE }
         val targetFlags = lanes.map { lane ->
             if (hasPreferredActive) {

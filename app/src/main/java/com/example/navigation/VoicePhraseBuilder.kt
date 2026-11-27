@@ -156,8 +156,10 @@ internal object VoicePhraseBuilder {
 
     fun isEarlyPrepareStage(stage: String): Boolean =
         stage == NavigationSessionController.STAGE_CITY_1MI ||
+            stage == NavigationSessionController.STAGE_CITY_1KM ||
             stage == NavigationSessionController.STAGE_CITY_HALF_MI ||
             stage == NavigationSessionController.STAGE_HW_1MI ||
+            stage == NavigationSessionController.STAGE_HW_500M ||
             stage == NavigationSessionController.STAGE_HW_HALF_MI ||
             stage == NavigationSessionController.STAGE_HW_2MI
 
@@ -177,40 +179,39 @@ internal object VoicePhraseBuilder {
         laneDecision: LaneGuidanceDecision? = null
     ): String {
         val isFinalStage = isFinalTurnStage(announcementStage)
-        val distPhrase = if (isFinalStage) "" else formatSpokenDistance(distanceMeters, unit, language)
         val allowLanes = includeLaneGuidance &&
             !isFinalStage &&
             (laneDecision == null || (laneDecision.hasActionableLaneGuidance &&
                 !laneDecision.shouldSkipLaneChangeInstruction &&
                 laneDecision.confidence != LaneConfidence.LOW))
         val lanePhrase = if (allowLanes) buildLaneVoiceClause(maneuver.lanes, language) else null
-        val isEarlyPrepare = lanePhrase.isNullOrBlank() && isEarlyPrepareStage(announcementStage)
-        val exitNum = maneuver.signpost?.primaryExitNumber
-        val toward = maneuver.signpost?.exitTowards?.firstOrNull().orEmpty()
-        val roadName = maneuver.streetNames.firstOrNull().orEmpty()
 
-        val primary = if (language == AppLanguage.PERSIAN) {
-            VoicePersianPhraseBuilder.buildPersianInstruction(
-                type = maneuver.type,
-                distPhrase = distPhrase,
-                lanePhrase = lanePhrase,
-                isEarlyPrepare = isEarlyPrepare,
-                exitNum = exitNum,
-                toward = toward,
-                roadName = roadName,
-                roundaboutExit = maneuver.roundaboutExitCount
+        val scheduledPrimary = if (announcementStage.isNotEmpty()) {
+            ApproachVoicePhraseFormatter.formatStagePhrase(
+                maneuver = maneuver,
+                distanceMeters = distanceMeters,
+                unit = unit,
+                language = language,
+                stage = announcementStage,
+                lanePhrase = lanePhrase
             )
-        } else {
-            buildEnglishInstruction(
-                type = maneuver.type,
-                distPhrase = distPhrase,
-                lanePhrase = lanePhrase,
-                isEarlyPrepare = isEarlyPrepare,
-                exitNum = exitNum,
-                toward = toward,
-                roadName = roadName,
-                roundaboutExit = maneuver.roundaboutExitCount
-            )
+        } else null
+
+        val primary = scheduledPrimary ?: run {
+            val distPhrase = if (isFinalStage) "" else formatSpokenDistance(distanceMeters, unit, language)
+            val isEarlyPrepare = lanePhrase.isNullOrBlank() && isEarlyPrepareStage(announcementStage)
+            val exitNum = maneuver.signpost?.primaryExitNumber
+            val toward = maneuver.signpost?.exitTowards?.firstOrNull().orEmpty()
+            val roadName = maneuver.streetNames.firstOrNull().orEmpty()
+            if (language == AppLanguage.PERSIAN) {
+                VoicePersianPhraseBuilder.buildPersianInstruction(
+                    maneuver.type, distPhrase, lanePhrase, isEarlyPrepare, exitNum, toward, roadName, maneuver.roundaboutExitCount
+                )
+            } else {
+                buildEnglishInstruction(
+                    maneuver.type, distPhrase, lanePhrase, isEarlyPrepare, exitNum, toward, roadName, maneuver.roundaboutExitCount
+                )
+            }
         }
         val followUpClause = nextManeuver?.let { buildBackToBackClause(it, language) }
         return if (!followUpClause.isNullOrBlank()) {

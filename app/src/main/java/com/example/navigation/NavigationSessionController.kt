@@ -19,6 +19,8 @@ class NavigationSessionController {
     private val lastSpokenAlertIds = mutableSetOf<String>()
     private val spokenFreeDriveCameraIds = mutableSetOf<String>()
     private val spokenStagesByManeuver = mutableMapOf<Int, MutableSet<String>>()
+    private val previousDistByManeuver = mutableMapOf<Int, Double>()
+    private val previousSignalPassedByManeuver = mutableMapOf<Int, Boolean>()
     private val displayedJunctionManeuverIndices = mutableSetOf<Int>()
     private var trackedRouteId: String? = null
     private var lastSpokenManeuverIndex: Int = -1
@@ -26,15 +28,11 @@ class NavigationSessionController {
     private val travelModeEtaAdjuster = TravelModeEtaAdjuster()
 
     fun reset() {
-        offRouteCount = 0
-        lastRerouteRequestMs = 0L
-        lastSpokenAlertIds.clear()
-        spokenFreeDriveCameraIds.clear()
-        spokenStagesByManeuver.clear()
+        offRouteCount = 0; lastRerouteRequestMs = 0L
+        lastSpokenAlertIds.clear(); spokenFreeDriveCameraIds.clear()
+        spokenStagesByManeuver.clear(); previousDistByManeuver.clear(); previousSignalPassedByManeuver.clear()
         displayedJunctionManeuverIndices.clear()
-        trackedRouteId = null
-        lastSpokenManeuverIndex = -1
-        lastSpokenManeuverTimeMs = 0L
+        trackedRouteId = null; lastSpokenManeuverIndex = -1; lastSpokenManeuverTimeMs = 0L
         travelModeEtaAdjuster.reset()
     }
 
@@ -93,11 +91,9 @@ class NavigationSessionController {
         }
 
         if (trackedRouteId != route.id) {
-            spokenStagesByManeuver.clear()
+            spokenStagesByManeuver.clear(); previousDistByManeuver.clear(); previousSignalPassedByManeuver.clear()
             displayedJunctionManeuverIndices.clear()
-            trackedRouteId = route.id
-            lastSpokenManeuverIndex = -1
-            lastSpokenManeuverTimeMs = 0L
+            trackedRouteId = route.id; lastSpokenManeuverIndex = -1; lastSpokenManeuverTimeMs = 0L
             travelModeEtaAdjuster.reset()
         }
 
@@ -202,64 +198,48 @@ class NavigationSessionController {
             TravelMode.DRIVE -> distToDest < 35.0 && remainingDistance < 60.0
         }
 
-        // 6. Speed-aware & road-class-aware voice timing with early lane-change warnings
+        // 6. Speed-aware & road-class-aware voice timing with threshold crossing & signal awareness
+        val vehicleProgressMeters = NavigationGeometryHelper.progressAlongRouteMeters(route.shape, snappedLoc, bestIdx)
+        val upcomingProgressMeters = NavigationGeometryHelper.vertexProgressMeters(route.shape, upcomingManeuver.beginShapeIndex)
+        val isUpcomingAlreadyPassed = vehicleProgressMeters > upcomingProgressMeters + 1.0
         val isHighway = isDrive && (upcomingManeuver.isHighwayRoad || fix.speedMps >= 20f)
         val approachManeuver = route.maneuvers.getOrNull(upcomingManeuverIdx - 1)
         val spokenForManeuver = spokenStagesByManeuver.getOrPut(upcomingManeuver.index) { mutableSetOf() }
+        val prevDistForManeuver = previousDistByManeuver[upcomingManeuver.index]
+        val prevSignalPassed = previousSignalPassedByManeuver[upcomingManeuver.index]
         val voiceTrigger = NavigationVoiceTriggerPolicy.evaluateVoiceTrigger(
-            hasArrived = hasArrived,
-            isWalkingMode = isWalk,
-            speedMps = fix.speedMps,
-            isHighway = isHighway,
-            upcomingManeuver = upcomingManeuver,
-            approachManeuver = approachManeuver,
-            distToNextManeuver = distToNextManeuver,
-            unit = unit,
-            spokenForManeuver = spokenForManeuver,
-            eventTimeMs = eventTimeMs,
-            lastSpokenManeuverIndex = lastSpokenManeuverIndex,
-            lastSpokenManeuverTimeMs = lastSpokenManeuverTimeMs,
-            travelMode = mode
+            hasArrived = hasArrived, isWalkingMode = isWalk, speedMps = fix.speedMps, isHighway = isHighway,
+            upcomingManeuver = upcomingManeuver, approachManeuver = approachManeuver,
+            distToNextManeuver = distToNextManeuver, unit = unit, spokenForManeuver = spokenForManeuver,
+            eventTimeMs = eventTimeMs, lastSpokenManeuverIndex = lastSpokenManeuverIndex,
+            lastSpokenManeuverTimeMs = lastSpokenManeuverTimeMs, travelMode = mode,
+            route = route, upcomingManeuverIdx = upcomingManeuverIdx,
+            vehicleProgressMeters = vehicleProgressMeters, isUpcomingAlreadyPassed = isUpcomingAlreadyPassed,
+            previousDistMeters = prevDistForManeuver, previousSignalPassed = prevSignalPassed,
+            trafficSignals = dbHazards
         )
+        previousDistByManeuver[upcomingManeuver.index] = distToNextManeuver
+        if (voiceTrigger.matchedSignal.kind != ApproachSignalKind.NONE) {
+            previousSignalPassedByManeuver[upcomingManeuver.index] = voiceTrigger.matchedSignal.hasPassedSignal
+        }
         lastSpokenManeuverIndex = voiceTrigger.lastSpokenManeuverIndex
         lastSpokenManeuverTimeMs = voiceTrigger.lastSpokenManeuverTimeMs
         val maneuverToSpeak = voiceTrigger.maneuverToSpeak
 
         // 7. Lane guidance visibility (DRIVE only; always visible before any preparation or Turn Focus cue)
         val laneWindowMeters = ManeuverTimingPlanner.lanePanelLeadDistanceMeters(
-            maneuver = upcomingManeuver,
-            approachManeuver = approachManeuver,
-            speedMps = fix.speedMps,
-            isHighway = isHighway,
-            baseLaneWindowMeters = laneStripWindowMeters(unit)
+            maneuver = upcomingManeuver, approachManeuver = approachManeuver, speedMps = fix.speedMps,
+            isHighway = isHighway, baseLaneWindowMeters = laneStripWindowMeters(unit)
         )
-        val showLaneStrip = isDrive &&
-            !hasArrived &&
-            !isOffRouteNow &&
-            !shouldReroute &&
-            !currentState.isRerouting &&
-            upcomingManeuver.lanes.isNotEmpty() &&
-            distToNextManeuver <= laneWindowMeters
+        val showLaneStrip = isDrive && !hasArrived && !isOffRouteNow && !shouldReroute &&
+            !currentState.isRerouting && upcomingManeuver.lanes.isNotEmpty() && distToNextManeuver <= laneWindowMeters
 
-        val triggeredHalfMilePulse = isDrive &&
-            maneuverToSpeak != null &&
-            upcomingManeuver.lanes.isNotEmpty() &&
-            (maneuverToSpeak.second == STAGE_HW_HALF_MI || maneuverToSpeak.second == STAGE_CITY_HALF_MI)
-        val nextLanePulseManeuverIndex = if (triggeredHalfMilePulse) {
-            upcomingManeuver.index
-        } else {
-            currentState.lanePulseManeuverIndex
-        }
-        val nextLanePulseTriggerCount = if (triggeredHalfMilePulse) {
-            currentState.lanePulseTriggerCount + 1
-        } else {
-            currentState.lanePulseTriggerCount
-        }
+        val triggeredHalfMilePulse = isDrive && maneuverToSpeak != null && upcomingManeuver.lanes.isNotEmpty() &&
+            maneuverToSpeak.second in setOf(STAGE_HW_500M, STAGE_HW_HALF_MI, STAGE_CITY_HALF_MI, STAGE_CITY_POST_SIGNAL)
+        val nextLanePulseManeuverIndex = if (triggeredHalfMilePulse) upcomingManeuver.index else currentState.lanePulseManeuverIndex
+        val nextLanePulseTriggerCount = if (triggeredHalfMilePulse) currentState.lanePulseTriggerCount + 1 else currentState.lanePulseTriggerCount
 
         // 8. Highway Junction View (DRIVE only, 800 m before to 50 m after ONLY if shown on approach)
-        val vehicleProgressMeters = NavigationGeometryHelper.progressAlongRouteMeters(route.shape, snappedLoc, bestIdx)
-        val upcomingProgressMeters = NavigationGeometryHelper.vertexProgressMeters(route.shape, upcomingManeuver.beginShapeIndex)
-        val isUpcomingAlreadyPassed = vehicleProgressMeters > upcomingProgressMeters + 1.0
         val distPastPrevMeters = approachManeuver?.let {
             (vehicleProgressMeters - NavigationGeometryHelper.vertexProgressMeters(route.shape, it.beginShapeIndex)).coerceAtLeast(0.0)
         }
@@ -417,11 +397,17 @@ class NavigationSessionController {
         const val STAGE_ARRIVED = "arrived"
         const val STAGE_HW_2MI = "hw_2mi"
         const val STAGE_HW_1MI = "hw_1mi"
+        const val STAGE_HW_500M = "hw_500m"
         const val STAGE_HW_HALF_MI = "hw_half_mi"
         const val STAGE_HW_QUARTER_MI = "hw_quarter_mi"
         const val STAGE_HW_NOW = "hw_now"
         const val STAGE_CITY_1MI = "city_1mi"
+        const val STAGE_CITY_1KM = "city_1km"
         const val STAGE_CITY_HALF_MI = "city_half_mi"
+        const val STAGE_CITY_POST_SIGNAL = "city_post_signal"
+        const val STAGE_CITY_POST_SIGNAL_DIST = "city_post_signal_dist"
+        const val STAGE_CITY_PRE_STOP_LINE = "city_pre_stop_line"
+        const val STAGE_CITY_1KM_POST_SIGNAL = "city_1km_post_signal"
         const val STAGE_CITY_1000FT = "city_1000ft"
         const val STAGE_CITY_NOW = "city_now"
         const val STAGE_BIKE_100M = "bike_100m"

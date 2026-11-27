@@ -18,10 +18,15 @@ import kotlinx.coroutines.launch
 
 internal fun RahYabViewModel.handleNavigationGpsFixImpl(fix: GpsFix) {
     val s = settings.value
+    val availableHazards = if (_visibleTrafficLights.value.isNotEmpty()) {
+        cachedDbHazards + _visibleTrafficLights.value
+    } else {
+        cachedDbHazards
+    }
     val result = navController.processGpsFix(
         currentState = _navigationState.value,
         fix = fix,
-        dbHazards = cachedDbHazards,
+        dbHazards = availableHazards,
         userReports = activeUserReports.value,
         unit = s.distanceUnit,
         language = s.language,

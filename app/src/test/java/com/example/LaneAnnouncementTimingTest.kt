@@ -177,45 +177,40 @@ class LaneAnnouncementTimingTest {
         val turnEvents = imperialEvents.filter { it.maneuverIndex == 1 && it.stage != NavigationSessionController.STAGE_ARRIVED }
         assertEquals(
             listOf(
-                NavigationSessionController.STAGE_CITY_1MI,
-                NavigationSessionController.STAGE_CITY_HALF_MI,
+                NavigationSessionController.STAGE_CITY_1KM,
                 NavigationSessionController.STAGE_CITY_1000FT,
                 NavigationSessionController.STAGE_CITY_NOW
             ),
             turnEvents.map { it.stage }
         )
 
-        // Verify exact English & Persian phrasing at 1 mile and half a mile
-        val at1Mi = turnEvents[0]
-        assertTrue("1mi trigger should be near 1 mile: ${at1Mi.distanceMeters}m", at1Mi.distanceMeters in 1450.0..1780.0)
-        assertEquals("In 1 mile, use the right two lanes to turn right onto Coburg Road.", at1Mi.textEn)
-        assertEquals("در یک مایلی، از دو خط سمت راست به راست بپیچید و وارد Coburg Road شوید.", at1Mi.textFa)
+        // Verify exact English & Persian phrasing at 1 km and final prep
+        val at1Km = turnEvents[0]
+        assertTrue("1km trigger should be near 1 km: ${at1Km.distanceMeters}m", at1Km.distanceMeters in 920.0..1040.0)
+        assertEquals("In one kilometer, turn right onto Coburg Road.", at1Km.textEn)
+        assertEquals("در یک کیلومتری، به راست بپیچید و وارد Coburg Road شوید.", at1Km.textFa)
 
-        val atHalfMi = turnEvents[1]
-        assertTrue("0.5mi trigger should be near half a mile: ${atHalfMi.distanceMeters}m", atHalfMi.distanceMeters in 720.0..920.0)
-        assertEquals("In half a mile, use the right two lanes to turn right onto Coburg Road.", atHalfMi.textEn)
-        assertEquals("در نیم مایلی، از دو خط سمت راست به راست بپیچید و وارد Coburg Road شوید.", atHalfMi.textFa)
+        val atPrep = turnEvents[1]
+        assertTrue("Prep cue must include right two lanes: ${atPrep.textEn}", atPrep.textEn.contains("right two lanes", ignoreCase = true))
+        assertTrue("Persian prep cue must include دو خط سمت راست: ${atPrep.textFa}", atPrep.textFa.contains("دو خط سمت راست"))
 
         // Lane strip visible from ~1 mile on city streets when lane data exists, hidden beyond 1 mile
         assertTrue("Lane strip should be hidden beyond 1 mile", laneStripSamples.any { it.first > 1800.0 && !it.second })
         assertTrue("Lane strip must show at ~1 mile on city streets", laneStripSamples.any { it.first in 1400.0..1750.0 && it.second })
 
-        // Verify Metric units (~1.5 km and ~800 m)
+        // Verify Metric units follow the same 1 km -> prep -> now schedule
         val (metricEvents, _) = runSimulatedDrive(route, DistanceUnit.METRIC)
         val metricTurn = metricEvents.filter { it.maneuverIndex == 1 && it.stage != NavigationSessionController.STAGE_ARRIVED }
         assertEquals(
             listOf(
-                NavigationSessionController.STAGE_CITY_1MI,
-                NavigationSessionController.STAGE_CITY_HALF_MI,
+                NavigationSessionController.STAGE_CITY_1KM,
                 NavigationSessionController.STAGE_CITY_1000FT,
                 NavigationSessionController.STAGE_CITY_NOW
             ),
             metricTurn.map { it.stage }
         )
-        assertEquals("In 1.5 kilometers, use the right two lanes to turn right onto Coburg Road.", metricTurn[0].textEn)
-        assertEquals("در 1.5 کیلومتری، از دو خط سمت راست به راست بپیچید و وارد Coburg Road شوید.", metricTurn[0].textFa)
-        assertEquals("In 800 meters, use the right two lanes to turn right onto Coburg Road.", metricTurn[1].textEn)
-        assertEquals("در 800 متری، از دو خط سمت راست به راست بپیچید و وارد Coburg Road شوید.", metricTurn[1].textFa)
+        assertEquals("In one kilometer, turn right onto Coburg Road.", metricTurn[0].textEn)
+        assertEquals("در یک کیلومتری، به راست بپیچید و وارد Coburg Road شوید.", metricTurn[0].textFa)
     }
 
     @Test
@@ -267,18 +262,15 @@ class LaneAnnouncementTimingTest {
         val turnEvents = events.filter { it.maneuverIndex == 1 && it.stage != NavigationSessionController.STAGE_ARRIVED }
         assertEquals(
             listOf(
-                NavigationSessionController.STAGE_CITY_1MI,
-                NavigationSessionController.STAGE_CITY_HALF_MI,
+                NavigationSessionController.STAGE_CITY_1KM,
                 NavigationSessionController.STAGE_CITY_1000FT,
                 NavigationSessionController.STAGE_CITY_NOW
             ),
             turnEvents.map { it.stage }
         )
 
-        assertEquals("In 1 mile, prepare to turn right onto Coburg Road.", turnEvents[0].textEn)
-        assertEquals("در یک مایلی، برای پیچیدن به راست به سمت Coburg Road آماده شوید.", turnEvents[0].textFa)
-        assertEquals("In half a mile, prepare to turn right onto Coburg Road.", turnEvents[1].textEn)
-        assertEquals("در نیم مایلی، برای پیچیدن به راست به سمت Coburg Road آماده شوید.", turnEvents[1].textFa)
+        assertEquals("In one kilometer, turn right onto Coburg Road.", turnEvents[0].textEn)
+        assertEquals("در یک کیلومتری، به راست بپیچید و وارد Coburg Road شوید.", turnEvents[0].textFa)
 
         // Strictly never invent lanes in voice or UI
         assertFalse("Must never invent 'lane' when no lane data exists", turnEvents[0].textEn.lowercase().contains("lane"))
@@ -334,8 +326,9 @@ class LaneAnnouncementTimingTest {
         val (events, _) = runSimulatedDrive(route, DistanceUnit.IMPERIAL)
         val turnEvents = events.filter { it.maneuverIndex == 1 && it.stage != NavigationSessionController.STAGE_ARRIVED }
         assertEquals(
-            "Small residential streets must NOT trigger 1 mi or 0.5 mi early warnings",
+            "City residential turns follow the unified 1 km -> distance prep -> final cue schedule",
             listOf(
+                NavigationSessionController.STAGE_CITY_1KM,
                 NavigationSessionController.STAGE_CITY_1000FT,
                 NavigationSessionController.STAGE_CITY_NOW
             ),
@@ -402,38 +395,36 @@ class LaneAnnouncementTimingTest {
             listOf(
                 NavigationSessionController.STAGE_HW_2MI,
                 NavigationSessionController.STAGE_HW_1MI,
-                NavigationSessionController.STAGE_HW_HALF_MI,
-                NavigationSessionController.STAGE_HW_QUARTER_MI,
+                NavigationSessionController.STAGE_HW_500M,
                 NavigationSessionController.STAGE_HW_NOW
             ),
             exitEvents.map { it.stage }
         )
 
-        // Lane advice repeated at 1 mi and 0.5 mi in both English and Persian
-        assertEquals("In 1 mile, use the right two lanes to take exit 194B toward Portland.", exitEvents[1].textEn)
-        assertEquals("در یک مایلی، از دو خط سمت راست وارد خروجی 194B به سمت Portland شوید.", exitEvents[1].textFa)
-        assertEquals("In half a mile, use the right two lanes to take exit 194B toward Portland.", exitEvents[2].textEn)
-        assertEquals("در نیم مایلی، از دو خط سمت راست وارد خروجی 194B به سمت Portland شوید.", exitEvents[2].textFa)
+        // Unified highway schedule: 2 mi (exit + side), 1 mi (exit + lanes), 500 m (short prep), now (final)
+        assertEquals("In two miles, take Exit 194B on the right toward Portland.", exitEvents[0].textEn)
+        assertEquals("In one mile, use the right two lanes for Exit 194B toward Portland.", exitEvents[1].textEn)
+        assertEquals("در یک مایلی، از دو خط سمت راست برای خروجی 194B به سمت Portland استفاده کنید.", exitEvents[1].textFa)
+        assertEquals("In 500 meters, take Exit 194B on the right toward Portland.", exitEvents[2].textEn)
+        assertEquals("در 500 متری، از خروجی 194B در سمت راست به سمت Portland خارج شوید.", exitEvents[2].textFa)
+        assertEquals("Take Exit 194B toward Portland now.", exitEvents[3].textEn)
 
         assertTrue("Lane strip must appear at ~1 mile on I-5", laneStripSamples.any { it.first in 1400.0..1750.0 && it.second })
 
-        // Metric units on I-5 (~1.5 km and ~800 m)
+        // Metric units keep the same 2 mi / 1 mi / 500 m / now mixed-unit highway schedule
         val (metricEvents, _) = runSimulatedDrive(route, DistanceUnit.METRIC)
         val metricExit = metricEvents.filter { it.maneuverIndex == 1 && it.stage != NavigationSessionController.STAGE_ARRIVED }
         assertEquals(
             listOf(
                 NavigationSessionController.STAGE_HW_2MI,
                 NavigationSessionController.STAGE_HW_1MI,
-                NavigationSessionController.STAGE_HW_HALF_MI,
-                NavigationSessionController.STAGE_HW_QUARTER_MI,
+                NavigationSessionController.STAGE_HW_500M,
                 NavigationSessionController.STAGE_HW_NOW
             ),
             metricExit.map { it.stage }
         )
-        assertEquals("In 1.5 kilometers, use the right two lanes to take exit 194B toward Portland.", metricExit[1].textEn)
-        assertEquals("در 1.5 کیلومتری، از دو خط سمت راست وارد خروجی 194B به سمت Portland شوید.", metricExit[1].textFa)
-        assertEquals("In 800 meters, use the right two lanes to take exit 194B toward Portland.", metricExit[2].textEn)
-        assertEquals("در 800 متری، از دو خط سمت راست وارد خروجی 194B به سمت Portland شوید.", metricExit[2].textFa)
+        assertEquals("In one mile, use the right two lanes for Exit 194B toward Portland.", metricExit[1].textEn)
+        assertEquals("In 500 meters, take Exit 194B on the right toward Portland.", metricExit[2].textEn)
     }
 
     @Test
@@ -504,31 +495,23 @@ class LaneAnnouncementTimingTest {
 
         assertTrue("Maneuver 1 should announce final turn before completion", m1Events.any { it.stage == NavigationSessionController.STAGE_CITY_NOW })
         assertEquals(
-            "Maneuver 2 must NOT skip early warning even though spacing is ~0.7 mi",
+            "Maneuver 2 must follow the 1 km -> prep -> now schedule without overlapping M1",
             listOf(
-                NavigationSessionController.STAGE_CITY_1MI,
-                NavigationSessionController.STAGE_CITY_HALF_MI,
+                NavigationSessionController.STAGE_CITY_1KM,
                 NavigationSessionController.STAGE_CITY_1000FT,
                 NavigationSessionController.STAGE_CITY_NOW
             ),
             m2Events.map { it.stage }
         )
 
-        // First warning for M2 must speak real remaining distance (~0.7 miles) and NOT overlap M1's final prompt
         val m1Last = m1Events.last()
         val m2First = m2Events.first()
         assertTrue(
             "Two different maneuvers must NEVER be announced at the same moment (gap=${m2First.timestampMs - m1Last.timestampMs}ms)",
             (m2First.timestampMs - m1Last.timestampMs) >= NavigationSessionController.INTER_MANEUVER_COOLDOWN_MS
         )
-        assertTrue(
-            "Expected real remaining distance (~0.7 miles) in English: ${m2First.textEn}",
-            m2First.textEn.startsWith("In 0.7 miles, use the left lane to turn left onto Coburg Road.")
-        )
-        assertTrue(
-            "Expected real remaining distance (~0.7 مایلی) in Persian: ${m2First.textFa}",
-            m2First.textFa.startsWith("در 0.7 مایلی، از خط سمت چپ به چپ بپیچید و وارد Coburg Road شوید.")
-        )
+        assertEquals("In one kilometer, turn left onto Coburg Road.", m2First.textEn)
+        assertEquals("در یک کیلومتری، به چپ بپیچید و وارد Coburg Road شوید.", m2First.textFa)
     }
 
     @Test

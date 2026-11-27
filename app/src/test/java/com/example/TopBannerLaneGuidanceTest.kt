@@ -280,8 +280,8 @@ class TopBannerLaneGuidanceTest {
                 pulseTicks++
                 prevPulseCount = state.lanePulseTriggerCount
                 assertEquals(
-                    "Half-mile pulse must fire on the exact half-mile voice announcement tick",
-                    NavigationSessionController.STAGE_HW_HALF_MI,
+                    "500m pulse must fire on the exact 500m highway voice announcement tick",
+                    NavigationSessionController.STAGE_HW_500M,
                     res.maneuverToSpeak?.second
                 )
             }

@@ -91,7 +91,8 @@ internal fun RahYabViewModel.evaluateLaneChangeCueImpl(
     ) ?: return false
 
     val isHalfMileStage = maneuverToSpeak != null && (
-        maneuverToSpeak.second == com.example.navigation.NavigationSessionController.STAGE_HW_HALF_MI ||
+        maneuverToSpeak.second == com.example.navigation.NavigationSessionController.STAGE_HW_500M ||
+            maneuverToSpeak.second == com.example.navigation.NavigationSessionController.STAGE_HW_HALF_MI ||
             maneuverToSpeak.second == com.example.navigation.NavigationSessionController.STAGE_CITY_HALF_MI
         )
     val effectiveEvent = if (isHalfMileStage && event.kind == com.example.navigation.LaneChangeCueKind.PRIMARY) {

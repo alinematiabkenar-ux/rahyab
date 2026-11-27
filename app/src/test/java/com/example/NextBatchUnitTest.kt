@@ -128,11 +128,24 @@ class NextBatchUnitTest {
             stepMeters = 25.0,
             maneuverShapeIndex = 18,
             lanes = listOf(
-                LaneInfo(listOf(LaneDirection.THROUGH), listOf(LaneDirection.THROUGH), isRecommended = true, isActive = true, isValid = true, level = LaneHighlightTier.ACTIVE),
+                LaneInfo(listOf(LaneDirection.THROUGH), emptyList(), isRecommended = false, isActive = false, isValid = true, level = LaneHighlightTier.VALID),
                 LaneInfo(listOf(LaneDirection.THROUGH), emptyList(), isRecommended = false, isActive = false, isValid = true, level = LaneHighlightTier.VALID)
             )
         )
         assertNull(LaneOverlayBuilder.build(allValidRoute, 0, 10, 200.0, TravelMode.DRIVE))
+
+        val preferredAmongAllValidRoute = buildStraightNorthRoute(
+            pointCount = 25,
+            stepMeters = 25.0,
+            maneuverShapeIndex = 18,
+            lanes = listOf(
+                LaneInfo(listOf(LaneDirection.THROUGH), listOf(LaneDirection.THROUGH), isRecommended = true, isActive = true, isValid = true, level = LaneHighlightTier.ACTIVE),
+                LaneInfo(listOf(LaneDirection.THROUGH), emptyList(), isRecommended = false, isActive = false, isValid = true, level = LaneHighlightTier.VALID)
+            )
+        )
+        val preferredOverlay = LaneOverlayBuilder.build(preferredAmongAllValidRoute, 0, 10, 200.0, TravelMode.DRIVE)
+        assertNotNull("Preferred ACTIVE lane must still be highlighted when another lane is legally VALID", preferredOverlay)
+        assertEquals(listOf(true, false), preferredOverlay!!.lanes.map { it.isTarget })
 
         val validOverlayRoute = buildStraightNorthRoute(
             pointCount = 25,

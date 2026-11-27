@@ -104,17 +104,14 @@ class UserPreferencesRepository(private val context: Context) {
         val KEY_TURN_FOCUS_SHORT_PHRASE = booleanPreferencesKey("turn_focus_short_phrase_enabled")
 
         /**
-         * One-time migration from the legacy 500 m city Turn Focus default to 1,000 m.
-         * Preserves any explicit user selection (including choosing 500 m deliberately).
+         * Preserves any existing supported city Turn Focus distance (including legacy 500 m saved
+         * without a user-modified flag). Defaults to 1,000 m only when the key is absent.
          */
         fun resolveMigratedTurnFocusCityDistanceMeters(
             storedMeters: Int?,
             migratedToV40: Boolean,
             userModified: Boolean
         ): Int {
-            if (!migratedToV40 && !userModified && (storedMeters == null || storedMeters == 500)) {
-                return 1000
-            }
             return (storedMeters ?: 1000).coerceIn(300, 1500)
         }
 
@@ -159,7 +156,7 @@ class UserPreferencesRepository(private val context: Context) {
                     migratedToV40 = prefs[KEY_TURN_FOCUS_CITY_DIST_MIGRATED_V40] ?: false,
                     userModified = prefs[KEY_TURN_FOCUS_CITY_DIST_USER_MODIFIED] ?: false
                 ),
-                turnFocusHighwayDistanceMeters = (prefs[KEY_TURN_FOCUS_HIGHWAY_DIST] ?: 1000).coerceIn(800, 1500),
+                turnFocusHighwayDistanceMeters = (prefs[KEY_TURN_FOCUS_HIGHWAY_DIST] ?: 1000).coerceIn(500, 1500),
                 turnFocusWideHighwayEarlierEnabled = prefs[KEY_TURN_FOCUS_WIDE_HIGHWAY] ?: true,
                 turnFocusShortPhraseEnabled = prefs[KEY_TURN_FOCUS_SHORT_PHRASE] ?: false,
                 laneChangeBeepsEnabled = prefs[KEY_LANE_CHANGE_BEEPS] ?: true,
@@ -245,9 +242,8 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun runOneTimeTurnFocusDistanceMigrationIfNeeded() {
         context.rahYabDataStore.edit { prefs ->
             if (prefs[KEY_TURN_FOCUS_CITY_DIST_MIGRATED_V40] == true) return@edit
-            val userModified = prefs[KEY_TURN_FOCUS_CITY_DIST_USER_MODIFIED] == true
             val stored = prefs[KEY_TURN_FOCUS_CITY_DIST]
-            if (!userModified && (stored == null || stored == 500)) {
+            if (stored == null) {
                 prefs[KEY_TURN_FOCUS_CITY_DIST] = 1000
             }
             prefs[KEY_TURN_FOCUS_CITY_DIST_MIGRATED_V40] = true
@@ -263,7 +259,11 @@ class UserPreferencesRepository(private val context: Context) {
             it[KEY_TURN_FOCUS_CITY_DIST_MIGRATED_V40] = true
         }
     }
-    suspend fun setTurnFocusHighwayDistanceMeters(meters: Int) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_HIGHWAY_DIST] = meters } }
+    suspend fun setTurnFocusHighwayDistanceMeters(meters: Int) {
+        context.rahYabDataStore.edit {
+            it[KEY_TURN_FOCUS_HIGHWAY_DIST] = meters.coerceIn(500, 1500)
+        }
+    }
     suspend fun setTurnFocusWideHighwayEarlierEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_WIDE_HIGHWAY] = enabled } }
     suspend fun setTurnFocusShortPhraseEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_TURN_FOCUS_SHORT_PHRASE] = enabled } }
     suspend fun setLaneChangeBeepsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[KEY_LANE_CHANGE_BEEPS] = enabled } }

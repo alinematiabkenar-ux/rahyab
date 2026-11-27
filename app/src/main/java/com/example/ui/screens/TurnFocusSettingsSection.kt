@@ -141,25 +141,28 @@ fun TurnFocusSettingsSection(
 
                 Spacer(Modifier.height(2.dp))
                 Text(strings.turnFocusHighwayDistanceLabel, style = MaterialTheme.typography.labelLarge)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf(800, 1000, 1500).forEach { meters ->
-                        FilterChip(
-                            selected = settings.turnFocusHighwayDistanceMeters == meters,
-                            onClick = { viewModel.setTurnFocusHighwayDistanceMeters(meters) },
-                            label = {
-                                Text(
-                                    text = formatFocusDistanceChip(meters, unit, lang),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("turn_focus_highway_${meters}_chip")
-                        )
+                listOf(listOf(500, 800), listOf(1000, 1500)).forEach { rowOptions ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        rowOptions.forEach { meters ->
+                            FilterChip(
+                                selected = settings.turnFocusHighwayDistanceMeters == meters,
+                                onClick = { viewModel.setTurnFocusHighwayDistanceMeters(meters) },
+                                label = {
+                                    Text(
+                                        text = formatFocusDistanceChip(meters, unit, lang),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("turn_focus_highway_${meters}_chip")
+                            )
+                        }
                     }
                 }
 
