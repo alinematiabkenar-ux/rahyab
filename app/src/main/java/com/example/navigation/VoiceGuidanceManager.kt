@@ -332,6 +332,18 @@ class VoiceGuidanceManager(
         return speechQueue.speakRaw(sample, targetLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "test_lang"), forcePreempt = true)
     }
 
+    fun speakBuiltInPersianSample(): Boolean {
+        if (!engineSelector.isBuiltInPersianAvailable()) return false
+        val prevMode = engineSelector.persianVoiceMode
+        engineSelector.persianVoiceMode = PersianVoiceMode.BUILTIN_OFFLINE
+        return try {
+            _lastSpokenText.value = BUILTIN_PERSIAN_SAMPLE_TEXT
+            speechQueue.speakRaw(BUILTIN_PERSIAN_SAMPLE_TEXT, AppLanguage.PERSIAN, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "test_builtin_persian"), forcePreempt = true)
+        } finally {
+            engineSelector.persianVoiceMode = prevMode
+        }
+    }
+
     fun playOverspeedChime() {
         val now = clockMs(); if (now - lastOverspeedBeepMs < 6000L) return; lastOverspeedBeepMs = now
         runCatching { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 85).startTone(ToneGenerator.TONE_PROP_BEEP2, 220) }

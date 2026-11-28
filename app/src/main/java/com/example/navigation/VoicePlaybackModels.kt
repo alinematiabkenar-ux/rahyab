@@ -41,6 +41,9 @@ data class SpeechContextTag(
 ) {
     fun isStaleFor(activeRouteId: String?, activeManeuverIndex: Int?): Boolean {
         if (routeId != null && activeRouteId != null && routeId != activeRouteId) return true
+        if (stage == "start") {
+            return activeManeuverIndex != null && activeManeuverIndex > 1
+        }
         if (maneuverIndex != null && activeManeuverIndex != null && maneuverIndex != activeManeuverIndex) return true
         return false
     }

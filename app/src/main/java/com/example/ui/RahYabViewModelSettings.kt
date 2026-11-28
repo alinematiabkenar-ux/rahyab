@@ -255,8 +255,7 @@ internal fun RahYabViewModel.selectBuiltInPersianVoiceImpl() {
 }
 
 internal fun RahYabViewModel.playBuiltInPersianSampleImpl() {
-    voiceManager.setPersianVoiceMode(com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE)
-    val ok = voiceManager.speakExplicitLanguageTest(AppLanguage.PERSIAN)
+    val ok = voiceManager.speakBuiltInPersianSample()
     if (!ok) {
         _snackbarMessage.value = stringsFor(settings.value.language).diagPersianVoiceUnavailableToast
     }

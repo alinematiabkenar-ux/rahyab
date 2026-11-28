@@ -78,7 +78,7 @@ internal class VoiceSpeechQueue(
         pendingLowPriorityAlerts.offer(text, effectiveLanguage, targetLat, targetLon, clockMsProvider())
     }
 
-    fun stopAllSpeech(clearPendingActions: Boolean = true, reason: String = "explicit_stop") {
+    fun stopAllSpeech(clearPendingActions: Boolean = true, reason: String = "explicit_stop", releaseFocus: Boolean = true) {
         val now = clockMsProvider()
         val canceledActive: ActiveInstruction?
         val canceledQueued = mutableListOf<QueuedInstruction>()
@@ -95,7 +95,7 @@ internal class VoiceSpeechQueue(
         canceledActive?.let { recordTerminal(it, SpeechLifecycleState.CANCELED, now, reason) }
         canceledQueued.forEach { recordQueuedCanceled(it, now, reason) }
         engineSelector.stopEngines()
-        if (clearPendingActions || !hasRemainingQueued) {
+        if (releaseFocus && (clearPendingActions || !hasRemainingQueued)) {
             engineSelector.abandonDuckingFocus()
         }
     }
@@ -186,7 +186,7 @@ internal class VoiceSpeechQueue(
             return true
         }
         preemptReason?.let { reason ->
-            stopAllSpeech(clearPendingActions = priority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank, reason = reason)
+            stopAllSpeech(clearPendingActions = priority.rank >= SpeechPriority.IMMINENT_MANEUVER.rank, reason = reason, releaseFocus = false)
         }
         return startInstructionNow(instructionId, text, effectiveLanguage, priority, context, isStillValid, now)
     }

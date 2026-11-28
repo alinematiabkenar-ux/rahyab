@@ -36,9 +36,25 @@ object PersianTtsTextNormalizer {
     private val DECIMAL_REGEX = Regex("""\b(\d{1,3})[.,٫](\d{1,2})\b""")
     private val NUMBER_WITH_LATIN_UNIT_REGEX = Regex("""\b(\d{1,6})\s*(km|m|mi|ft|mph|km/h)\b""", RegexOption.IGNORE_CASE)
     private val STANDALONE_NUMBER_REGEX = Regex("""\b(\d{1,6})\b""")
+    private val SLASH_SEPARATOR_REGEX = Regex("""\s*/\s*""")
+    private val LATIN_AMPERSAND_REGEX = Regex("""([A-Za-z0-9])\s*&\s*([A-Za-z0-9])""")
+    private val PERSIAN_TO_LATIN_BOUNDARY_REGEX = Regex("""([\u0600-\u06FF])([A-Za-z])""")
+    private val LATIN_TO_PERSIAN_BOUNDARY_REGEX = Regex("""([A-Za-z])([\u0600-\u06FF])""")
     private val MULTI_SPACE_REGEX = Regex("""\s+""")
 
     private val STREET_ABBREVS: List<Pair<Regex, String>> = listOf(
+        Regex("""\bNW\.?(?=\s|$|[،.,؛:!?])""") to "Northwest",
+        Regex("""\bNE\.?(?=\s|$|[،.,؛:!?])""") to "Northeast",
+        Regex("""\bSW\.?(?=\s|$|[،.,؛:!?])""") to "Southwest",
+        Regex("""\bSE\.?(?=\s|$|[،.,؛:!?])""") to "Southeast",
+        Regex("""\bN\.(?=\s+[A-Za-z0-9])""") to "North",
+        Regex("""\bS\.(?=\s+[A-Za-z0-9])""") to "South",
+        Regex("""\bE\.(?=\s+[A-Za-z0-9])""") to "East",
+        Regex("""\bW\.(?=\s+[A-Za-z0-9])""") to "West",
+        Regex("""\bJr\.?(?=\s|$|[،.,؛:!?])""") to "Junior",
+        Regex("""\bSr\.?(?=\s|$|[،.,؛:!?])""") to "Senior",
+        Regex("""\bMt\.?(?=\s+[A-Za-z])""") to "Mount",
+        Regex("""\bFt\.?(?=\s+[A-Za-z])""") to "Fort",
         Regex("""\bSt\.?(?=\s|$|[،.,؛:!?])""") to "Street",
         Regex("""\bAve\.?(?=\s|$|[،.,؛:!?])""") to "Avenue",
         Regex("""\bBlvd\.?(?=\s|$|[،.,؛:!?])""") to "Boulevard",
@@ -53,10 +69,8 @@ object PersianTtsTextNormalizer {
         Regex("""\bFwy\.?(?=\s|$|[،.,؛:!?])""") to "Freeway",
         Regex("""\bExpy\.?(?=\s|$|[،.,؛:!?])""") to "Expressway",
         Regex("""\bTer\.?(?=\s|$|[،.,؛:!?])""") to "Terrace",
-        Regex("""\bNW\b""") to "Northwest",
-        Regex("""\bNE\b""") to "Northeast",
-        Regex("""\bSW\b""") to "Southwest",
-        Regex("""\bSE\b""") to "Southeast"
+        Regex("""\bTrl\.?(?=\s|$|[،.,؛:!?])""") to "Trail",
+        Regex("""\bSq\.?(?=\s|$|[،.,؛:!?])""") to "Square"
     )
 
     /**
@@ -141,7 +155,11 @@ object PersianTtsTextNormalizer {
             text = pattern.replace(text, replacement)
         }
 
-        // 8. Normalize punctuation & whitespace for clean phrasing
+        // 8. Normalize signpost slashes, ampersands, script boundaries, and whitespace
+        text = SLASH_SEPARATOR_REGEX.replace(text, " و ")
+        text = LATIN_AMPERSAND_REGEX.replace(text, "$1 and $2").replace("&", " و ")
+        text = PERSIAN_TO_LATIN_BOUNDARY_REGEX.replace(text, "$1 $2")
+        text = LATIN_TO_PERSIAN_BOUNDARY_REGEX.replace(text, "$1 $2")
         return text
             .replace(" ,", "،")
             .replace(" ،", "،")

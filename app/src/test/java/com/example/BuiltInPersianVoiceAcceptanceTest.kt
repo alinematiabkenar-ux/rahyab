@@ -371,4 +371,158 @@ class BuiltInPersianVoiceAcceptanceTest {
         assertTrue(app.voiceGuidanceManager === app.voiceGuidanceManager)
         manager.shutdown()
     }
+
+    @Test
+    fun persianNormalizerExpandsDirectionalAbbreviationsSlashesAndScriptBoundariesWithoutSentenceSplits() {
+        val west11th = PersianTtsTextNormalizer.normalize(
+            "در ۵۰۰ متری، به راست بپیچید و وارد W. 11th Ave. شوید."
+        )
+        assertEquals("در پانصد متری، به راست بپیچید و وارد West 11th Avenue شوید.", west11th)
+        assertFalse("Must not leave mid-sentence periods inside street name", west11th.dropLast(1).contains('.'))
+
+        val signpostSlash = PersianTtsTextNormalizer.normalize(
+            "در دو مایلی، از خروجی 195B به سمت Eugene / Springfield خارج شوید."
+        )
+        assertTrue("Slash must normalize to Persian 'و'", signpostSlash.contains("Eugene و Springfield"))
+        assertFalse(signpostSlash.contains('/'))
+        assertTrue("Persian tail after English name must be preserved", signpostSlash.endsWith("خارج شوید."))
+
+        val gluedBoundary = PersianTtsTextNormalizer.normalize("واردOak Streetشوید.")
+        assertEquals("وارد Oak Street شوید.", gluedBoundary)
+    }
+
+    @Test
+    fun startInstructionSurvivesZeroToOneManeuverTransitionAndCancelsOnReroute() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val startedLatch = CountDownLatch(1)
+        val completedLatch = CountDownLatch(1)
+
+        val backend = DeterministicWaveBackend(synthDelayMs = 10L)
+        val sink = RecordingPcmSink(chunkDelayMs = 15L, onStartHook = { startedLatch.countDown() })
+        val embedded = EmbeddedPersianTtsEngine(ctx, backend = backend, audioSink = sink)
+        val manager = VoiceGuidanceManager(ctx)
+        manager.setEmbeddedPersianEngine(embedded)
+        manager.setPersianVoiceMode(PersianVoiceMode.BUILTIN_OFFLINE)
+        manager.setLanguage(AppLanguage.PERSIAN)
+
+        val traces = CopyOnWriteArrayList<SpeechTraceRecord>()
+        manager.setTraceSink { rec ->
+            traces.add(rec)
+            if (rec.finalState == SpeechLifecycleState.COMPLETED && rec.stage == "start") {
+                completedLatch.countDown()
+            }
+        }
+
+        val route = com.example.navigation.OfflineRoute(
+            id = "route_start_test",
+            summaryLabel = "Start Test",
+            distanceMeters = 1000.0,
+            durationSeconds = 60.0,
+            shape = listOf(com.example.navigation.LatLon(44.05, -123.08), com.example.navigation.LatLon(44.06, -123.08)),
+            maneuvers = listOf(
+                RouteManeuver(
+                    index = 0, type = ManeuverType.DEPART, instructionEn = "Head north on Oak Street",
+                    streetNames = listOf("Oak Street"), lengthMeters = 500.0, timeSeconds = 30.0,
+                    beginShapeIndex = 0, endShapeIndex = 1, lat = 44.05, lon = -123.08
+                ),
+                RouteManeuver(
+                    index = 1, type = ManeuverType.RIGHT, instructionEn = "Turn right onto Main Street",
+                    streetNames = listOf("Main Street"), lengthMeters = 500.0, timeSeconds = 30.0,
+                    beginShapeIndex = 1, endShapeIndex = 1, lat = 44.06, lon = -123.08
+                )
+            )
+        )
+
+        manager.speakStartInstruction(route, AppLanguage.PERSIAN)
+        assertTrue("Start instruction must begin playback", startedLatch.await(2, TimeUnit.SECONDS))
+        // Immediately simulate GPS advancing from DEPART (0) to upcoming turn (1) — must NOT kill start speech
+        manager.cancelStaleForManeuverOrReroute(activeRouteId = route.id, activeManeuverIndex = 1)
+        assertTrue("Start instruction must complete through 0->1 transition", completedLatch.await(3, TimeUnit.SECONDS))
+        assertFalse(
+            "Start instruction must not be canceled by 0->1 transition",
+            traces.any { it.stage == "start" && it.finalState == SpeechLifecycleState.CANCELED }
+        )
+
+        // Verify ContextTag staleness rules directly: route change or maneuverIndex > 1 IS stale
+        val startTag = SpeechContextTag(routeId = route.id, maneuverIndex = 0, stage = "start")
+        assertFalse(startTag.isStaleFor(route.id, 1))
+        assertTrue(startTag.isStaleFor(route.id, 2))
+        assertTrue(startTag.isStaleFor("route_new_reroute", 1))
+        manager.shutdown()
+    }
+
+    @Test
+    fun speakBuiltInPersianSampleUsesSharedQueueWithoutDesyncingVoiceModeAndRejectsSilentPcm() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val backend = DeterministicWaveBackend()
+        val sink = RecordingPcmSink()
+        val embedded = EmbeddedPersianTtsEngine(ctx, backend = backend, audioSink = sink)
+        val manager = VoiceGuidanceManager(ctx)
+        manager.setEmbeddedPersianEngine(embedded)
+
+        // User is currently in ENGLISH_VOICE mode and taps "پخش نمونه" on the built-in Persian card
+        manager.setPersianVoiceMode(PersianVoiceMode.ENGLISH_VOICE)
+        val sampleLatch = CountDownLatch(1)
+        manager.setTraceSink { rec ->
+            if (rec.finalState == SpeechLifecycleState.COMPLETED && rec.stage == "test_builtin_persian") {
+                sampleLatch.countDown()
+            }
+        }
+
+        assertTrue(manager.speakBuiltInPersianSample())
+        assertTrue("Built-in sample must complete via VoiceSpeechQueue", sampleLatch.await(3, TimeUnit.SECONDS))
+        assertEquals(1, backend.synthesizedTexts.size)
+        assertTrue(backend.synthesizedTexts.first().contains("Oak Street شوید."))
+        // Diagnostics must still reflect ENGLISH_VOICE (not silently desynced to BUILTIN_OFFLINE)
+        assertNotEquals(
+            EmbeddedPersianTtsEngine.ENGINE_PACKAGE_ID,
+            manager.refreshTtsDiagnostics().persianEnginePackage
+        )
+        manager.shutdown()
+
+        // Verify silent/NaN synthesis emits ERROR_SYNTHESIS rather than false onDone
+        val silentBackend = object : OfflinePersianSynthesisBackend {
+            override fun ensureInitialized(context: Context): Boolean = true
+            override fun synthesize(normalizedText: String, speed: Float, shouldContinue: () -> Boolean) =
+                SynthesizedPcmAudio(FloatArray(1000) { Float.NaN }, 22050)
+            override fun release() = Unit
+        }
+        val errEngine = EmbeddedPersianTtsEngine(ctx, backend = silentBackend, audioSink = RecordingPcmSink())
+        val errLatch = CountDownLatch(1)
+        val gotError = AtomicInteger(0)
+        errEngine.speak("در ۵۰۰ متری، به راست بپیچید", "utt_nan", object : com.example.navigation.TtsUtteranceCallbacks {
+            override fun onStart(utteranceId: String) = Unit
+            override fun onDone(utteranceId: String) = Unit
+            override fun onStop(utteranceId: String, interrupted: Boolean) = Unit
+            override fun onError(utteranceId: String, errorCode: Int) {
+                gotError.set(errorCode)
+                errLatch.countDown()
+            }
+        })
+        assertTrue(errLatch.await(3, TimeUnit.SECONDS))
+        assertEquals(android.speech.tts.TextToSpeech.ERROR_SYNTHESIS, gotError.get())
+        errEngine.shutdown()
+    }
+
+    @Test
+    fun espeakCacheMissingEnglishDictionaryTriggersCleanReExtraction() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val extracted = com.example.navigation.EmbeddedTtsAssetExtractor.ensureEspeakDataExtracted(ctx)
+        val enDict = File(extracted, "en_dict")
+        val enUsLang = File(extracted, "lang/gmw/en-US")
+        val faDict = File(extracted, "fa_dict")
+        assertTrue("Initial extraction must include en_dict", enDict.isFile && enDict.length() > 0L)
+        assertTrue("Initial extraction must include en-US lang", enUsLang.isFile && enUsLang.length() > 0L)
+        assertTrue("Initial extraction must include fa_dict", faDict.isFile && faDict.length() > 0L)
+
+        // Simulate partial/corrupted cache where stamp exists but en_dict was deleted
+        assertTrue(enDict.delete())
+        assertFalse(enDict.exists())
+
+        val repaired = com.example.navigation.EmbeddedTtsAssetExtractor.ensureEspeakDataExtracted(ctx)
+        assertTrue("Re-extraction must restore missing en_dict", File(repaired, "en_dict").isFile)
+        assertTrue("Re-extraction must preserve en-US lang", File(repaired, "lang/gmw/en-US").isFile)
+        assertTrue("Re-extraction must preserve fa_dict", File(repaired, "fa_dict").isFile)
+    }
 }
+

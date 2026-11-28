@@ -387,7 +387,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             laneDecision = decision
         )
         if (prev.route?.id != enriched.route?.id || prev.currentManeuverIndex != enriched.currentManeuverIndex) {
-            app.voiceGuidanceManager.cancelStaleForManeuverOrReroute(enriched.route?.id, enriched.currentManeuverIndex)
+            app.voiceGuidanceManager.cancelStaleForManeuverOrReroute(enriched.route?.id, enriched.currentManeuver?.index ?: enriched.currentManeuverIndex)
         }
         stateStore._navigationState.value = enriched
         val loc = enriched.snappedLocation

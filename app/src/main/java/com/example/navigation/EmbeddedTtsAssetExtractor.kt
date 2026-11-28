@@ -22,17 +22,23 @@ internal object EmbeddedTtsAssetExtractor {
 
     private const val EXTRACT_VERSION_MARKER = ".khadijah_espeak_v1"
 
+    private val REQUIRED_ESPEAK_FILES = listOf(
+        "phondata",
+        "phontab",
+        "phonindex",
+        "intonations",
+        "fa_dict",
+        "en_dict",
+        "lang/ira/fa",
+        "lang/gmw/en",
+        "lang/gmw/en-US"
+    )
+
     private val REQUIRED_CORE_ASSETS = listOf(
         ASSET_ACOUSTIC_MODEL,
         ASSET_VOCODER,
-        ASSET_TOKENS,
-        "$ASSET_ESPEAK_DIR/phondata",
-        "$ASSET_ESPEAK_DIR/phontab",
-        "$ASSET_ESPEAK_DIR/phonindex",
-        "$ASSET_ESPEAK_DIR/fa_dict",
-        "$ASSET_ESPEAK_DIR/en_dict",
-        "$ASSET_ESPEAK_DIR/lang/ira/fa"
-    )
+        ASSET_TOKENS
+    ) + REQUIRED_ESPEAK_FILES.map { "$ASSET_ESPEAK_DIR/$it" }
 
     private val extractLock = Any()
 
@@ -57,7 +63,7 @@ internal object EmbeddedTtsAssetExtractor {
         synchronized(extractLock) {
             val targetRoot = File(context.filesDir, ASSET_ESPEAK_DIR)
             val stamp = File(targetRoot, EXTRACT_VERSION_MARKER)
-            if (stamp.isFile && File(targetRoot, "phondata").isFile && File(targetRoot, "fa_dict").isFile) {
+            if (stamp.isFile && REQUIRED_ESPEAK_FILES.all { File(targetRoot, it).isFile }) {
                 return targetRoot
             }
             val stagingDir = File(context.filesDir, "$ASSET_ESPEAK_DIR.tmp")

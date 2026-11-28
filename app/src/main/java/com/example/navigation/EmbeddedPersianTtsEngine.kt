@@ -145,7 +145,7 @@ class EmbeddedPersianTtsEngine(
             }
             true
         }.onFailure { err ->
-            speaking.set(false)
+            clearActiveIfGenerationMatches(gen)
             CrashLogManager.logError(appContext, "TTS", "Failed to schedule embedded Persian TTS", err)
         }.getOrDefault(false)
     }
@@ -197,6 +197,10 @@ class EmbeddedPersianTtsEngine(
             }
 
             val (peak, rms) = measureAmplitude(audio.samples)
+            if (!peak.isFinite() || peak < MIN_AUDIBLE_PEAK) {
+                finishError(gen, utteranceId, callbacks, TextToSpeech.ERROR_SYNTHESIS)
+                return
+            }
             val pcm16 = floatToPcm16WithTrailingPad(audio.samples, audio.sampleRate)
             var started = false
             val completed = audioSink.playPcm16(
@@ -262,18 +266,22 @@ class EmbeddedPersianTtsEngine(
         const val ENGINE_PACKAGE_ID = "com.aistudio.rahyab.embedded.khadijah"
         const val ENGINE_DISPLAY_LABEL = "Built-in Offline Persian (Khadijah)"
         private const val TRAILING_SILENCE_MS = 180
+        private const val MIN_AUDIBLE_PEAK = 0.001f
 
         internal fun floatToPcm16WithTrailingPad(samples: FloatArray, sampleRate: Int): ShortArray {
             val padSamples = ((sampleRate.toLong() * TRAILING_SILENCE_MS) / 1000L).toInt().coerceAtLeast(0)
             val out = ShortArray(samples.size + padSamples)
             var peak = 0f
             for (s in samples) {
+                if (!s.isFinite()) continue
                 val a = abs(s)
                 if (a > peak) peak = a
             }
             val gain = if (peak in 0.05f..0.70f) (0.90f / peak).coerceAtMost(1.45f) else 1.0f
             for (i in samples.indices) {
-                val scaled = (samples[i] * gain).coerceIn(-0.98f, 0.98f)
+                val raw = samples[i]
+                val safe = if (raw.isFinite()) raw else 0f
+                val scaled = (safe * gain).coerceIn(-0.98f, 0.98f)
                 out[i] = (scaled * 32767.0f).roundToInt().coerceIn(-32768, 32767).toShort()
             }
             return out
@@ -284,6 +292,7 @@ class EmbeddedPersianTtsEngine(
             var peak = 0f
             var sumSq = 0.0
             for (s in samples) {
+                if (!s.isFinite()) continue
                 val a = abs(s)
                 if (a > peak) peak = a
                 sumSq += (s * s).toDouble()
