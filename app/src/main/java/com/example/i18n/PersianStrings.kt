@@ -201,7 +201,7 @@ object PersianStrings : AppStrings {
     override val mapAttributionShort = "© OpenStreetMap • Overture Maps"
     override val osmAttributionFull = "© مشارکت‌کنندگان OpenStreetMap. داده‌های نقشه و مسیریابی تحت مجوز Open Database License (ODbL) ارائه شده‌اند."
     override val overtureAttributionFull = "داده‌های اماکن و کسب‌وکارها برگرفته از Overture Maps Foundation (تحت مجوز CDLA Permissive 2.0 / ODbL)."
-    override val openSourceLicensesBody = "نمایش نقشه با MapLibre Native (BSD-2-Clause) و فرمت برداری Protomaps PMTiles. مسیریابی آفلاین با موتور Valhalla (MIT) از طریق valhalla-mobile. جستجوی مکان با SQLite FTS5 روی دستگاه."
+    override val openSourceLicensesBody = "نمایش نقشه با MapLibre Native (BSD-2-Clause) و فرمت برداری Protomaps PMTiles. مسیریابی آفلاین با موتور Valhalla (MIT) از طریق valhalla-mobile. جستجوی مکان با SQLite FTS5 روی دستگاه. صدای آفلاین داخلی فارسی با sherpa-onnx (Apache-2.0)، ONNX Runtime (MIT)، مدل Khadijah FA/EN Matcha-TTS (CC0-1.0)، HiFi-GAN V2 (MIT) و eSpeak NG (GPL-3.0-or-later)."
     override val close = "بستن"
     override val sectionDevTesting = "تست توسعه‌دهنده و شبیه‌ساز"
     override val devOnlineOregonTitle = "حالت تست آنلاین اورگن"

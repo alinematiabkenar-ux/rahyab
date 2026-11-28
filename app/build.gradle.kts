@@ -1,4 +1,14 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URI
+import java.security.MessageDigest
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.TaskAction
 
 plugins {
   alias(libs.plugins.android.application)
@@ -6,6 +16,157 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+}
+
+fun sha256HexOf(file: File): String {
+  val digest = MessageDigest.getInstance("SHA-256")
+  file.inputStream().buffered().use { input ->
+    val buf = ByteArray(64 * 1024)
+    while (true) {
+      val n = input.read(buf)
+      if (n <= 0) break
+      digest.update(buf, 0, n)
+    }
+  }
+  return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+fun ensurePinnedArtifact(dest: File, url: String, expectedSha256: String, expectedSize: Long): File {
+  if (dest.isFile && dest.length() == expectedSize && sha256HexOf(dest) == expectedSha256) {
+    return dest
+  }
+  dest.parentFile?.mkdirs()
+  val tmp = File(dest.parentFile, "${dest.name}.part")
+  if (tmp.exists()) tmp.delete()
+  var currentUrl = url
+  var redirects = 0
+  while (true) {
+    val conn = (URI(currentUrl).toURL().openConnection() as HttpURLConnection).apply {
+      instanceFollowRedirects = false
+      connectTimeout = 30_000
+      readTimeout = 120_000
+      setRequestProperty("User-Agent", "RahYab-Gradle-Build/1.0")
+    }
+    try {
+      val code = conn.responseCode
+      if (code in listOf(301, 302, 303, 307, 308)) {
+        val loc = conn.getHeaderField("Location")
+          ?: error("HTTP $code without Location header for $currentUrl")
+        currentUrl = URI(currentUrl).resolve(loc).toString()
+        redirects += 1
+        require(redirects <= 10) { "Too many redirects downloading $url" }
+        continue
+      }
+      require(code in 200..299) { "HTTP $code downloading $currentUrl" }
+      conn.inputStream.buffered().use { input ->
+        tmp.outputStream().buffered().use { output -> input.copyTo(output, 64 * 1024) }
+      }
+      break
+    } finally {
+      conn.disconnect()
+    }
+  }
+  val actualSha = sha256HexOf(tmp)
+  require(tmp.length() == expectedSize && actualSha == expectedSha256) {
+    "Checksum mismatch for ${dest.name}: size=${tmp.length()} (expected $expectedSize), sha256=$actualSha (expected $expectedSha256)"
+  }
+  if (dest.exists()) dest.delete()
+  if (!tmp.renameTo(dest)) {
+    tmp.copyTo(dest, overwrite = true)
+    tmp.delete()
+  }
+  return dest
+}
+
+abstract class DownloadKhadijahModelTask : DefaultTask() {
+  @get:Input abstract val downloadUrl: Property<String>
+  @get:Input abstract val expectedSha256: Property<String>
+  @get:Input abstract val expectedSizeBytes: Property<Long>
+  @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+  @TaskAction
+  fun fetch() {
+    val target = File(outputDir.get().asFile, "tts/khadijah/model.onnx")
+    if (target.isFile && target.length() == expectedSizeBytes.get() && computeSha256(target) == expectedSha256.get()) {
+      return
+    }
+    target.parentFile?.mkdirs()
+    val tmp = File(target.parentFile, "${target.name}.part")
+    if (tmp.exists()) tmp.delete()
+    var currentUrl = downloadUrl.get()
+    var redirects = 0
+    while (true) {
+      val conn = (URI(currentUrl).toURL().openConnection() as HttpURLConnection).apply {
+        instanceFollowRedirects = false
+        connectTimeout = 30_000
+        readTimeout = 180_000
+        setRequestProperty("User-Agent", "RahYab-Gradle-Build/1.0")
+      }
+      try {
+        val code = conn.responseCode
+        if (code in listOf(301, 302, 303, 307, 308)) {
+          val loc = conn.getHeaderField("Location")
+            ?: error("HTTP $code without Location header for $currentUrl")
+          currentUrl = URI(currentUrl).resolve(loc).toString()
+          redirects += 1
+          require(redirects <= 10) { "Too many redirects downloading ${downloadUrl.get()}" }
+          continue
+        }
+        require(code in 200..299) { "HTTP $code downloading $currentUrl" }
+        conn.inputStream.buffered().use { input ->
+          tmp.outputStream().buffered().use { output -> input.copyTo(output, 64 * 1024) }
+        }
+        break
+      } finally {
+        conn.disconnect()
+      }
+    }
+    val actualSha = computeSha256(tmp)
+    require(tmp.length() == expectedSizeBytes.get() && actualSha == expectedSha256.get()) {
+      "Checksum mismatch for model.onnx: size=${tmp.length()}, sha256=$actualSha"
+    }
+    if (target.exists()) target.delete()
+    if (!tmp.renameTo(target)) {
+      tmp.copyTo(target, overwrite = true)
+      tmp.delete()
+    }
+  }
+
+  private fun computeSha256(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().buffered().use { input ->
+      val buf = ByteArray(64 * 1024)
+      while (true) {
+        val n = input.read(buf)
+        if (n <= 0) break
+        digest.update(buf, 0, n)
+      }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+  }
+}
+
+val sherpaOnnxAarFile: File = ensurePinnedArtifact(
+  dest = layout.buildDirectory.file("offline-tts/sherpa-onnx-static-link-onnxruntime-1.12.40.aar").get().asFile,
+  url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.12.40/sherpa-onnx-static-link-onnxruntime-1.12.40.aar",
+  expectedSha256 = "f6c225258b8528ab7537ff92fbb452df4c68d31632c19f45c8ddb9b56eea238d",
+  expectedSize = 38_120_299L
+)
+
+val downloadKhadijahModelTask = tasks.register<DownloadKhadijahModelTask>("downloadKhadijahAcousticModel") {
+  downloadUrl.set("https://huggingface.co/csukuangfj/matcha-tts-fa_en-khadijah/resolve/main/model.onnx")
+  expectedSha256.set("f787627c08c782fc47b7d3a8131cfa25e58eb3a9de117a39723f36cab9c682bc")
+  expectedSizeBytes.set(74_274_830L)
+  outputDir.set(layout.buildDirectory.dir("generated/offline-tts-assets"))
+}
+
+androidComponents {
+  onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+      downloadKhadijahModelTask,
+      DownloadKhadijahModelTask::outputDir
+    )
+  }
 }
 
 android {
@@ -142,7 +303,7 @@ dependencies {
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.androidx.car.app)
   implementation(libs.androidx.car.app.projected)
-  implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.12.40.aar"))
+  implementation(files(sherpaOnnxAarFile))
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

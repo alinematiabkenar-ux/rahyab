@@ -201,7 +201,7 @@ object EnglishStrings : AppStrings {
     override val mapAttributionShort = "© OpenStreetMap • Overture Maps"
     override val osmAttributionFull = "© OpenStreetMap contributors. Map and routing data is available under the Open Database License (ODbL)."
     override val overtureAttributionFull = "Place and business directory data derived from Overture Maps Foundation (CDLA Permissive 2.0 / ODbL)."
-    override val openSourceLicensesBody = "Map rendering powered by MapLibre Native (BSD-2-Clause) with Protomaps PMTiles vector basemap format. Offline routing powered by Valhalla (MIT) via valhalla-mobile. Place search powered by on-device SQLite FTS5."
+    override val openSourceLicensesBody = "Map rendering powered by MapLibre Native (BSD-2-Clause) with Protomaps PMTiles vector basemap format. Offline routing powered by Valhalla (MIT) via valhalla-mobile. Place search powered by on-device SQLite FTS5. Built-in offline Persian voice powered by sherpa-onnx (Apache-2.0), ONNX Runtime (MIT), Khadijah FA/EN Matcha-TTS (CC0-1.0), HiFi-GAN V2 (MIT), and eSpeak NG (GPL-3.0-or-later)."
     override val close = "Close"
     override val sectionDevTesting = "Developer & Emulator Testing"
     override val devOnlineOregonTitle = "Oregon Online Test Mode"
