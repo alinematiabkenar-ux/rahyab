@@ -181,7 +181,7 @@ class RahYabNavigationHub(private val app: RahYabApplication) {
             stopHeadlessLoops()
             headlessController.reset(); headlessTurnFocusTracker.reset()
             headlessHpmsFallbackCache.reset()
-            app.voiceGuidanceManager.setUseEnglishVoiceInPersianMode(s.useEnglishVoiceInPersianMode)
+            app.voiceGuidanceManager.setPersianVoiceMode(s.persianVoiceMode)
             app.voiceGuidanceManager.setLanguage(s.language)
             app.voiceGuidanceManager.setVoiceEnabled(s.voiceGuidanceEnabled)
             app.voiceGuidanceManager.resetDeduplication()

@@ -16,6 +16,7 @@ import com.example.i18n.MapThemeMode
 import com.example.map.LaneHighlightColor
 import com.example.navigation.CyclingSpeedPreset
 import com.example.navigation.LaneChangeTiming
+import com.example.navigation.PersianVoiceMode
 import com.example.navigation.RoutePreference
 import com.example.navigation.TravelMode
 import com.example.navigation.WalkingSpeedPreset
@@ -63,6 +64,7 @@ class UserPreferencesRepository(private val context: Context) {
         val DEV_ONLINE_OREGON = booleanPreferencesKey("dev_online_oregon_mode")
         val SIMULATE_DRIVE = booleanPreferencesKey("simulate_drive_enabled")
         val PERSIAN_TTS_NOTICE_SHOWN = booleanPreferencesKey("persian_tts_notice_shown")
+        val PERSIAN_VOICE_MODE = stringPreferencesKey("persian_voice_mode")
         val USE_ENGLISH_VOICE_IN_PERSIAN = booleanPreferencesKey("use_english_voice_in_persian_mode")
         val ONLINE_FEATURES_ENABLED = booleanPreferencesKey("online_features_enabled")
         val ONLINE_WEATHER_ALERTS_ENABLED = booleanPreferencesKey("online_weather_alerts_enabled")
@@ -196,7 +198,14 @@ class UserPreferencesRepository(private val context: Context) {
                 devOnlineOregonMode = prefs[Keys.DEV_ONLINE_OREGON] ?: false,
                 simulateDriveEnabled = prefs[Keys.SIMULATE_DRIVE] ?: false,
                 persianTtsNoticeShown = prefs[Keys.PERSIAN_TTS_NOTICE_SHOWN] ?: false,
-                useEnglishVoiceInPersianMode = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false,
+                persianVoiceMode = PersianVoiceMode.fromCode(
+                    code = prefs[Keys.PERSIAN_VOICE_MODE],
+                    legacyUseEnglishVoiceInPersian = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false
+                ),
+                useEnglishVoiceInPersianMode = PersianVoiceMode.fromCode(
+                    code = prefs[Keys.PERSIAN_VOICE_MODE],
+                    legacyUseEnglishVoiceInPersian = prefs[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] ?: false
+                ) == PersianVoiceMode.ENGLISH_VOICE,
                 onlineFeaturesEnabled = prefs[Keys.ONLINE_FEATURES_ENABLED] ?: true,
                 onlineWeatherAlertsEnabled = prefs[Keys.ONLINE_WEATHER_ALERTS_ENABLED] ?: true,
                 onlineSearchFallbackEnabled = prefs[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] ?: true,
@@ -311,7 +320,15 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setDevOnlineOregonMode(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.DEV_ONLINE_OREGON] = enabled } }
     suspend fun setSimulateDriveEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.SIMULATE_DRIVE] = enabled } }
     suspend fun markPersianTtsNoticeShown() { context.rahYabDataStore.edit { it[Keys.PERSIAN_TTS_NOTICE_SHOWN] = true } }
-    suspend fun setUseEnglishVoiceInPersianMode(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] = enabled } }
+    suspend fun setPersianVoiceMode(mode: PersianVoiceMode) {
+        context.rahYabDataStore.edit {
+            it[Keys.PERSIAN_VOICE_MODE] = mode.code
+            it[Keys.USE_ENGLISH_VOICE_IN_PERSIAN] = (mode == PersianVoiceMode.ENGLISH_VOICE)
+        }
+    }
+    suspend fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
+        setPersianVoiceMode(if (enabled) PersianVoiceMode.ENGLISH_VOICE else PersianVoiceMode.BUILTIN_OFFLINE)
+    }
     suspend fun setOnlineFeaturesEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_FEATURES_ENABLED] = enabled } }
     suspend fun setOnlineWeatherAlertsEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_WEATHER_ALERTS_ENABLED] = enabled } }
     suspend fun setOnlineSearchFallbackEnabled(enabled: Boolean) { context.rahYabDataStore.edit { it[Keys.ONLINE_SEARCH_FALLBACK_ENABLED] = enabled } }

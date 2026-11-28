@@ -35,6 +35,7 @@ class VoiceGuidanceManager(
     )
 
     private var currentLanguage: AppLanguage = AppLanguage.ENGLISH
+    private var persianVoiceMode: PersianVoiceMode = PersianVoiceMode.BUILTIN_OFFLINE
     private var useEnglishVoiceInPersianMode: Boolean = false
     private var voiceEnabled: Boolean = true
     private var lastSpokenKey: String = ""
@@ -92,12 +93,23 @@ class VoiceGuidanceManager(
     private val _lastSpokenText = MutableStateFlow("")
     val lastSpokenText: StateFlow<String> = _lastSpokenText.asStateFlow()
 
-    init { engineSelector.createBaseEngine(this) }
+    init {
+        engineSelector.persianVoiceMode = persianVoiceMode
+        engineSelector.refreshTtsDiagnostics()
+        engineSelector.createBaseEngine(this)
+    }
 
     fun setPlaybackSink(sink: SpeechPlaybackSink?) { speechQueue.playbackSink = sink }
     fun setTraceSink(sink: SpeechTraceSink?) { speechQueue.setTraceSink(sink) }
     fun getRecentSpeechTraces(): List<SpeechTraceRecord> = speechQueue.getRecentTraces()
     fun setTestEngineDriver(driver: TtsEngineDriver?) { engineSelector.testEngineDriver = driver }
+    fun setEmbeddedPersianEngine(engine: EmbeddedPersianTtsEngine) {
+        engineSelector.embeddedPersianEngine = engine
+        engineSelector.refreshTtsDiagnostics()
+    }
+    fun setEmbeddedSynthesisObserver(observer: ((EmbeddedSynthesisReport) -> Unit)?) {
+        engineSelector.embeddedPersianEngine.onSynthesisReport = observer
+    }
 
     fun hasStageStarted(routeId: String?, maneuverIndex: Int, stage: String): Boolean =
         stageKey(routeId, maneuverIndex, stage)?.let { synchronized(stageLock) { it in startedRouteStageKeys } } ?: false
@@ -119,12 +131,29 @@ class VoiceGuidanceManager(
 
     fun setLanguage(language: AppLanguage) {
         currentLanguage = language
-        if (engineSelector.isInitialized) engineSelector.applyLanguage(resolveEffectiveLanguage(language))
+        if (language == AppLanguage.PERSIAN && persianVoiceMode == PersianVoiceMode.BUILTIN_OFFLINE) {
+            engineSelector.warmUpBuiltInPersianAsync()
+        }
+        if (engineSelector.isReadyForLanguage(resolveEffectiveLanguage(language))) {
+            engineSelector.applyLanguage(resolveEffectiveLanguage(language))
+        }
+    }
+
+    fun setPersianVoiceMode(mode: PersianVoiceMode) {
+        persianVoiceMode = mode
+        useEnglishVoiceInPersianMode = (mode == PersianVoiceMode.ENGLISH_VOICE)
+        engineSelector.persianVoiceMode = mode
+        engineSelector.refreshTtsDiagnostics()
+        if (currentLanguage == AppLanguage.PERSIAN && mode == PersianVoiceMode.BUILTIN_OFFLINE) {
+            engineSelector.warmUpBuiltInPersianAsync()
+        }
+        if (engineSelector.isReadyForLanguage(resolveEffectiveLanguage(currentLanguage))) {
+            engineSelector.applyLanguage(resolveEffectiveLanguage(currentLanguage))
+        }
     }
 
     fun setUseEnglishVoiceInPersianMode(enabled: Boolean) {
-        useEnglishVoiceInPersianMode = enabled
-        if (engineSelector.isInitialized) engineSelector.applyLanguage(resolveEffectiveLanguage(currentLanguage))
+        setPersianVoiceMode(if (enabled) PersianVoiceMode.ENGLISH_VOICE else PersianVoiceMode.BUILTIN_OFFLINE)
     }
 
     fun setVoiceEnabled(enabled: Boolean) {
@@ -135,7 +164,12 @@ class VoiceGuidanceManager(
     fun isSpeakingOrQueued(): Boolean = speechQueue.isSpeakingOrQueued()
 
     private fun resolveEffectiveLanguage(requested: AppLanguage): AppLanguage {
-        if (requested == AppLanguage.PERSIAN && useEnglishVoiceInPersianMode) return AppLanguage.ENGLISH
+        if (requested == AppLanguage.PERSIAN && (persianVoiceMode == PersianVoiceMode.ENGLISH_VOICE || useEnglishVoiceInPersianMode)) {
+            return AppLanguage.ENGLISH
+        }
+        if (requested == AppLanguage.PERSIAN && persianVoiceMode == PersianVoiceMode.BUILTIN_OFFLINE && engineSelector.isBuiltInPersianAvailable()) {
+            return AppLanguage.PERSIAN
+        }
         return if (requested == AppLanguage.PERSIAN && isPersianVoiceAvailable.value) AppLanguage.PERSIAN else AppLanguage.ENGLISH
     }
 
@@ -152,7 +186,7 @@ class VoiceGuidanceManager(
         _lastSpokenText.value = utterance
         val ctx = SpeechContextTag(routeId = routeId, maneuverIndex = maneuver.index, stage = announcementStage)
         if (!voiceEnabled) return utterance
-        if (!engineSelector.isInitialized) {
+        if (!engineSelector.isReadyForLanguage(effectiveLanguage)) {
             speechQueue.speakRaw(utterance, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER, ctx, isStillValid)
             return utterance
         }
@@ -180,7 +214,7 @@ class VoiceGuidanceManager(
         val utterance = formatStartInstruction(route, effectiveLanguage)
         if (utterance.isBlank()) return ""
         _lastSpokenText.value = utterance
-        if (voiceEnabled && engineSelector.isInitialized) {
+        if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage)) {
             speechQueue.speakRaw(utterance, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(route.id, 0, "start"))
             lastSpokenKey = "route_start_${route.id}"; lastSpokenTimeMs = clockMs()
         }
@@ -192,7 +226,7 @@ class VoiceGuidanceManager(
         val utterance = formatReroutingPrompt(effectiveLanguage)
         _lastSpokenText.value = utterance
         stopSpeaking(reason = "preempted_by_reroute")
-        if (voiceEnabled && engineSelector.isInitialized) {
+        if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage)) {
             speechQueue.speakRaw(utterance, effectiveLanguage, SpeechPriority.REROUTE, SpeechContextTag(stage = "rerouting"))
         }
         return utterance
@@ -202,7 +236,7 @@ class VoiceGuidanceManager(
         val effectiveLanguage = resolveEffectiveLanguage(language)
         val utterance = formatArrivalPrompt(maneuverType, destinationName, effectiveLanguage)
         _lastSpokenText.value = utterance
-        if (voiceEnabled && engineSelector.isInitialized) {
+        if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage)) {
             speechQueue.speakRaw(utterance, effectiveLanguage, SpeechPriority.IMMINENT_MANEUVER, SpeechContextTag(stage = NavigationSessionController.STAGE_ARRIVED))
         }
         return utterance
@@ -212,18 +246,18 @@ class VoiceGuidanceManager(
         if (text.isBlank()) return ""
         val effectiveLanguage = resolveEffectiveLanguage(language)
         _lastSpokenText.value = text
-        if (voiceEnabled && engineSelector.isInitialized) speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER)
+        if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage)) speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER)
         return text
     }
 
     fun speakAfterCurrentSpeech(
         text: String, language: AppLanguage, context: SpeechContextTag = SpeechContextTag(), isStillValid: () -> Boolean = { true }
     ): String {
-        if (text.isBlank() || !voiceEnabled || !engineSelector.isInitialized) return text
         val effectiveLanguage = resolveEffectiveLanguage(language)
+        if (text.isBlank() || !voiceEnabled || !engineSelector.isReadyForLanguage(effectiveLanguage)) return text
         if (isSpeakingOrQueued()) {
             speechQueue.enqueueAfterCurrentSpeech(context = context, isStillValid = isStillValid) {
-                if (voiceEnabled && engineSelector.isInitialized && isStillValid()) {
+                if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage) && isStillValid()) {
                     speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.LOW_PRIORITY_ALERT, context, isStillValid)
                 }
             }
@@ -245,8 +279,9 @@ class VoiceGuidanceManager(
 
     fun repeatLastInstruction(language: AppLanguage) {
         val text = _lastSpokenText.value
-        if (text.isBlank() || !engineSelector.isInitialized) return
-        speechQueue.speakRaw(text, resolveEffectiveLanguage(language), SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "repeat"), forcePreempt = true)
+        val effectiveLanguage = resolveEffectiveLanguage(language)
+        if (text.isBlank() || !engineSelector.isReadyForLanguage(effectiveLanguage)) return
+        speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "repeat"), forcePreempt = true)
     }
 
     fun speakAlert(alert: AheadAlert, language: AppLanguage, unit: DistanceUnit = DistanceUnit.IMPERIAL): String {
@@ -257,7 +292,7 @@ class VoiceGuidanceManager(
             RoadAlertKind.USER_CRASH, RoadAlertKind.USER_ROAD_CLOSURE -> SpeechPriority.CRITICAL_ALERT
             else -> SpeechPriority.LOW_PRIORITY_ALERT
         }
-        if (voiceEnabled && engineSelector.isInitialized) speechQueue.speakRaw(text, effectiveLanguage, priority, SpeechContextTag(stage = "alert_${alert.kind.name.lowercase()}"))
+        if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage)) speechQueue.speakRaw(text, effectiveLanguage, priority, SpeechContextTag(stage = "alert_${alert.kind.name.lowercase()}"))
         return text
     }
 
@@ -266,7 +301,7 @@ class VoiceGuidanceManager(
     fun speakQueuedAlert(alert: AheadAlert, language: AppLanguage, unit: DistanceUnit = DistanceUnit.IMPERIAL): String {
         val effectiveLanguage = resolveEffectiveLanguage(language)
         val text = formatAlertAnnouncement(alert, effectiveLanguage, unit)
-        if (!voiceEnabled || !engineSelector.isInitialized || text.isBlank()) return text
+        if (!voiceEnabled || !engineSelector.isReadyForLanguage(effectiveLanguage) || text.isBlank()) return text
         if (isSpeakingOrQueued()) speechQueue.offerLowPriorityAlert(text, effectiveLanguage, alert.lat, alert.lon)
         else speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.LOW_PRIORITY_ALERT)
         return text
@@ -275,29 +310,26 @@ class VoiceGuidanceManager(
     fun speakWeatherAlert(title: String, language: AppLanguage): String {
         val effectiveLanguage = resolveEffectiveLanguage(language)
         val text = if (effectiveLanguage == AppLanguage.PERSIAN) "هشدار هواشناسی شدید: $title" else "Severe weather alert: $title"
-        if (voiceEnabled && engineSelector.isInitialized) speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.LOW_PRIORITY_ALERT)
+        if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLanguage)) speechQueue.speakRaw(text, effectiveLanguage, SpeechPriority.LOW_PRIORITY_ALERT)
         return text
     }
 
-    fun speakTestSample(language: AppLanguage) {
-        if (!engineSelector.isInitialized) return
+    fun speakTestSample(language: AppLanguage): Boolean {
         val effectiveLanguage = resolveEffectiveLanguage(language)
-        val sample = if (effectiveLanguage == AppLanguage.PERSIAN) {
-            "در یک مایلی، از دو خط سمت راست وارد خروجی 194B به سمت Portland شوید."
-        } else "In 1 mile, use the right two lanes to take exit 194B toward Portland."
+        if (!engineSelector.isReadyForLanguage(effectiveLanguage)) return false
+        val sample = if (effectiveLanguage == AppLanguage.PERSIAN) BUILTIN_PERSIAN_SAMPLE_TEXT
+        else "In 1 mile, use the right two lanes to take exit 194B toward Portland."
         _lastSpokenText.value = sample
-        speechQueue.speakRaw(sample, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "test_sample"), forcePreempt = true)
+        return speechQueue.speakRaw(sample, effectiveLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "test_sample"), forcePreempt = true)
     }
 
     fun speakExplicitLanguageTest(targetLanguage: AppLanguage): Boolean {
-        if (!engineSelector.isInitialized) return false
+        if (!engineSelector.isReadyForLanguage(targetLanguage)) return false
         if (targetLanguage == AppLanguage.PERSIAN && !refreshTtsDiagnostics().isPersianAvailable) return false
-        val sample = if (targetLanguage == AppLanguage.PERSIAN) {
-            "آزمایش صدای فارسی رهیاب. در نیم مایلی، به راست بپیچید و وارد Main Street شوید."
-        } else "RahYab English voice test. In half a mile, use the right lane to turn right onto Main Street."
+        val sample = if (targetLanguage == AppLanguage.PERSIAN) BUILTIN_PERSIAN_SAMPLE_TEXT
+        else "RahYab English voice test. In half a mile, use the right lane to turn right onto Main Street."
         _lastSpokenText.value = sample
-        speechQueue.speakRaw(sample, targetLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "test_lang"), forcePreempt = true)
-        return true
+        return speechQueue.speakRaw(sample, targetLanguage, SpeechPriority.PREPARATION_MANEUVER, SpeechContextTag(stage = "test_lang"), forcePreempt = true)
     }
 
     fun playOverspeedChime() {
@@ -330,12 +362,12 @@ class VoiceGuidanceManager(
         } else LaneChangeTonePlayer.formatCuePhrase(event.targetSide, effectiveLang)
         val dispatch: () -> Unit = {
             if (voiceEnabled && isStillValid()) {
-                if (event.mergeWithHalfMile && engineSelector.isInitialized && phrase.isNotBlank()) {
+                if (event.mergeWithHalfMile && engineSelector.isReadyForLanguage(effectiveLang) && phrase.isNotBlank()) {
                     _lastSpokenText.value = phrase
                     speechQueue.speakRaw(phrase, effectiveLang, SpeechPriority.LANE_CUE, ctx, isStillValid)
                     speechQueue.enqueueAfterCurrentSpeech(ctx, isStillValid) { if (isStillValid()) laneChangeTonePlayer.playTripleBeep() }
                 } else laneChangeTonePlayer.playTripleBeep {
-                    if (voiceEnabled && engineSelector.isInitialized && phrase.isNotBlank() && isStillValid()) {
+                    if (voiceEnabled && engineSelector.isReadyForLanguage(effectiveLang) && phrase.isNotBlank() && isStillValid()) {
                         _lastSpokenText.value = phrase
                         speechQueue.speakRaw(phrase, effectiveLang, SpeechPriority.LANE_CUE, ctx, isStillValid)
                     }
@@ -357,7 +389,7 @@ class VoiceGuidanceManager(
         turnFocusAudioPlayer.playTurnFocusBeeps(isVoiceSpeaking = { isSpeakingOrQueued() }, isStillValid = isStillValid) {
             if (!isStillValid()) return@playTurnFocusBeeps
             onAllBeepsFinished()
-            if (speakShortPhrase && voiceEnabled && engineSelector.isInitialized && isStillValid()) {
+            if (speakShortPhrase && voiceEnabled && engineSelector.isReadyForLanguage(effectiveLang) && isStillValid()) {
                 val phrase = phraseProvider?.invoke()?.takeIf { it.isNotBlank() } ?: return@playTurnFocusBeeps
                 _lastSpokenText.value = phrase
                 speechQueue.speakRaw(phrase, effectiveLang, SpeechPriority.LANE_CUE, context, isStillValid)
@@ -374,6 +406,7 @@ class VoiceGuidanceManager(
 
     companion object {
         const val GOOGLE_TTS_PACKAGE = "com.google.android.tts"
+        const val BUILTIN_PERSIAN_SAMPLE_TEXT = "در ۵۰۰ متری، به راست بپیچید و وارد Oak Street شوید."
         fun splitPersianAndEnglishSegments(text: String): List<SpeechSegment> = VoiceSpeechQueue.splitPersianAndEnglishSegments(text)
         fun formatReroutingPrompt(language: AppLanguage): String = VoicePhraseBuilder.formatReroutingPrompt(language)
         fun formatAlertAnnouncement(alert: AheadAlert, language: AppLanguage, unit: DistanceUnit = DistanceUnit.IMPERIAL): String = VoicePhraseBuilder.formatAlertAnnouncement(alert, language, unit)

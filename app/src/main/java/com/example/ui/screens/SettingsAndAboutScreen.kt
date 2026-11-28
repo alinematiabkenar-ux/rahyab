@@ -289,16 +289,103 @@ fun SettingsScreen(
                     }
                 }
 
-                if (settings.language == AppLanguage.PERSIAN) {
-                    SettingsToggleRow(
-                        label = strings.diagUseEnglishVoiceInPersian,
-                        checked = settings.useEnglishVoiceInPersianMode,
-                        onCheckedChange = { viewModel.setUseEnglishVoiceInPersianMode(it) },
-                        testTag = "switch_english_voice_in_persian"
-                    )
+                HorizontalDivider()
+                Text(strings.voiceSelectionLabel, style = MaterialTheme.typography.labelLarge)
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (settings.language == AppLanguage.PERSIAN &&
+                        settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE
+                    ) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    },
+                    border = BorderStroke(
+                        width = if (settings.language == AppLanguage.PERSIAN &&
+                            settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE
+                        ) 1.5.dp else 1.dp,
+                        color = if (settings.language == AppLanguage.PERSIAN &&
+                            settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE
+                        ) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = settings.language == AppLanguage.PERSIAN &&
+                                settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE,
+                            onClick = { viewModel.selectBuiltInPersianVoice() },
+                            leadingIcon = {
+                                if (settings.language == AppLanguage.PERSIAN &&
+                                    settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE
+                                ) {
+                                    Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                } else {
+                                    Icon(Icons.Filled.RecordVoiceOver, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = strings.voiceOptionBuiltInPersian,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("voice_option_builtin_persian")
+                        )
+                        Text(
+                            text = strings.voiceBuiltInReadyHint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedButton(
+                            onClick = { viewModel.playBuiltInPersianSample() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("play_builtin_persian_sample_button")
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(strings.playVoiceSampleButton)
+                        }
+                    }
                 }
 
-                if (settings.language == AppLanguage.PERSIAN && !isPersianTtsAvailable) {
+                if (settings.language == AppLanguage.PERSIAN) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.SYSTEM_TTS,
+                            onClick = { viewModel.setPersianVoiceMode(com.example.navigation.PersianVoiceMode.SYSTEM_TTS) },
+                            label = { Text(strings.voiceOptionSystemPersian, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("voice_option_system_persian")
+                        )
+                        FilterChip(
+                            selected = settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.ENGLISH_VOICE,
+                            onClick = { viewModel.setPersianVoiceMode(com.example.navigation.PersianVoiceMode.ENGLISH_VOICE) },
+                            label = { Text(strings.voiceOptionEnglish, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("voice_option_english")
+                        )
+                    }
+                }
+
+                if (settings.language == AppLanguage.PERSIAN &&
+                    settings.persianVoiceMode == com.example.navigation.PersianVoiceMode.SYSTEM_TTS &&
+                    !isPersianTtsAvailable
+                ) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = AlertAmber.copy(alpha = 0.16f),
@@ -342,16 +429,20 @@ fun SettingsScreen(
                     }
                 }
 
-                OutlinedButton(
-                    onClick = { viewModel.testVoiceGuidance() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("test_voice_button")
+                if (settings.language != AppLanguage.PERSIAN ||
+                    settings.persianVoiceMode != com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(strings.testVoiceButton)
+                    OutlinedButton(
+                        onClick = { viewModel.testVoiceGuidance() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("test_voice_button")
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(strings.testVoiceButton)
+                    }
                 }
             }
         }

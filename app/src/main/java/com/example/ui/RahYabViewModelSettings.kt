@@ -11,9 +11,13 @@ import kotlinx.coroutines.launch
 internal fun RahYabViewModel.setLanguageImpl(language: AppLanguage) {
     viewModelScope.launch {
         prefs.setLanguage(language)
-        val available = voiceManager.checkPersianAvailability()
-        if (language == AppLanguage.PERSIAN && !available && !settings.value.persianTtsNoticeShown) {
-            _showPersianTtsDialog.value = true
+        if (language == AppLanguage.PERSIAN &&
+            settings.value.persianVoiceMode == com.example.navigation.PersianVoiceMode.SYSTEM_TTS
+        ) {
+            val available = voiceManager.checkPersianAvailability()
+            if (!available && !settings.value.persianTtsNoticeShown) {
+                _showPersianTtsDialog.value = true
+            }
         }
     }
 }
@@ -236,6 +240,25 @@ internal fun RahYabViewModel.setDevOnlineOregonModeImpl(enabled: Boolean) {
                 zoom = 12.8
             )
         }
+    }
+}
+
+internal fun RahYabViewModel.selectBuiltInPersianVoiceImpl() {
+    voiceManager.setPersianVoiceMode(com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE)
+    voiceManager.setLanguage(AppLanguage.PERSIAN)
+    viewModelScope.launch {
+        prefs.setPersianVoiceMode(com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE)
+        if (settings.value.language != AppLanguage.PERSIAN) {
+            prefs.setLanguage(AppLanguage.PERSIAN)
+        }
+    }
+}
+
+internal fun RahYabViewModel.playBuiltInPersianSampleImpl() {
+    voiceManager.setPersianVoiceMode(com.example.navigation.PersianVoiceMode.BUILTIN_OFFLINE)
+    val ok = voiceManager.speakExplicitLanguageTest(AppLanguage.PERSIAN)
+    if (!ok) {
+        _snackbarMessage.value = stringsFor(settings.value.language).diagPersianVoiceUnavailableToast
     }
 }
 

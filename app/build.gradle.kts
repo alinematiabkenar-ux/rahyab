@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.rahyab.kqzmxv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 43
-    versionName = "43.0"
+    versionCode = 44
+    versionName = "44.0"
 
     ndk {
       abiFilters += listOf("arm64-v8a", "x86_64")
@@ -142,6 +142,7 @@ dependencies {
   implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.androidx.car.app)
   implementation(libs.androidx.car.app.projected)
+  implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.12.40.aar"))
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

@@ -7,6 +7,7 @@ import com.example.i18n.MapThemeMode
 import com.example.map.LaneHighlightColor
 import com.example.navigation.CyclingSpeedPreset
 import com.example.navigation.LaneChangeTiming
+import com.example.navigation.PersianVoiceMode
 import com.example.navigation.RoutePreference
 import com.example.navigation.TravelMode
 import com.example.navigation.WalkingSpeedPreset
@@ -70,6 +71,7 @@ data class UserSettings(
     val devOnlineOregonMode: Boolean = false,
     val simulateDriveEnabled: Boolean = false,
     val persianTtsNoticeShown: Boolean = false,
+    val persianVoiceMode: PersianVoiceMode = PersianVoiceMode.BUILTIN_OFFLINE,
     val useEnglishVoiceInPersianMode: Boolean = false,
     // Offline-first, online-when-available controls
     val onlineFeaturesEnabled: Boolean = true,

@@ -1,0 +1,36 @@
+RahYab Built-In Offline Persian Navigation Voice — Third-Party Licenses & Notices
+=================================================================================
+
+This directory bundles the components required for fully offline, zero-setup
+bilingual Persian/English navigation speech synthesis inside RahYab.
+
+1. Acoustic Model: Khadijah FA/EN Matcha-TTS (`model.onnx`, `tokens.txt`)
+   - Upstream Author: Ali Mahmoudi (@mah92) — `mah92/Khadijah-FA_EN-Matcha-TTS-Model`
+   - Sherpa-ONNX Export: k2-fsa (`csukuangfj/matcha-tts-fa_en-khadijah`)
+   - Training Dataset: `mah92/Khadijah-FA_EN-Public-Phone-Audio-Dataset`
+   - License: CC0-1.0 Universal (Public Domain Dedication)
+   - Rights: Free to copy, modify, bundle, and redistribute commercially or
+     non-commercially without restriction.
+
+2. Neural Vocoder: HiFi-GAN 22.05 kHz V2 (`vocoder.onnx`)
+   - Upstream Author: Jungil Kong (`jik876/hifi-gan`, `generator_v2`)
+   - Sherpa-ONNX Export: k2-fsa (`vocoder-models/hifigan_v2.onnx`)
+   - License: MIT License
+   - Rights: Free to bundle and redistribute with copyright and license notice.
+
+3. Speech Inference Runtime: sherpa-onnx v1.12.40 (Android AAR)
+   - Upstream: Next-gen Kaldi / k2-fsa (`https://github.com/k2-fsa/sherpa-onnx`)
+   - Artifact: `sherpa-onnx-static-link-onnxruntime-1.12.40.aar`
+   - License: Apache License, Version 2.0
+   - Includes statically linked ONNX Runtime (Microsoft Corporation, MIT License).
+
+4. Phonemizer & Pronunciation Data: eSpeak NG (`espeak-ng-data/` + embedded library)
+   - Upstream: eSpeak NG (`https://github.com/espeak-ng/espeak-ng`)
+   - Bundled subset: core phoneme tables (`phontab`, `phonindex`, `phondata`,
+     `phondata-manifest`, `intonations`), Persian (`fa_dict`, `lang/ira/fa`),
+     and English (`en_dict`, `lang/gmw/en*`) for bilingual street-name phonemization.
+   - License: GNU General Public License, Version 3.0 or later (GPL-3.0-or-later)
+   - Notice: Because eSpeak NG and its compiled phoneme/dictionary data are
+     licensed under GPL-3.0-or-later, redistribution of the combined binary
+     carries GPL-3.0-or-later obligations (providing license notice and
+     corresponding source availability for the eSpeak NG / combined work).

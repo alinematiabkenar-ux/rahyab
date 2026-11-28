@@ -67,13 +67,15 @@ internal fun RahYabViewModel.initializeViewModel() {
         }
     }
 
-    // Sync voice language & enabled state with settings + trigger one-time Persian TTS notice
+    // Sync voice language & enabled state with settings + trigger one-time Persian TTS notice only for system TTS mode
     viewModelScope.launch {
         settings.collect { s ->
-            voiceManager.setUseEnglishVoiceInPersianMode(s.useEnglishVoiceInPersianMode)
+            voiceManager.setPersianVoiceMode(s.persianVoiceMode)
             voiceManager.setLanguage(s.language)
             voiceManager.setVoiceEnabled(s.voiceGuidanceEnabled)
-            if (s.language == AppLanguage.PERSIAN && !s.persianTtsNoticeShown && !s.useEnglishVoiceInPersianMode) {
+            if (s.language == AppLanguage.PERSIAN && !s.persianTtsNoticeShown &&
+                s.persianVoiceMode == com.example.navigation.PersianVoiceMode.SYSTEM_TTS
+            ) {
                 val available = voiceManager.checkPersianAvailability()
                 if (!available) {
                     _showPersianTtsDialog.value = true

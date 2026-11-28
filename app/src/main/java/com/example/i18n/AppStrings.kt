@@ -213,6 +213,12 @@ interface AppStrings {
     val voiceGuidanceEnabled: String
     val speedWarningAudio: String
     val testVoiceButton: String
+    val voiceSelectionLabel: String
+    val voiceOptionBuiltInPersian: String
+    val voiceOptionSystemPersian: String
+    val voiceOptionEnglish: String
+    val voiceBuiltInReadyHint: String
+    val playVoiceSampleButton: String
     val persianTtsMissingTitle: String
     val persianTtsMissingBody: String
     val openTtsSettings: String

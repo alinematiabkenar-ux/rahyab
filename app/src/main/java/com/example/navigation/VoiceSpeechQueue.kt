@@ -136,7 +136,7 @@ internal class VoiceSpeechQueue(
         val now = clockMsProvider()
         val instructionId = traceLog.nextInstructionId(context)
         val incomingStageKey = stageKeyOf(context)
-        if (!engineSelector.isInitialized) {
+        if (!engineSelector.isReadyForLanguage(effectiveLanguage)) {
             traceLog.record(traceLog.createInitialRecord(instructionId, text, effectiveLanguage, priority, context, 1, now, 0L, SpeechLifecycleState.CANCELED, "tts_not_initialized"))
             onInstructionNotConsumed(context, "tts_not_initialized")
             return false
@@ -296,7 +296,8 @@ internal class VoiceSpeechQueue(
             cur.currentUtteranceId = utteranceId; cur
         }
         if (engineSelector.speakSegment(seg.text, seg.isEnglish, utteranceId, useFallbackEngine)) {
-            if (engineSelector.testEngineDriver == null && "robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) {
+            val usingBuiltIn = engineSelector.isUsingBuiltInPersianFor(seg.isEnglish, useFallbackEngine)
+            if (!usingBuiltIn && engineSelector.testEngineDriver == null && "robolectric".equals(Build.FINGERPRINT, ignoreCase = true)) {
                 val now = clockMsProvider(); inst.startedAtMs = now; reportPlaybackStartedOnce(inst, now)
             }
             return
@@ -320,7 +321,9 @@ internal class VoiceSpeechQueue(
 
     private fun advanceQueueOrReleaseFocus() {
         val now = clockMsProvider()
-        if (!isVoiceEnabledProvider() || !engineSelector.isInitialized) { engineSelector.abandonDuckingFocus(); return }
+        if (!isVoiceEnabledProvider() || (!engineSelector.isInitialized && !engineSelector.shouldUseBuiltInPersian())) {
+            engineSelector.abandonDuckingFocus(); return
+        }
         var nextInst: QueuedInstruction? = null; var nextPost: QueuedPostAction? = null
         val expired = mutableListOf<Pair<QueuedInstruction, String>>()
         synchronized(sequenceLock) {
@@ -344,7 +347,7 @@ internal class VoiceSpeechQueue(
         nextInst?.let { startInstructionNow(it.instructionId, it.text, it.language, it.priority, it.context, it.isStillValid, it.selectedAtMs); return }
         nextPost?.let { it.action.invoke(); return }
         val nextAlert = pendingLowPriorityAlerts.pollIfStillValid(clockMsProvider())
-        if (nextAlert != null && isVoiceEnabledProvider() && engineSelector.isInitialized) {
+        if (nextAlert != null && isVoiceEnabledProvider() && engineSelector.isReadyForLanguage(nextAlert.effectiveLanguage)) {
             speakRaw(nextAlert.text, nextAlert.effectiveLanguage, SpeechPriority.LOW_PRIORITY_ALERT)
         } else {
             engineSelector.abandonDuckingFocus()
@@ -415,8 +418,13 @@ internal class VoiceSpeechQueue(
         if (!ctx.routeId.isNullOrBlank() && ctx.stage.isNotBlank()) "${ctx.routeId}_${ctx.maneuverIndex}_${ctx.stage}" else null
 
     private fun buildSegments(text: String, effectiveLanguage: AppLanguage): List<VoiceGuidanceManager.SpeechSegment> =
-        if (effectiveLanguage == AppLanguage.PERSIAN) VoiceSpeechTraceLog.splitPersianAndEnglishSegments(text)
-        else listOf(VoiceGuidanceManager.SpeechSegment(text = text, isEnglish = true))
+        if (effectiveLanguage == AppLanguage.PERSIAN) {
+            if (engineSelector.useUnifiedBilingualPersianSegment()) {
+                listOf(VoiceGuidanceManager.SpeechSegment(text = text, isEnglish = false))
+            } else {
+                VoiceSpeechTraceLog.splitPersianAndEnglishSegments(text)
+            }
+        } else listOf(VoiceGuidanceManager.SpeechSegment(text = text, isEnglish = true))
 
     private fun segmentCountOf(text: String, effectiveLanguage: AppLanguage): Int = buildSegments(text, effectiveLanguage).size.coerceAtLeast(1)
 

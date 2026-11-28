@@ -481,6 +481,9 @@ class RahYabViewModel(application: Application) : AndroidViewModel(application) 
     fun completeOnboarding() { viewModelScope.launch { prefs.setOnboardingCompleted(true) } }
     fun setDevOnlineOregonMode(enabled: Boolean) = setDevOnlineOregonModeImpl(enabled)
     fun setSimulateDriveEnabled(enabled: Boolean) = setSimulateDriveEnabledImpl(enabled)
+    fun setPersianVoiceMode(mode: com.example.navigation.PersianVoiceMode) { viewModelScope.launch { prefs.setPersianVoiceMode(mode) } }
+    fun selectBuiltInPersianVoice() = selectBuiltInPersianVoiceImpl()
+    fun playBuiltInPersianSample() = playBuiltInPersianSampleImpl()
     fun setUseEnglishVoiceInPersianMode(enabled: Boolean) { viewModelScope.launch { prefs.setUseEnglishVoiceInPersianMode(enabled) } }
     fun testVoiceGuidance() = testVoiceGuidanceImpl()
     fun refreshTtsDiagnostics() = voiceManager.refreshTtsDiagnostics()
